@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aexy.api.developers import get_current_developer_id
 from aexy.core.database import get_db
 from aexy.models.notification import NotificationEventType
 from aexy.models.notification import NOTIFICATION_CATEGORIES
@@ -34,7 +35,7 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 @router.get("", response_model=NotificationListResponse)
 async def list_notifications(
-    developer_id: str = Query(..., description="Developer ID to get notifications for"),
+    developer_id: str = Depends(get_current_developer_id),
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
     unread_only: bool = Query(False, description="Only return unread notifications"),
@@ -65,7 +66,7 @@ async def list_notifications(
 
 @router.get("/count", response_model=UnreadCountResponse)
 async def get_unread_count(
-    developer_id: str = Query(..., description="Developer ID"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Get count of unread notifications for badge display."""
@@ -76,7 +77,7 @@ async def get_unread_count(
 
 @router.get("/poll", response_model=PollResponse)
 async def poll_notifications(
-    developer_id: str = Query(..., description="Developer ID"),
+    developer_id: str = Depends(get_current_developer_id),
     since: datetime = Query(..., description="ISO timestamp to poll from"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -98,7 +99,7 @@ async def poll_notifications(
 
 @router.post("/read-all", response_model=dict)
 async def mark_all_notifications_read(
-    developer_id: str = Query(..., description="Developer ID"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Mark all notifications as read for a developer."""
@@ -112,7 +113,7 @@ async def mark_all_notifications_read(
 
 @router.get("/preferences", response_model=NotificationPreferencesResponse)
 async def get_notification_preferences(
-    developer_id: str = Query(..., description="Developer ID"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Get all notification preferences for a developer.
@@ -141,7 +142,7 @@ async def get_notification_preferences(
 @router.get("/preferences/{event_type}", response_model=NotificationPreferenceResponse)
 async def get_notification_preference(
     event_type: str,
-    developer_id: str = Query(..., description="Developer ID"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Get notification preference for a specific event type."""
@@ -164,7 +165,7 @@ async def get_notification_preference(
 async def update_notification_preference(
     event_type: str,
     data: NotificationPreferenceUpdate,
-    developer_id: str = Query(..., description="Developer ID"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Update notification preference for a specific event type."""
@@ -193,7 +194,7 @@ async def update_notification_preference(
 @router.post("/preferences/bulk", response_model=list[NotificationPreferenceResponse])
 async def bulk_update_preferences(
     updates: list[BulkPreferenceUpdate],
-    developer_id: str = Query(..., description="Developer ID"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Bulk update multiple notification preferences."""
@@ -220,7 +221,7 @@ async def bulk_update_preferences(
 @router.post("/push-subscription", response_model=WebPushSubscriptionResponse, status_code=201)
 async def subscribe_push(
     data: WebPushSubscriptionCreate,
-    developer_id: str = Query(..., description="Developer ID"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Subscribe a browser for web push notifications."""
@@ -240,7 +241,7 @@ async def subscribe_push(
 @router.delete("/push-subscription", status_code=status.HTTP_204_NO_CONTENT)
 async def unsubscribe_push(
     endpoint: str = Query(..., description="Push subscription endpoint URL"),
-    developer_id: str = Query(..., description="Developer ID"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Unsubscribe a browser from web push notifications."""
@@ -254,7 +255,7 @@ async def unsubscribe_push(
 
 @router.get("/push-subscription", response_model=list[WebPushSubscriptionResponse])
 async def list_push_subscriptions(
-    developer_id: str = Query(..., description="Developer ID"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """List active web push subscriptions for a developer."""
@@ -282,7 +283,7 @@ async def get_vapid_public_key():
 
 @router.get("/category-preferences", response_model=dict[str, CategoryPreferenceResponse])
 async def get_category_preferences(
-    developer_id: str = Query(..., description="Developer ID"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Get all category-level notification preferences."""
@@ -298,7 +299,7 @@ async def get_category_preferences(
 async def update_category_preference(
     category: str,
     data: CategoryPreferenceUpdate,
-    developer_id: str = Query(..., description="Developer ID"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Update category-level preference (master toggle + Slack channel routing).
@@ -333,7 +334,6 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from aexy.api.developers import get_current_developer_id
 from aexy.models.notification import EmailNotificationLog, Notification
 from aexy.models.workspace import Workspace, WorkspaceMember
 from aexy.models.plan import PlanTier
@@ -437,7 +437,7 @@ async def require_enterprise_workspace(
 @router.get("/workspace/{workspace_id}/emails", response_model=PaginatedWorkspaceEmailLogs)
 async def get_workspace_email_logs(
     workspace_id: str,
-    developer_id: str = Query(..., description="Developer ID for authorization"),
+    developer_id: str = Depends(get_current_developer_id),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=100),
     status_filter: str | None = Query(None, description="Filter by status"),
@@ -526,7 +526,7 @@ async def get_workspace_email_logs(
 @router.get("/workspace/{workspace_id}/email-stats", response_model=WorkspaceEmailStatsResponse)
 async def get_workspace_email_stats(
     workspace_id: str,
-    developer_id: str = Query(..., description="Developer ID for authorization"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Get email delivery statistics for a workspace (Enterprise only)."""
@@ -647,7 +647,7 @@ async def get_workspace_email_stats(
 
 @router.post("/test", response_model=NotificationResponse, include_in_schema=False)
 async def send_test_notification(
-    developer_id: str = Query(..., description="Developer ID"),
+    developer_id: str = Depends(get_current_developer_id),
     event_type: str = Query("peer_review_requested", description="Event type to test"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -696,7 +696,7 @@ async def send_test_notification(
 @router.get("/{notification_id}", response_model=NotificationResponse)
 async def get_notification(
     notification_id: str,
-    developer_id: str = Query(..., description="Developer ID for authorization"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Get a single notification."""
@@ -712,7 +712,7 @@ async def get_notification(
 @router.post("/{notification_id}/read", response_model=NotificationResponse)
 async def mark_notification_read(
     notification_id: str,
-    developer_id: str = Query(..., description="Developer ID for authorization"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Mark a notification as read."""
@@ -728,7 +728,7 @@ async def mark_notification_read(
 @router.delete("/{notification_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification(
     notification_id: str,
-    developer_id: str = Query(..., description="Developer ID for authorization"),
+    developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a notification."""

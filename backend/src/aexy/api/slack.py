@@ -9,10 +9,15 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aexy.api.developers import get_current_developer
 from aexy.core.database import get_db
 from aexy.core.config import settings
+from aexy.models.developer import Developer
+from aexy.models.integrations import SlackIntegration
+from aexy.models.workspace import WorkspaceMember
 from aexy.schemas.integrations import (
     SlackCommandResponse,
     SlackIntegrationResponse,
@@ -66,15 +71,48 @@ def get_slack_service() -> SlackIntegrationService:
     return SlackIntegrationService()
 
 
+async def _require_workspace_admin(
+    workspace_id: str | None,
+    developer_id: str,
+    db: AsyncSession,
+) -> None:
+    """Active owner/admin membership in the integration's workspace, else 403/404."""
+    if not workspace_id:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    result = await db.execute(
+        select(WorkspaceMember).where(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.developer_id == developer_id,
+            WorkspaceMember.role.in_(["owner", "admin"]),
+            WorkspaceMember.status == "active",
+        )
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=403, detail="Workspace admin access required")
+
+
+async def require_integration_admin(
+    integration_id: str,
+    current_user: Developer,
+    db: AsyncSession,
+    service: SlackIntegrationService,
+) -> SlackIntegration:
+    """Load Slack integration and require caller to be an active admin of its workspace."""
+    integration = await service.get_integration(integration_id, db)
+    if not integration:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    await _require_workspace_admin(integration.workspace_id, current_user.id, db)
+    return integration
+
+
 @router.get("/install")
 async def start_oauth_install(
     organization_id: str,
-    installer_id: str,
     redirect_url: str | None = None,
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Start Slack OAuth installation flow."""
-    # Check if Slack is configured
     if not settings.slack_client_id or not settings.slack_client_secret:
         raise HTTPException(
             status_code=500,
@@ -84,7 +122,7 @@ async def start_oauth_install(
     state = secrets.token_urlsafe(32)
     await _store_oauth_state(state, {
         "organization_id": organization_id,
-        "installer_id": installer_id,
+        "installer_id": current_user.id,
         "redirect_url": redirect_url or f"{settings.frontend_url}/settings/integrations",
     })
 
@@ -95,6 +133,7 @@ async def start_oauth_install(
 @router.get("/connect")
 async def start_developer_oauth(
     redirect_url: str | None = None,
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Start Slack OAuth flow for onboarding (developer-level, no organization required).
@@ -103,7 +142,6 @@ async def start_developer_oauth(
     an organization/workspace yet. The Slack connection will be associated with
     the developer's default workspace once created.
     """
-    # Check if Slack is configured
     if not settings.slack_client_id or not settings.slack_client_secret:
         raise HTTPException(
             status_code=503,
@@ -113,7 +151,7 @@ async def start_developer_oauth(
     state = secrets.token_urlsafe(32)
     await _store_oauth_state(state, {
         "organization_id": None,  # Will be set later when workspace is created
-        "installer_id": None,  # Will be set from callback token
+        "installer_id": current_user.id,
         "redirect_url": redirect_url or f"{settings.frontend_url}/onboarding/connect?slack=connected",
         "is_onboarding": True,
     })
@@ -156,12 +194,11 @@ async def oauth_callback(
 async def get_integration(
     integration_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Get Slack integration details."""
-    integration = await service.get_integration(integration_id, db)
-    if not integration:
-        raise HTTPException(status_code=404, detail="Integration not found")
+    integration = await require_integration_admin(integration_id, current_user, db, service)
     return SlackIntegrationResponse.model_validate(integration)
 
 
@@ -169,12 +206,14 @@ async def get_integration(
 async def get_integration_by_org(
     organization_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Get Slack integration for an organization."""
     integration = await service.get_integration_by_org(organization_id, db)
     if not integration:
         return None
+    await _require_workspace_admin(integration.workspace_id, current_user.id, db)
     return SlackIntegrationResponse.model_validate(integration)
 
 
@@ -183,9 +222,11 @@ async def update_integration(
     integration_id: str,
     data: SlackIntegrationUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Update Slack integration settings."""
+    await require_integration_admin(integration_id, current_user, db, service)
     integration = await service.update_integration(integration_id, data, db)
     if not integration:
         raise HTTPException(status_code=404, detail="Integration not found")
@@ -196,9 +237,11 @@ async def update_integration(
 async def uninstall_integration(
     integration_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Uninstall Slack integration."""
+    await require_integration_admin(integration_id, current_user, db, service)
     success = await service.uninstall(integration_id, db)
     if not success:
         raise HTTPException(status_code=404, detail="Integration not found")
@@ -210,11 +253,12 @@ async def send_notification(
     request: SlackNotificationRequest,
     integration_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Send a notification to a Slack channel."""
-    integration = await service.get_integration(integration_id, db)
-    if not integration or not integration.is_active:
+    integration = await require_integration_admin(integration_id, current_user, db, service)
+    if not integration.is_active:
         raise HTTPException(status_code=404, detail="Integration not found or inactive")
 
     return await service.send_message(
@@ -338,9 +382,22 @@ async def create_user_mapping(
     integration_id: str,
     mapping: SlackUserMappingRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Map a Slack user to a Aexy developer."""
+    integration = await require_integration_admin(integration_id, current_user, db, service)
+    # Mapped developer must also be a member of the integration's workspace
+    member_result = await db.execute(
+        select(WorkspaceMember).where(
+            WorkspaceMember.workspace_id == integration.workspace_id,
+            WorkspaceMember.developer_id == mapping.developer_id,
+            WorkspaceMember.status == "active",
+        )
+    )
+    if not member_result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Target developer is not an active member of this workspace")
+
     success = await service.map_user(
         integration_id=integration_id,
         slack_user_id=mapping.slack_user_id,
@@ -361,9 +418,11 @@ async def delete_user_mapping(
     integration_id: str,
     slack_user_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Remove a Slack user mapping."""
+    await require_integration_admin(integration_id, current_user, db, service)
     success = await service.unmap_user(integration_id, slack_user_id, db)
     if not success:
         raise HTTPException(status_code=404, detail="Integration not found")
@@ -375,9 +434,11 @@ async def get_notification_logs(
     integration_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: int = 50,
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Get notification logs for an integration."""
+    await require_integration_admin(integration_id, current_user, db, service)
     logs = await service.get_notification_logs(integration_id, db, limit)
     return [SlackNotificationLogResponse.model_validate(log) for log in logs]
 
@@ -389,13 +450,14 @@ async def get_notification_logs(
 async def get_slack_channels(
     integration_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Get list of Slack channels the bot has access to."""
     from aexy.services.slack_history_sync import SlackHistorySyncService
 
-    integration = await service.get_integration(integration_id, db)
-    if not integration or not integration.is_active:
+    integration = await require_integration_admin(integration_id, current_user, db, service)
+    if not integration.is_active:
         raise HTTPException(status_code=404, detail="Integration not found or inactive")
 
     sync_service = SlackHistorySyncService()
@@ -426,6 +488,7 @@ async def import_slack_history(
     integration_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
     request: ImportHistoryRequest | None = None,
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Import Slack message history (async task)."""
@@ -433,8 +496,8 @@ async def import_slack_history(
     from aexy.temporal.task_queues import TaskQueue
     from aexy.temporal.activities.tracking import ImportSlackHistoryInput
 
-    integration = await service.get_integration(integration_id, db)
-    if not integration or not integration.is_active:
+    integration = await require_integration_admin(integration_id, current_user, db, service)
+    if not integration.is_active:
         raise HTTPException(status_code=404, detail="Integration not found or inactive")
 
     # Use defaults if no request body
@@ -464,6 +527,7 @@ async def import_slack_history(
 async def sync_slack_channels(
     integration_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Trigger immediate sync of all configured channels."""
@@ -471,8 +535,8 @@ async def sync_slack_channels(
     from aexy.temporal.task_queues import TaskQueue
     from aexy.temporal.activities.tracking import SyncAllSlackChannelsInput
 
-    integration = await service.get_integration(integration_id, db)
-    if not integration or not integration.is_active:
+    integration = await require_integration_admin(integration_id, current_user, db, service)
+    if not integration.is_active:
         raise HTTPException(status_code=404, detail="Integration not found or inactive")
 
     # Dispatch to Temporal
@@ -493,13 +557,14 @@ async def sync_slack_channels(
 async def auto_map_slack_users(
     integration_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Auto-map Slack users to developers by email."""
     from aexy.services.slack_history_sync import SlackHistorySyncService
 
-    integration = await service.get_integration(integration_id, db)
-    if not integration or not integration.is_active:
+    integration = await require_integration_admin(integration_id, current_user, db, service)
+    if not integration.is_active:
         raise HTTPException(status_code=404, detail="Integration not found or inactive")
 
     sync_service = SlackHistorySyncService()
@@ -524,15 +589,28 @@ async def configure_slack_channel(
     integration_id: str,
     request: ChannelConfigRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Configure a Slack channel for monitoring."""
     from aexy.services.slack_history_sync import SlackHistorySyncService
     from aexy.services.uptime_service import UptimeService
 
-    integration = await service.get_integration(integration_id, db)
-    if not integration or not integration.is_active:
+    integration = await require_integration_admin(integration_id, current_user, db, service)
+    if not integration.is_active:
         raise HTTPException(status_code=404, detail="Integration not found or inactive")
+
+    # Team-id binding (if supplied) must belong to the same workspace
+    if request.team_id:
+        from aexy.models.team import Team
+        team_result = await db.execute(
+            select(Team).where(
+                Team.id == request.team_id,
+                Team.workspace_id == integration.workspace_id,
+            )
+        )
+        if not team_result.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Team does not belong to this workspace")
 
     sync_service = SlackHistorySyncService()
     config = await sync_service.setup_channel_monitoring(
@@ -577,15 +655,13 @@ async def configure_slack_channel(
 async def get_configured_channels(
     integration_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Get list of channels configured for monitoring."""
-    from sqlalchemy import select
     from aexy.models.tracking import SlackChannelConfig
 
-    integration = await service.get_integration(integration_id, db)
-    if not integration:
-        raise HTTPException(status_code=404, detail="Integration not found")
+    await require_integration_admin(integration_id, current_user, db, service)
 
     result = await db.execute(
         select(SlackChannelConfig).where(
@@ -617,15 +693,14 @@ async def remove_channel_config(
     integration_id: str,
     config_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Developer = Depends(get_current_developer),
     service: Annotated[SlackIntegrationService, Depends(get_slack_service)] = None,
 ):
     """Remove a channel from monitoring."""
-    from sqlalchemy import select, and_
+    from sqlalchemy import and_
     from aexy.models.tracking import SlackChannelConfig
 
-    integration = await service.get_integration(integration_id, db)
-    if not integration:
-        raise HTTPException(status_code=404, detail="Integration not found")
+    await require_integration_admin(integration_id, current_user, db, service)
 
     result = await db.execute(
         select(SlackChannelConfig).where(

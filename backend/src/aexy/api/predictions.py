@@ -1,10 +1,13 @@
 """Predictive analytics API endpoints."""
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.api.developers import get_current_developer_id
 from aexy.core.database import get_db
+from aexy.models.team import Team
+from aexy.models.workspace import WorkspaceMember
 from aexy.schemas.analytics import (
     AttritionRiskAnalysis,
     BurnoutRiskAssessment,
@@ -14,6 +17,7 @@ from aexy.schemas.analytics import (
     PredictiveInsightResponse,
 )
 from aexy.services.predictive_analytics import PredictiveAnalyticsService
+from aexy.services.workspace_service import WorkspaceService
 from aexy.llm.gateway import get_llm_gateway
 
 router = APIRouter(prefix="/predictions")
@@ -25,13 +29,42 @@ def get_predictive_service() -> PredictiveAnalyticsService:
     return PredictiveAnalyticsService(llm_gateway=llm_gateway)
 
 
+async def _require_target_developer_visibility(
+    db: AsyncSession,
+    caller_id: str,
+    target_developer_id: str,
+    required_role: str = "admin",
+) -> None:
+    """Self is always allowed; otherwise caller must hold required_role in some
+    workspace the target developer is an active member of. Predictive
+    analytics expose sensitive burnout/attrition signals so the default is
+    admin (not just member)."""
+    if caller_id == target_developer_id:
+        return
+    target_workspaces = (
+        await db.execute(
+            select(WorkspaceMember.workspace_id).where(
+                WorkspaceMember.developer_id == target_developer_id,
+                WorkspaceMember.status == "active",
+            )
+        )
+    ).scalars().all()
+    if not target_workspaces:
+        raise HTTPException(status_code=404, detail="Developer not found")
+    service = WorkspaceService(db)
+    for ws_id in target_workspaces:
+        if await service.check_permission(str(ws_id), caller_id, required_role):
+            return
+    raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+
 @router.get("/attrition/{developer_id}", response_model=AttritionRiskAnalysis)
 async def get_attrition_risk(
     developer_id: str,
     days: int = Query(90, ge=30, le=180, description="Days of activity to analyze"),
     use_cache: bool = Query(True, description="Use cached result if available"),
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_developer_id),
+    current_user_id: str = Depends(get_current_developer_id),
 ) -> AttritionRiskAnalysis:
     """Analyze attrition risk for a developer.
 
@@ -42,6 +75,7 @@ async def get_attrition_risk(
     - **factors**: Contributing factors with evidence
     - **recommendations**: Suggested interventions
     """
+    await _require_target_developer_visibility(db, current_user_id, developer_id)
     service = get_predictive_service()
 
     try:
@@ -70,7 +104,7 @@ async def get_burnout_risk(
     days: int = Query(30, ge=7, le=90, description="Days of activity to analyze"),
     use_cache: bool = Query(True, description="Use cached result if available"),
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_developer_id),
+    current_user_id: str = Depends(get_current_developer_id),
 ) -> BurnoutRiskAssessment:
     """Assess burnout risk for a developer.
 
@@ -80,6 +114,7 @@ async def get_burnout_risk(
     - **work_patterns**: Observed work pattern analysis
     - **recommendations**: Wellness recommendations
     """
+    await _require_target_developer_visibility(db, current_user_id, developer_id)
     service = get_predictive_service()
 
     try:
@@ -108,7 +143,7 @@ async def get_performance_trajectory(
     months: int = Query(6, ge=3, le=12, description="Months to predict ahead"),
     use_cache: bool = Query(True, description="Use cached result if available"),
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_developer_id),
+    current_user_id: str = Depends(get_current_developer_id),
 ) -> PerformanceTrajectory:
     """Predict performance trajectory for a developer.
 
@@ -118,6 +153,7 @@ async def get_performance_trajectory(
     - **predicted_growth**: Expected skill improvements
     - **career_readiness**: Readiness for next career level
     """
+    await _require_target_developer_visibility(db, current_user_id, developer_id)
     service = get_predictive_service()
 
     try:
@@ -145,7 +181,7 @@ async def get_team_health(
     request: TeamHealthRequest,
     use_cache: bool = Query(True, description="Use cached result if available"),
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_developer_id),
+    current_user_id: str = Depends(get_current_developer_id),
 ) -> TeamHealthAnalysis:
     """Analyze overall team health.
 
@@ -165,6 +201,23 @@ async def get_team_health(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one developer ID is required",
         )
+
+    # If a team_id is supplied, verify the caller can read that team's workspace.
+    # Otherwise, fall back to per-developer visibility — every developer in the
+    # request must be visible to the caller (self or shared-workspace admin).
+    if request.team_id:
+        team = (
+            await db.execute(select(Team).where(Team.id == request.team_id))
+        ).scalar_one_or_none()
+        if not team:
+            raise HTTPException(status_code=404, detail="Team not found")
+        if not await WorkspaceService(db).check_permission(
+            str(team.workspace_id), current_user_id, "admin"
+        ):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+    else:
+        for dev_id in request.developer_ids:
+            await _require_target_developer_visibility(db, current_user_id, str(dev_id))
 
     service = get_predictive_service()
 
@@ -187,12 +240,13 @@ async def get_team_health(
 async def get_developer_insights(
     developer_id: str,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_developer_id),
+    current_user_id: str = Depends(get_current_developer_id),
 ) -> list[PredictiveInsightResponse]:
     """Get all cached predictive insights for a developer.
 
     Returns any existing attrition, burnout, and trajectory analyses.
     """
+    await _require_target_developer_visibility(db, current_user_id, developer_id)
     service = get_predictive_service()
     insights = await service.get_all_cached_insights(
         developer_id=developer_id,
@@ -205,12 +259,13 @@ async def get_developer_insights(
 async def refresh_developer_insights(
     developer_id: str,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_developer_id),
+    current_user_id: str = Depends(get_current_developer_id),
 ) -> dict:
     """Refresh all predictive insights for a developer.
 
     Forces recalculation of all predictions regardless of cache.
     """
+    await _require_target_developer_visibility(db, current_user_id, developer_id)
     service = get_predictive_service()
 
     results = {}
@@ -254,9 +309,10 @@ async def refresh_developer_insights(
 async def clear_developer_insights(
     developer_id: str,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_developer_id),
+    current_user_id: str = Depends(get_current_developer_id),
 ) -> None:
     """Clear all cached insights for a developer."""
+    await _require_target_developer_visibility(db, current_user_id, developer_id)
     service = get_predictive_service()
     await service.clear_cached_insights(
         developer_id=developer_id,

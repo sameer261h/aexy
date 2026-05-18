@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.82] - 2026-05-19
+
+This release closes nine `Critical` authentication-bypass issues uncovered
+by a platform-wide workspace-scope leak audit. A third pass added 28 new
+tracker rows (WS-056..WS-083) covering the frontend, public/embed
+surfaces, mailagent, and webhook ingress, with one same-day fix applied
+to a frontend session-hijack vector.
+
+### Security
+
+- Notifications API (`/notifications/*`) now binds the developer
+  identity to the JWT via `Depends(get_current_developer_id)` on every
+  one of its 19 endpoints. The previous `developer_id: str = Query(...)`
+  parameter (used as authentication by every list/preference/push/admin
+  route) is removed. Closes WS-042.
+- Slack integration (`/slack/*`) — every admin-surface route now
+  requires authentication and verifies the caller is an active
+  owner/admin of the integration's workspace via a shared
+  `require_integration_admin` helper. OAuth `/install` and `/connect`
+  derive the installer id from the current user, not a query
+  parameter. The signed webhook routes (`/commands`, `/events`,
+  `/interactions`) and the OAuth `/callback` remain public as
+  intended. Closes WS-043.
+- Reviews API (`/reviews/*`) — the entire surface (~28 endpoints
+  covering cycles, individual reviews, work goals, peer requests,
+  contribution summaries) now requires `Depends(get_current_developer)`
+  and enforces resource-appropriate authorization: cycle CRUD requires
+  workspace admin; individual-review reads require reviewee / manager
+  / peer-reviewer / workspace-admin; goal edits require ownership; peer
+  request actions require the actual party. Closes WS-021 through
+  WS-026.
+- Predictive analytics (`/predictions/*`) now binds `current_user_id`
+  (was discarded as `_`) and requires the caller to share an
+  active workspace with the target developer at admin role for
+  attrition / burnout / trajectory / insights endpoints. Team-health
+  POST verifies admin permission in the supplied `team_id`'s
+  workspace, or falls back to per-developer visibility. Closes WS-048.
+- Frontend public project page (`/p/[publicSlug]`) no longer silently
+  writes a URL `?token=` query parameter into `localStorage["token"]`.
+  Token consumption now requires a one-shot `oauthInflight`
+  sessionStorage marker set by the page's own OAuth login button
+  immediately before navigating to the provider. Without that marker
+  the token is stripped from the URL and discarded. Closes WS-071; the
+  residual `/auth/callback` variant is tracked as WS-071b.
+
+### Documentation
+
+- Updated `docs/workspace-scope-leak-tracker.md` with 28 new findings
+  (WS-056..WS-083) covering: cross-workspace CRMRecord pumping through
+  the unauthenticated automation webhook (WS-056), every email
+  provider webhook lacking signature verification (WS-057), an SSRF
+  in the SES `SubscribeURL` auto-confirm flow (WS-058), GitHub
+  webhook fail-open when no secret configured (WS-059), public
+  project endpoints returning entire workspace's data rather than
+  project-scoped data (WS-061), assessment public-token bypass
+  (WS-067), Candidate fan-out without verification (WS-068),
+  mailagent's zero-auth admin surface (WS-077), and cross-tenant
+  event injection through `message_id` lookup (WS-081). Each existing
+  fixed row was relabelled with file:line evidence pointing at the
+  patch.
+
 ## [0.7.81] - 2026-05-19
 
 This release hardens analytics authorization, scopes repository insights

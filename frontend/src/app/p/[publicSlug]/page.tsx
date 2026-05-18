@@ -77,7 +77,13 @@ function PublicProjectContent() {
     }
   };
 
-  // Handle token from OAuth redirect
+  // Handle token from OAuth redirect.
+  //
+  // SECURITY: only accept `?token=` if `oauthInflight` was set by *this* tab
+  // immediately before kicking off the OAuth redirect (see RoadmapTab.tsx).
+  // Without that gate, an attacker can craft a public link like
+  // `/p/<known-public-slug>?token=<ATTACKER_JWT>` and silently plant their
+  // session in any victim who clicks it.
   useEffect(() => {
     let token = searchParams.get("token");
 
@@ -87,28 +93,36 @@ function PublicProjectContent() {
       token = hashParams.get("token");
     }
 
-    if (token) {
-      // Save token to localStorage
-      localStorage.setItem("token", token);
-      // Invalidate the user query to refresh auth state
-      queryClient.invalidateQueries({ queryKey: ["currentUser"] });
+    if (!token) return;
 
-      // Restore the saved hash from before login, or keep current tab
-      const savedHash = sessionStorage.getItem("postLoginHash");
-      sessionStorage.removeItem("postLoginHash");
+    const inflight = sessionStorage.getItem("oauthInflight") === "1";
+    sessionStorage.removeItem("oauthInflight");
 
-      // Clean URL and restore hash
-      const cleanPath = window.location.pathname;
-      if (savedHash) {
-        window.history.replaceState({}, "", cleanPath + savedHash);
-        // Update active tab based on restored hash
-        const restoredTab = savedHash.replace("#", "");
-        if (TAB_CONFIG.some((tab) => tab.id === restoredTab)) {
-          setActiveTab(restoredTab);
-        }
-      } else {
-        window.history.replaceState({}, "", cleanPath);
+    // Always strip the token from the URL — whether or not we accept it —
+    // so it doesn't sit in history, get logged, or get copy-pasted.
+    const cleanPath = window.location.pathname;
+    if (!inflight) {
+      window.history.replaceState({}, "", cleanPath);
+      return;
+    }
+
+    // Save token to localStorage
+    localStorage.setItem("token", token);
+    // Invalidate the user query to refresh auth state
+    queryClient.invalidateQueries({ queryKey: ["currentUser"] });
+
+    // Restore the saved hash from before login, or keep current tab
+    const savedHash = sessionStorage.getItem("postLoginHash");
+    sessionStorage.removeItem("postLoginHash");
+
+    if (savedHash) {
+      window.history.replaceState({}, "", cleanPath + savedHash);
+      const restoredTab = savedHash.replace("#", "");
+      if (TAB_CONFIG.some((tab) => tab.id === restoredTab)) {
+        setActiveTab(restoredTab);
       }
+    } else {
+      window.history.replaceState({}, "", cleanPath);
     }
   }, [searchParams, queryClient]);
 

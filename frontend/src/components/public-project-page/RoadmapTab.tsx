@@ -66,6 +66,10 @@ function getLoginUrls() {
   if (currentHash) {
     sessionStorage.setItem("postLoginHash", currentHash);
   }
+  // One-shot marker the callback handler checks before accepting `?token=`
+  // from the URL. Without it, an attacker can't force a session by sending
+  // a victim a `/p/<slug>?token=<JWT>` link.
+  sessionStorage.setItem("oauthInflight", "1");
 
   // Use URL without hash for redirect (hash must come after query params)
   const redirectUrl = window.location.origin + window.location.pathname + window.location.search;
