@@ -958,6 +958,15 @@ async def get_team_tracking_dashboard(
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
 
+    # Workspace membership check — without it, an authenticated user from
+    # workspace A can read workspace B's standups/blockers/time logs via the
+    # team_id path param.
+    from aexy.services.workspace_service import WorkspaceService
+    if not await WorkspaceService(db).check_permission(
+        str(team.workspace_id), str(current_developer.id), "viewer"
+    ):
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
+
     # Get team members
     members_result = await db.execute(
         select(TeamMember).where(TeamMember.team_id == team_id)

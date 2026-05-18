@@ -313,6 +313,56 @@ async def get_entity_timeline(
     )
 
 
+def _entity_model(entity_type: str):
+    """Return the SQLAlchemy model class for an entity_type, if it lives in
+    a workspace-scoped table. Returns None for types we don't yet validate
+    (assessment, agent, template, campaign, document, etc) — those still get
+    the workspace_id stamp on `EntityActivity` itself."""
+    # Lazy-import to avoid circulars.
+    from aexy.models.sprint import SprintTask, Sprint
+    from aexy.models.story import UserStory
+    from aexy.models.epic import Epic
+    from aexy.models.release import Release
+    from aexy.models.goal import Goal
+    from aexy.models.crm import CRMRecord
+    from aexy.models.project import Project
+    from aexy.models.forms import Form
+    from aexy.models.leave import LeaveRequest
+    return {
+        "task": SprintTask,
+        "story": UserStory,
+        "epic": Epic,
+        "release": Release,
+        "goal": Goal,
+        "crm_record": CRMRecord,
+        "project": Project,
+        "sprint": Sprint,
+        "form": Form,
+        "leave_request": LeaveRequest,
+    }.get(entity_type)
+
+
+async def _assert_entity_in_workspace(
+    db: AsyncSession, entity_type: str, entity_id: str, workspace_id: str
+) -> None:
+    """If the entity_type maps to a known workspace-scoped model, verify the
+    entity belongs to this workspace before stamping activity. Without this
+    an A-member can poison B's timeline (and via @agent mentions, give the
+    comment cross-workspace reach)."""
+    model = _entity_model(entity_type)
+    if model is None:
+        return  # Unknown type — not yet validated. See _entity_model docstring.
+    from sqlalchemy import select as _select
+    result = await db.execute(
+        _select(model.id).where(
+            model.id == entity_id,
+            model.workspace_id == workspace_id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail=f"{entity_type} not found")
+
+
 @router.post("", response_model=EntityActivityResponse, status_code=201)
 async def create_activity(
     workspace_id: str,
@@ -322,6 +372,7 @@ async def create_activity(
 ):
     """Create an activity entry (mainly for comments)."""
     await check_workspace_permission(workspace_id, current_developer, db)
+    await _assert_entity_in_workspace(db, data.entity_type, data.entity_id, workspace_id)
 
     activity = EntityActivity(
         id=str(uuid4()),
@@ -358,6 +409,7 @@ async def add_comment(
     will be invoked to process the request.
     """
     await check_workspace_permission(workspace_id, current_developer, db)
+    await _assert_entity_in_workspace(db, entity_type, entity_id, workspace_id)
 
     activity = EntityActivity(
         id=str(uuid4()),

@@ -2,11 +2,16 @@
 
 from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.core.database import get_db
 from aexy.api.developers import get_current_developer
 from aexy.models.developer import Developer
+from aexy.models.leave import LeaveType, LeavePolicy, LeaveRequest, Holiday
+from aexy.models.team import Team
+from aexy.models.workspace import WorkspaceMember
+from aexy.services.workspace_service import WorkspaceService
 from aexy.schemas.leave import (
     LeaveTypeCreate,
     LeaveTypeUpdate,
@@ -34,6 +39,28 @@ router = APIRouter(
     prefix="/workspaces/{workspace_id}/leave",
     tags=["Leave Management"],
 )
+
+
+async def _require_workspace_role(
+    db: AsyncSession, workspace_id: str, developer_id: str, role: str = "viewer"
+) -> None:
+    if not await WorkspaceService(db).check_permission(workspace_id, developer_id, role):
+        raise HTTPException(status_code=403, detail="Workspace permission required")
+
+
+async def _assert_resource_in_workspace(
+    db: AsyncSession, model, workspace_id: str, resource_id: str, label: str
+) -> None:
+    """Generic guard: SELECT 1 from `model` where id=resource_id AND
+    workspace_id=workspace_id. 404 on miss."""
+    result = await db.execute(
+        select(model.id).where(
+            model.id == resource_id,
+            model.workspace_id == workspace_id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail=f"{label} not found")
 
 
 # ─── Leave Types ───────────────────────────────────────────────────────────────
@@ -77,6 +104,8 @@ async def update_leave_type(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Update a leave type."""
+    await _require_workspace_role(db, workspace_id, str(current_developer.id), "admin")
+    await _assert_resource_in_workspace(db, LeaveType, workspace_id, type_id, "Leave type")
     service = LeaveTypeService(db)
     updated = await service.update(type_id, **data.model_dump(exclude_unset=True))
     if not updated:
@@ -92,6 +121,8 @@ async def delete_leave_type(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Delete a leave type."""
+    await _require_workspace_role(db, workspace_id, str(current_developer.id), "admin")
+    await _assert_resource_in_workspace(db, LeaveType, workspace_id, type_id, "Leave type")
     service = LeaveTypeService(db)
     success = await service.delete(type_id)
     if not success:
@@ -138,6 +169,8 @@ async def update_leave_policy(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Update a leave policy."""
+    await _require_workspace_role(db, workspace_id, str(current_developer.id), "admin")
+    await _assert_resource_in_workspace(db, LeavePolicy, workspace_id, policy_id, "Leave policy")
     service = LeavePolicyService(db)
     updated = await service.update(policy_id, **data.model_dump(exclude_unset=True))
     if not updated:
@@ -153,6 +186,8 @@ async def delete_leave_policy(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Delete a leave policy."""
+    await _require_workspace_role(db, workspace_id, str(current_developer.id), "admin")
+    await _assert_resource_in_workspace(db, LeavePolicy, workspace_id, policy_id, "Leave policy")
     service = LeavePolicyService(db)
     success = await service.delete(policy_id)
     if not success:
@@ -249,6 +284,7 @@ async def approve_leave_request(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Approve a leave request."""
+    await _assert_resource_in_workspace(db, LeaveRequest, workspace_id, request_id, "Leave request")
     service = LeaveRequestService(db)
     try:
         request = await service.approve(request_id, current_developer.id)
@@ -277,6 +313,7 @@ async def reject_leave_request(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Reject a leave request."""
+    await _assert_resource_in_workspace(db, LeaveRequest, workspace_id, request_id, "Leave request")
     service = LeaveRequestService(db)
     try:
         request = await service.reject(request_id, current_developer.id, data.reason)
@@ -304,6 +341,7 @@ async def cancel_leave_request(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Cancel an approved leave request."""
+    await _assert_resource_in_workspace(db, LeaveRequest, workspace_id, request_id, "Leave request")
     service = LeaveRequestService(db)
     try:
         request = await service.cancel(request_id, current_developer.id)
@@ -331,6 +369,7 @@ async def withdraw_leave_request(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Withdraw a pending leave request."""
+    await _assert_resource_in_workspace(db, LeaveRequest, workspace_id, request_id, "Leave request")
     service = LeaveRequestService(db)
     try:
         request = await service.withdraw(request_id, current_developer.id)
@@ -376,6 +415,16 @@ async def get_developer_balance(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Get a specific developer's leave balances (managers only)."""
+    await _require_workspace_role(db, workspace_id, str(current_developer.id), "admin")
+    # Target developer must be a member of this workspace.
+    member_check = await db.execute(
+        select(WorkspaceMember.developer_id).where(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.developer_id == developer_id,
+        )
+    )
+    if member_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Developer not in this workspace")
     effective_year = year or datetime.now().year
     service = LeaveBalanceService(db)
     balances = await service.get_all_balances(workspace_id, developer_id, effective_year)
@@ -391,6 +440,9 @@ async def get_team_balances(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Get leave balances for all members of a team."""
+    await _require_workspace_role(db, workspace_id, str(current_developer.id), "viewer")
+    # Team must belong to this workspace.
+    await _assert_resource_in_workspace(db, Team, workspace_id, team_id, "Team")
     effective_year = year or datetime.now().year
     service = LeaveBalanceService(db)
     balances = await service.get_team_balances(workspace_id, team_id, effective_year)
@@ -450,6 +502,8 @@ async def update_holiday(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Update a holiday."""
+    await _require_workspace_role(db, workspace_id, str(current_developer.id), "admin")
+    await _assert_resource_in_workspace(db, Holiday, workspace_id, holiday_id, "Holiday")
     service = HolidayService(db)
     updated = await service.update(holiday_id, **data.model_dump(exclude_unset=True))
     if not updated:
@@ -465,6 +519,8 @@ async def delete_holiday(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Delete a holiday."""
+    await _require_workspace_role(db, workspace_id, str(current_developer.id), "admin")
+    await _assert_resource_in_workspace(db, Holiday, workspace_id, holiday_id, "Holiday")
     service = HolidayService(db)
     success = await service.delete(holiday_id)
     if not success:

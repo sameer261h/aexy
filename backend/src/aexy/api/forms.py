@@ -151,6 +151,45 @@ async def check_workspace_permission(
         )
 
 
+async def _assert_form_in_workspace(
+    db: AsyncSession, workspace_id: str, form_id: str
+) -> None:
+    """Verify a Form belongs to the route's workspace before exposing its
+    fields/config. Stops cross-workspace field CRUD via the form_id alone."""
+    from sqlalchemy import select
+    from aexy.models.forms import Form
+    result = await db.execute(
+        select(Form.id).where(
+            Form.id == form_id,
+            Form.workspace_id == workspace_id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Form not found",
+        )
+
+
+async def _assert_field_in_form(
+    db: AsyncSession, form_id: str, field_id: str
+) -> None:
+    """Verify the FormField belongs to the given form."""
+    from sqlalchemy import select
+    from aexy.models.forms import FormField
+    result = await db.execute(
+        select(FormField.id).where(
+            FormField.id == field_id,
+            FormField.form_id == form_id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Field not found",
+        )
+
+
 # ==================== Template Endpoints ====================
 
 @router.get("/templates")
@@ -450,6 +489,8 @@ async def delete_field(
 ):
     """Delete a form field."""
     await check_workspace_permission(workspace_id, current_user, db, "admin")
+    await _assert_form_in_workspace(db, workspace_id, form_id)
+    await _assert_field_in_form(db, form_id, field_id)
 
     form_service = FormsService(db)
     deleted = await form_service.delete_field(field_id)
@@ -468,6 +509,7 @@ async def reorder_fields(
 ):
     """Reorder form fields."""
     await check_workspace_permission(workspace_id, current_user, db, "admin")
+    await _assert_form_in_workspace(db, workspace_id, form_id)
 
     form_service = FormsService(db)
     fields = await form_service.reorder_fields(form_id, data.field_ids)

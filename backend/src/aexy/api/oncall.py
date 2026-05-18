@@ -48,8 +48,13 @@ async def verify_workspace_access(
     current_user: Developer,
     db: AsyncSession,
     required_role: str = "viewer",
+    team_id: str | None = None,
 ) -> WorkspaceService:
-    """Verify the user has access to the workspace."""
+    """Verify the user has access to the workspace, and (when `team_id` is
+    supplied) that the team actually belongs to this workspace. Without the
+    team check, the prior shape `/workspaces/A/teams/<B_team_id>/oncall/...`
+    silently operated on team B for any caller who had access to workspace A.
+    """
     workspace_service = WorkspaceService(db)
 
     if not await workspace_service.check_permission(workspace_id, str(current_user.id), required_role):
@@ -57,6 +62,18 @@ async def verify_workspace_access(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"{required_role.capitalize()} permission required",
         )
+
+    if team_id:
+        from sqlalchemy import select
+        from aexy.models.team import Team
+        team_check = await db.execute(
+            select(Team.id).where(
+                Team.id == team_id,
+                Team.workspace_id == workspace_id,
+            )
+        )
+        if team_check.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Team not found")
 
     return workspace_service
 
@@ -123,7 +140,7 @@ async def get_oncall_config(
     db: AsyncSession = Depends(get_db),
 ):
     """Get on-call configuration for a team."""
-    await verify_workspace_access(workspace_id, current_user, db, "viewer")
+    await verify_workspace_access(workspace_id, current_user, db, "viewer", team_id=team_id)
 
     service = OnCallService(db)
     config = await service.get_config(team_id)
@@ -160,7 +177,7 @@ async def enable_oncall(
     db: AsyncSession = Depends(get_db),
 ):
     """Enable on-call for a team."""
-    await verify_workspace_access(workspace_id, current_user, db, "admin")
+    await verify_workspace_access(workspace_id, current_user, db, "admin", team_id=team_id)
 
     service = OnCallService(db)
     config = await service.enable_oncall(team_id, data)
@@ -191,7 +208,7 @@ async def disable_oncall(
     db: AsyncSession = Depends(get_db),
 ):
     """Disable on-call for a team."""
-    await verify_workspace_access(workspace_id, current_user, db, "admin")
+    await verify_workspace_access(workspace_id, current_user, db, "admin", team_id=team_id)
 
     service = OnCallService(db)
     await service.disable_oncall(team_id)
@@ -207,7 +224,7 @@ async def update_oncall_config(
     db: AsyncSession = Depends(get_db),
 ):
     """Update on-call configuration."""
-    await verify_workspace_access(workspace_id, current_user, db, "admin")
+    await verify_workspace_access(workspace_id, current_user, db, "admin", team_id=team_id)
 
     service = OnCallService(db)
     config = await service.update_config(team_id, data)
@@ -253,7 +270,7 @@ async def list_schedules(
     db: AsyncSession = Depends(get_db),
 ):
     """List on-call schedules for a team within a date range."""
-    await verify_workspace_access(workspace_id, current_user, db, "viewer")
+    await verify_workspace_access(workspace_id, current_user, db, "viewer", team_id=team_id)
 
     service = OnCallService(db)
     schedules = await service.get_schedules(team_id, start_date, end_date)
@@ -275,7 +292,7 @@ async def create_schedule(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new on-call schedule."""
-    await verify_workspace_access(workspace_id, current_user, db, "admin")
+    await verify_workspace_access(workspace_id, current_user, db, "admin", team_id=team_id)
 
     service = OnCallService(db)
 
@@ -313,7 +330,7 @@ async def create_bulk_schedules(
     db: AsyncSession = Depends(get_db),
 ):
     """Create multiple on-call schedules at once."""
-    await verify_workspace_access(workspace_id, current_user, db, "admin")
+    await verify_workspace_access(workspace_id, current_user, db, "admin", team_id=team_id)
 
     service = OnCallService(db)
 
@@ -348,7 +365,7 @@ async def update_schedule(
     db: AsyncSession = Depends(get_db),
 ):
     """Update an on-call schedule."""
-    await verify_workspace_access(workspace_id, current_user, db, "admin")
+    await verify_workspace_access(workspace_id, current_user, db, "admin", team_id=team_id)
 
     service = OnCallService(db)
     schedule = await service.update_schedule(
@@ -381,7 +398,7 @@ async def delete_schedule(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete an on-call schedule."""
-    await verify_workspace_access(workspace_id, current_user, db, "admin")
+    await verify_workspace_access(workspace_id, current_user, db, "admin", team_id=team_id)
 
     service = OnCallService(db)
 
@@ -412,7 +429,7 @@ async def get_current_oncall(
     db: AsyncSession = Depends(get_db),
 ):
     """Get the current on-call person for a team."""
-    await verify_workspace_access(workspace_id, current_user, db, "viewer")
+    await verify_workspace_access(workspace_id, current_user, db, "viewer", team_id=team_id)
 
     service = OnCallService(db)
     current = await service.get_current_oncall(team_id)
@@ -439,7 +456,7 @@ async def request_swap(
     db: AsyncSession = Depends(get_db),
 ):
     """Request to swap a shift with another team member."""
-    await verify_workspace_access(workspace_id, current_user, db, "member")
+    await verify_workspace_access(workspace_id, current_user, db, "member", team_id=team_id)
 
     service = OnCallService(db)
 
@@ -468,7 +485,7 @@ async def list_swap_requests(
     db: AsyncSession = Depends(get_db),
 ):
     """List pending swap requests for the current user."""
-    await verify_workspace_access(workspace_id, current_user, db, "member")
+    await verify_workspace_access(workspace_id, current_user, db, "member", team_id=team_id)
 
     service = OnCallService(db)
     swaps = await service.get_pending_swaps_for_developer(
@@ -488,7 +505,7 @@ async def accept_swap(
     db: AsyncSession = Depends(get_db),
 ):
     """Accept a swap request."""
-    await verify_workspace_access(workspace_id, current_user, db, "member")
+    await verify_workspace_access(workspace_id, current_user, db, "member", team_id=team_id)
 
     service = OnCallService(db)
 
@@ -522,7 +539,7 @@ async def decline_swap(
     db: AsyncSession = Depends(get_db),
 ):
     """Decline a swap request."""
-    await verify_workspace_access(workspace_id, current_user, db, "member")
+    await verify_workspace_access(workspace_id, current_user, db, "member", team_id=team_id)
 
     service = OnCallService(db)
 
@@ -556,7 +573,7 @@ async def create_override(
     db: AsyncSession = Depends(get_db),
 ):
     """Create an override - directly assign a new developer to a shift."""
-    await verify_workspace_access(workspace_id, current_user, db, "admin")
+    await verify_workspace_access(workspace_id, current_user, db, "admin", team_id=team_id)
 
     service = OnCallService(db)
 

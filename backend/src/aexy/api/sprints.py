@@ -1,6 +1,7 @@
 """Sprint API endpoints."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.core.database import get_db
@@ -139,6 +140,15 @@ async def list_sprints(
             detail="Not a member of this workspace",
         )
 
+    # Verify team belongs to this workspace — without this, members of WS A can
+    # read WS B's sprints by passing a cross-workspace team_id.
+    from aexy.models.team import Team
+    team_check = await db.execute(
+        select(Team.id).where(Team.id == team_id, Team.workspace_id == workspace_id)
+    )
+    if team_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Team not found")
+
     sprints = await sprint_service.list_team_sprints(
         team_id=team_id,
         status=status_filter,
@@ -173,6 +183,14 @@ async def get_active_sprint(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not a member of this workspace",
         )
+
+    # Verify team belongs to this workspace.
+    from aexy.models.team import Team
+    team_check = await db.execute(
+        select(Team.id).where(Team.id == team_id, Team.workspace_id == workspace_id)
+    )
+    if team_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Team not found")
 
     sprint = await sprint_service.get_active_sprint(team_id)
     if not sprint:

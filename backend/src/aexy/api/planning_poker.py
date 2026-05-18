@@ -295,6 +295,22 @@ async def get_poker_session_state(
     db: AsyncSession = Depends(get_db),
 ):
     """Get current state of a planning poker session."""
+    # Caller must be a member of the sprint's workspace; the in-memory state
+    # leaks task titles, votes, and current participants otherwise.
+    from sqlalchemy import select
+    from aexy.models.sprint import Sprint
+    from aexy.services.workspace_service import WorkspaceService
+
+    sprint = (
+        await db.execute(select(Sprint).where(Sprint.id == sprint_id))
+    ).scalar_one_or_none()
+    if not sprint:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sprint not found")
+    if not await WorkspaceService(db).check_permission(
+        str(sprint.workspace_id), str(current_user.id), "viewer"
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a member of this workspace")
+
     state = poker_manager.get_state(session_id)
     if not state:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
@@ -320,6 +336,28 @@ async def poker_websocket(
     if not developer:
         await websocket.close(code=4001, reason="Developer not found")
         return
+
+    # Workspace membership check — resolve the sprint, then require the
+    # connecting developer to be a viewer of its workspace before accepting
+    # the upgrade. Without this, anyone with a valid JWT can join any
+    # session by guessing sprint_id + session_id.
+    from sqlalchemy import select as _select
+    from aexy.core.database import get_async_session
+    from aexy.models.sprint import Sprint
+    from aexy.services.workspace_service import WorkspaceService
+
+    async with get_async_session() as _db:
+        sprint = (
+            await _db.execute(_select(Sprint).where(Sprint.id == sprint_id))
+        ).scalar_one_or_none()
+        if not sprint:
+            await websocket.close(code=4004, reason="Sprint not found")
+            return
+        if not await WorkspaceService(_db).check_permission(
+            str(sprint.workspace_id), str(developer.id), "viewer"
+        ):
+            await websocket.close(code=4003, reason="Not a member of this workspace")
+            return
 
     user_id = str(developer.id)
     user_name = developer.name or "Anonymous"

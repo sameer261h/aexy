@@ -925,6 +925,18 @@ async def link_email_to_record(
     if not email:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found")
 
+    # The CRM record must also belong to this workspace, otherwise an A-member
+    # can stitch their email to a record in workspace B.
+    from aexy.models.crm import CRMRecord
+    record_check = await db.execute(
+        select(CRMRecord.id).where(
+            CRMRecord.id == data.record_id,
+            CRMRecord.workspace_id == workspace_id,
+        )
+    )
+    if record_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")
+
     # Check if link already exists
     existing = await db.execute(
         select(SyncedEmailRecordLink).where(

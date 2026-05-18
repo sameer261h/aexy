@@ -5,6 +5,88 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.84] - 2026-05-19
+
+Closes 24 `High` and `Medium` ID-forgery rows in the workspace-scope leak
+tracker (WS-010..014, WS-027..041, WS-044..047, WS-050..052, WS-054).
+Each fix follows the same shape: load the referenced resource by id and
+assert its `workspace_id` matches the route's workspace before delegating
+to the service.
+
+### Security
+
+- **CRM notes & activities** (`crm.py`) — note CRUD and per-record
+  activity list now verify `CRMRecord.workspace_id == workspace_id`
+  before exposing sub-resources. Stops `POST /workspaces/A/crm/records/
+  <B_record_id>/notes`. Closes WS-027, WS-028.
+- **Data tables / forms** (`tables.py`, `forms.py`) — `list_fields`
+  now 404s on cross-workspace tables; `delete_field` and
+  `reorder_fields` verify form-in-workspace and field-in-form before
+  mutating. Closes WS-029, WS-030.
+- **AI agents** (`agents.py`, `agent_policies.py`,
+  `automation_agents.py`) — added `_assert_agent_in_workspace` helper
+  applied to all inbox actions (get/reply/escalate/archive/process),
+  routing-rule delete, agent-policy create, and automation-agent
+  trigger config. Routing-rule delete additionally verifies the rule
+  belongs to the agent. Closes WS-031..034.
+- **Goals / Epics / Stories / Releases / Sprint Tasks** — every
+  cross-resource link operation now verifies the target shares the
+  workspace: `link_project`, `link_epic`, `add_tasks_to_epic`,
+  `add_tasks_to_story`, `add_sprint_to_release`,
+  `add_stories_to_release`, and sprint-task bulk_assign/status/move.
+  Sprint-task `bulk_move` also requires the target sprint to share
+  the workspace. The `get_sprint_and_check_permission` helper now
+  returns the sprint object so call-sites can scope queries to it.
+  Closes WS-035..039.
+- **On-call** (`oncall.py`) — `verify_workspace_access` now accepts
+  `team_id` and asserts `Team.workspace_id == workspace_id`. All call
+  sites updated. Closes WS-040.
+- **Sprints by team** (`sprints.py`) — `list_sprints` and
+  `get_active_sprint` verify `Team.workspace_id == workspace_id`.
+  Closes WS-041.
+- **Team calendar** (`team_calendar.py`) — three GET endpoints now
+  require workspace viewer-role membership and (when `team_id` is
+  supplied) verify the team's workspace. Closes WS-010.
+- **Tracking team dashboard** (`tracking.py`) —
+  `get_team_tracking_dashboard` now resolves the team's workspace and
+  requires caller viewer-role before reading standups/blockers/time
+  logs. Closes WS-011.
+- **Dependency APIs** (`dependencies.py`) — added `_require_member_of`
+  helper. Caller must be a member of the dependent story/task's
+  workspace before creating or listing dependencies. Also fixed a
+  pre-existing `session.add(...)` NameError on both `create_story_
+  dependency` and `create_task_dependency`. Closes WS-012.
+- **Chat** (`chat_service.py`, `chat.py`) — `update_message` and
+  `delete_message` now accept `workspace_id` and constrain the lookup
+  via a `ChatChannel.workspace_id` join. A sender who is a member of
+  multiple workspaces can no longer edit a message in workspace B by
+  hitting workspace A's route. Closes WS-014.
+- **Leave management** (`leave.py`) — added generic
+  `_assert_resource_in_workspace` helper. Applied to update/delete of
+  `LeaveType` (admin-only), `LeavePolicy` (admin-only), `Holiday`
+  (admin-only), and leave-request approve/reject/cancel/withdraw.
+  `get_developer_balance` requires admin and verifies target is a
+  workspace member; `get_team_balances` verifies `Team.workspace_id`.
+  Closes WS-044..047.
+- **Google email-to-record link** (`google_integration.py`) —
+  `link_email_to_record` now verifies the CRM record belongs to the
+  caller's workspace before inserting the link. Closes WS-050.
+- **Entity activity / comments** (`entity_activity.py`) — added
+  `_entity_model` mapping plus `_assert_entity_in_workspace` helper
+  applied to both `create_activity` and `add_comment`. Validates the
+  10 most common workspace-scoped entity types (task/story/epic/
+  release/goal/crm_record/project/sprint/form/leave_request);
+  remaining types continue to be stamped pending follow-up. Closes
+  WS-051 (partial — see helper note).
+- **Reminders** (`reminders.py`) — control-owner update/delete and
+  domain-team-mapping delete now verify the target's `workspace_id`
+  matches the route. Closes WS-052.
+- **Planning poker** (`planning_poker.py`) —
+  `get_poker_session_state` and the WebSocket entrypoint now resolve
+  the sprint and require viewer-role membership of
+  `sprint.workspace_id`. WebSocket rejects with 4003/4004 on miss.
+  Closes WS-054.
+
 ## [0.7.83] - 2026-05-19
 
 Continues the workspace-scope leak audit by closing four more `Critical`
