@@ -210,6 +210,35 @@ async def webhook_status() -> dict:
 # =============================================================================
 
 
+def derive_automation_webhook_secret(automation_id: str) -> str:
+    """Per-automation HMAC secret derived from the global settings.secret_key.
+
+    Avoids a migration to add a `webhook_secret` column on CRMAutomation.
+    The UI surfaces this derived value as the automation's webhook secret;
+    customers configure their external system to sign requests with it.
+    """
+    import hashlib
+    import hmac as _hmac
+    return _hmac.new(
+        settings.secret_key.encode("utf-8"),
+        f"automation:{automation_id}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _verify_automation_signature(automation_id: str, signature_header: str | None, body: bytes) -> bool:
+    """Verify `X-Aexy-Signature: sha256=<hex>` against the derived per-automation secret."""
+    import hashlib
+    import hmac as _hmac
+    if not signature_header:
+        return False
+    # Accept both `sha256=<hex>` and bare `<hex>` for client flexibility.
+    sig = signature_header.split("=", 1)[1] if "=" in signature_header else signature_header
+    secret = derive_automation_webhook_secret(automation_id)
+    expected = _hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return _hmac.compare_digest(expected, sig)
+
+
 @router.post("/automations/{automation_id}/trigger")
 async def trigger_automation_webhook(
     automation_id: str,
@@ -219,8 +248,11 @@ async def trigger_automation_webhook(
     """
     Trigger an automation workflow via webhook.
 
-    This is a public endpoint that allows external systems to trigger workflows.
-    The automation must have a webhook trigger type and be published.
+    Authenticated by HMAC: caller signs the raw body with the per-automation
+    secret returned by `derive_automation_webhook_secret`, sets the result
+    in `X-Aexy-Signature: sha256=<hex>`. In debug mode an unsigned request
+    is allowed for local testing; in production a missing/invalid signature
+    is a hard 401. (WS-056)
     """
     from datetime import datetime, timezone
     from uuid import uuid4
@@ -235,9 +267,20 @@ async def trigger_automation_webhook(
     from aexy.temporal.client import get_temporal_client
     from aexy.temporal.workflows.crm_workflow import CRMAutomationWorkflow, CRMWorkflowInput
 
+    # Read raw body once so we can both verify the signature and JSON-parse it.
+    raw_body = await request.body()
+    signature_header = request.headers.get("X-Aexy-Signature") or request.headers.get("x-aexy-signature")
+    if not _verify_automation_signature(automation_id, signature_header, raw_body):
+        if not settings.debug:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Missing or invalid X-Aexy-Signature",
+            )
+
     # Get payload
     try:
-        payload = await request.json()
+        import json as _json
+        payload = _json.loads(raw_body) if raw_body else {}
     except Exception:
         payload = {}
 
@@ -284,12 +327,18 @@ async def trigger_automation_webhook(
         "source_ip": request.client.host if request.client else None,
     }
 
-    # Check for record_id in payload
+    # Check for record_id in payload. The record must belong to the same
+    # workspace as the automation — without this, a caller with a valid
+    # signature for automation A in workspace WS-A can pump WS-B's CRM
+    # record data into WS-A's workflow context (WS-056).
     record_id = payload.get("record_id")
     record_data = {}
 
     if record_id:
-        stmt = select(CRMRecord).where(CRMRecord.id == record_id)
+        stmt = select(CRMRecord).where(
+            CRMRecord.id == record_id,
+            CRMRecord.workspace_id == automation.workspace_id,
+        )
         result = await db.execute(stmt)
         record = result.scalar_one_or_none()
         if record:

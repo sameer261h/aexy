@@ -66,9 +66,9 @@ function getLoginUrls() {
   if (currentHash) {
     sessionStorage.setItem("postLoginHash", currentHash);
   }
-  // One-shot marker the callback handler checks before accepting `?token=`
-  // from the URL. Without it, an attacker can't force a session by sending
-  // a victim a `/p/<slug>?token=<JWT>` link.
+  // The document-level OAuthInflightTagger (mounted in providers.tsx) also
+  // sets this on click, but we set it pre-emptively here in case some
+  // future caller bypasses the anchor.
   sessionStorage.setItem("oauthInflight", "1");
 
   // Use URL without hash for redirect (hash must come after query params)

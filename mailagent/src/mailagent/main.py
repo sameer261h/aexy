@@ -1,5 +1,6 @@
 """Main application entry point for mailagent service."""
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -19,8 +20,12 @@ from mailagent.api import (
 )
 from mailagent.config import get_settings
 from mailagent.database import engine
+from mailagent.middleware import InternalAuthMiddleware
 from mailagent.models import Base
 from mailagent.redis_client import close_redis
+
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -54,14 +59,32 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
-    # CORS middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],  # Configure appropriately for production
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # CORS — by default mailagent talks only to the Aexy backend (server →
+    # server). Override via MAILAGENT_CORS_ALLOWED_ORIGINS only if a browser
+    # tool needs direct access. `allow_credentials` is intentionally False;
+    # the prior `allow_origins=["*"]` with credentials was a CORS spec
+    # violation that also let non-browser callers through.
+    allowed_origins = [
+        o.strip() for o in (settings.cors_allowed_origins or "").split(",") if o.strip()
+    ]
+    if allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type", "X-Mailagent-Signature", "X-Mailagent-Timestamp"],
+        )
+
+    # HMAC auth on every non-public route. See middleware.py for the wire
+    # format. When `internal_secret` is empty (dev) the middleware passes
+    # through; in that mode the port MUST be bound to the internal network.
+    app.add_middleware(InternalAuthMiddleware)
+    if not settings.internal_secret:
+        logger.warning(
+            "Mailagent internal_secret is empty — running without backend HMAC auth. "
+            "DO NOT deploy to production with this configuration."
+        )
 
     # Register routers
     app.include_router(health_router)

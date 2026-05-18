@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.85] - 2026-05-19
+
+Closes the remaining four `Critical` and most of the `High` rows in the
+workspace-scope leak tracker: frontend OAuth + framing hardening,
+mailagent isolation, automation webhook signing, and per-provider email
+webhook signature verification.
+
+### Security
+
+- **Automation webhook HMAC** (WS-056) — `POST /webhooks/automations/
+  {id}/trigger` now requires `X-Aexy-Signature: sha256=<hex>` over the
+  raw body, verified with a per-automation HMAC secret derived as
+  `HMAC(settings.secret_key, "automation:" + automation_id)`. Lets us
+  ship signature verification without a `webhook_secret` column
+  migration on `CRMAutomation`; the UI surfaces this derived value as
+  the automation's webhook secret. `record_id` is now constrained to
+  `CRMRecord.workspace_id == automation.workspace_id` before loading.
+- **Email provider webhooks** (WS-057, WS-058, WS-081) — new
+  `services/email_webhook_verify.py` implements:
+  - SendGrid: ECDSA over `timestamp + body` against the configured
+    public key (`X-Twilio-Email-Event-Webhook-Signature`).
+  - Mailgun: HMAC over `timestamp + token` with the signing key.
+  - Postmark: HTTP Basic Auth against the configured `user:pass`.
+  - SES (via SNS): topic-ARN allowlist plus a hostname check on the
+    SNS `SubscribeURL` that restricts auto-confirmation to
+    `sns.<region>.amazonaws.com` (fixes the prior blind-SSRF).
+  Each provider handler now resolves the workspace from the
+  signature-verified sender via `SendingDomain.domain` lookup first,
+  and only falls back to the legacy `message_id` lookup when no
+  matching sending domain exists. New settings:
+  `sendgrid_webhook_public_key`, `mailgun_webhook_signing_key`,
+  `postmark_webhook_basic_auth`, `ses_sns_topic_arn_allowlist`.
+- **Mailagent zero-auth** (WS-077, WS-078, WS-079, WS-080) — new
+  `mailagent/middleware.py` `InternalAuthMiddleware` requires
+  `X-Mailagent-Signature: HMAC-SHA256(internal_secret, timestamp + "." +
+  body)` on every non-public route with a ±5min replay window. The
+  Aexy backend's `mailagent_client._request` signs every outbound call
+  when `settings.mailagent_signing_secret` is configured. CORS now
+  only mounts when `cors_allowed_origins` is set (default empty —
+  server-to-server only), and `allow_credentials` is False. `/send/
+  email` validates `from_address.domain` against the verified
+  `mailagent_domains` catalog and strips arbitrary headers down to a
+  whitelist of threading/unsubscribe ones. Per-workspace
+  `EmailProvider` isolation (full WS-079) is parked as a backlog
+  item — the unauthenticated-access vector is now closed.
+- **Frontend OAuth callback** (WS-071b) — `/auth/callback` now calls
+  `consumeOAuthInflight()` and rejects the URL token (redirects to
+  `/?error=oauth_state_missing`) when the marker isn't present. A new
+  document-level `OAuthInflightTagger` (mounted in `providers.tsx`)
+  watches mousedown events for any `<a href>` matching
+  `/auth/<provider>/(login|connect|connect-crm)` and sets the marker
+  just before navigation. Catches the inline anchor login buttons in
+  `app/page.tsx` and `LandingHeader.tsx` without modifying every
+  callsite. The matching `/p/[publicSlug]` handler (WS-071) is
+  refactored to use the same shared `lib/oauth.ts` helper.
+- **Frontend middleware auth gate** (WS-072) — `middleware.ts` now
+  redirects auth-required path prefixes to `/?next=<path>` when the
+  `aexy_authed` presence cookie is absent. The cookie is mirrored from
+  `localStorage["token"]` by `useAuth` on mount and at
+  `setToken`/`logout`. The JWT itself remains in localStorage and is
+  still validated by the API; the cookie just prevents the SSR app
+  shell from leaking placeholders to logged-out users.
+- **Frame-ancestors / clickjacking** (WS-073) — `next.config.js` now
+  configures `headers()`: `X-Frame-Options: DENY` + CSP
+  `frame-ancestors 'none'` everywhere except `/embed/*` (which gets
+  `frame-ancestors *` until per-link origin allowlisting moves to the
+  API side under WS-074). Also adds `Referrer-Policy:
+  strict-origin-when-cross-origin` and `X-Content-Type-Options:
+  nosniff` site-wide.
+
 ## [0.7.84] - 2026-05-19
 
 Closes 24 `High` and `Medium` ID-forgery rows in the workspace-scope leak

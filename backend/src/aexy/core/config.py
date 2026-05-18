@@ -347,6 +347,22 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
     backend_url: str = "http://localhost:8000"
     mailagent_url: str = "http://localhost:8001"
+    # HMAC shared secret between backend and mailagent. Backend signs every
+    # outbound request; mailagent rejects requests without a valid signature
+    # (see WS-077). Empty in dev is allowed so docker-compose works
+    # out-of-the-box, but mailagent's `internal_secret` MUST also be empty
+    # in that case. In production both sides must be set to the same value.
+    mailagent_signing_secret: str = ""
+
+    # Email provider webhook secrets — used to verify inbound bounce/complaint
+    # /unsubscribe events. Each provider has its own signature scheme; see
+    # api/email_webhooks.py for the per-provider helpers.
+    # When empty, signature verification is skipped (development only); a
+    # warning is emitted at request time.
+    sendgrid_webhook_public_key: str = ""        # base64 ECDSA public key
+    mailgun_webhook_signing_key: str = ""        # HMAC key
+    postmark_webhook_basic_auth: str = ""        # "user:pass" — verified against Authorization header
+    ses_sns_topic_arn_allowlist: str = ""        # comma-separated TopicArns we will accept events from
 
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/aexy"

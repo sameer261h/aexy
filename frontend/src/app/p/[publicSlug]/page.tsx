@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { FolderKanban, Loader2, AlertCircle, Globe, ArrowLeft } from "lucide-react";
 import { publicProjectApi, PublicProject } from "@/lib/api";
+import { consumeOAuthInflight } from "@/lib/oauth";
 import { useAuth } from "@/hooks/useAuth";
 import { AppShell } from "@/components/layout/AppShell";
 import { useQueryClient } from "@tanstack/react-query";
@@ -95,8 +96,7 @@ function PublicProjectContent() {
 
     if (!token) return;
 
-    const inflight = sessionStorage.getItem("oauthInflight") === "1";
-    sessionStorage.removeItem("oauthInflight");
+    const inflight = consumeOAuthInflight();
 
     // Always strip the token from the URL — whether or not we accept it —
     // so it doesn't sit in history, get logged, or get copy-pasted.
