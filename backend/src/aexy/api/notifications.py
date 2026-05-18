@@ -406,11 +406,14 @@ async def require_enterprise_workspace(
             detail="Workspace not found",
         )
 
-    # Check if user is admin of the workspace
+    # Check if user is admin of the workspace. Require active
+    # membership — a removed admin shouldn't keep modifying workspace
+    # notification settings via a still-valid token.
     member_query = select(WorkspaceMember).where(
         WorkspaceMember.workspace_id == workspace_id,
         WorkspaceMember.developer_id == developer_id,
         WorkspaceMember.role.in_(["owner", "admin"]),
+        WorkspaceMember.status == "active",
     )
     member_result = await db.execute(member_query)
     member = member_result.scalar_one_or_none()

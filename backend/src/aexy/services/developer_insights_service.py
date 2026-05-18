@@ -2876,51 +2876,91 @@ class DeveloperInsightsService:
         developer_ids: list[str],
         start: datetime,
         end: datetime,
+        workspace_id: str | None = None,
     ) -> list[str]:
         """Find all repository names that workspace members have activity in,
         including repos enabled via developer_repositories (even if the GitHub
-        developer ID differs from the workspace member ID)."""
+        developer ID differs from the workspace member ID).
+
+        When `workspace_id` is provided the result is intersected with the
+        workspace's adopted-repo allow-list. Without that intersection a
+        workspace member's commits/PRs to a personal or open-source repo
+        would leak into the "team repository insights" view — the
+        WorkspaceRepository filter on its own only narrows source #3.
+        """
+        from aexy.models.repository import WorkspaceRepository
+
+        # Build the adopted-repo allow-list up front when we have a
+        # workspace; downstream queries reuse it to keep activity from
+        # non-adopted repos out of sources #1 and #2.
+        adopted_repo_names: set[str] | None = None
+        if workspace_id:
+            adopted_stmt = (
+                select(Repository.full_name)
+                .join(
+                    WorkspaceRepository,
+                    WorkspaceRepository.repository_id == Repository.id,
+                )
+                .where(
+                    WorkspaceRepository.workspace_id == workspace_id,
+                    WorkspaceRepository.is_active == True,  # noqa: E712
+                )
+            )
+            adopted_repo_names = {
+                row[0]
+                for row in (await self.db.execute(adopted_stmt)).all()
+                if row[0]
+            }
+            # No adopted repos → nothing in scope. Returning an empty
+            # list short-circuits compute_repository_insights cleanly.
+            if not adopted_repo_names:
+                return []
+
         repos: set[str] = set()
 
         # 1. Repos with commits by workspace members
-        stmt = select(distinct(Commit.repository)).where(
-            and_(
-                Commit.developer_id.in_(developer_ids),
-                Commit.committed_at >= start,
-                Commit.committed_at <= end,
-                Commit.repository.isnot(None),
-            )
-        )
+        commit_filters = [
+            Commit.developer_id.in_(developer_ids),
+            Commit.committed_at >= start,
+            Commit.committed_at <= end,
+            Commit.repository.isnot(None),
+        ]
+        if adopted_repo_names is not None:
+            commit_filters.append(Commit.repository.in_(adopted_repo_names))
+        stmt = select(distinct(Commit.repository)).where(and_(*commit_filters))
         result = await self.db.execute(stmt)
         repos.update(row[0] for row in result.all())
 
         # 2. Repos with PRs by workspace members
-        pr_stmt = select(distinct(PullRequest.repository)).where(
-            and_(
-                PullRequest.developer_id.in_(developer_ids),
-                PullRequest.created_at >= start,
-                PullRequest.created_at <= end,
-                PullRequest.repository.isnot(None),
-            )
-        )
+        pr_filters = [
+            PullRequest.developer_id.in_(developer_ids),
+            PullRequest.created_at >= start,
+            PullRequest.created_at <= end,
+            PullRequest.repository.isnot(None),
+        ]
+        if adopted_repo_names is not None:
+            pr_filters.append(PullRequest.repository.in_(adopted_repo_names))
+        pr_stmt = select(distinct(PullRequest.repository)).where(and_(*pr_filters))
         pr_result = await self.db.execute(pr_stmt)
         repos.update(row[0] for row in pr_result.all())
 
         # 3. Adopted workspace repositories (replaces the legacy
         #    DeveloperRepository.is_enabled scan now that adoption is
-        #    workspace-scoped).
-        from aexy.models.repository import WorkspaceRepository
-
-        wr_stmt = (
-            select(Repository.full_name)
-            .join(
-                WorkspaceRepository,
-                WorkspaceRepository.repository_id == Repository.id,
+        #    workspace-scoped). Reuse the allow-list we already
+        #    computed when workspace_id was supplied.
+        if adopted_repo_names is not None:
+            repos.update(adopted_repo_names)
+        else:
+            wr_stmt = (
+                select(Repository.full_name)
+                .join(
+                    WorkspaceRepository,
+                    WorkspaceRepository.repository_id == Repository.id,
+                )
+                .where(WorkspaceRepository.is_active == True)  # noqa: E712
             )
-            .where(WorkspaceRepository.is_active == True)  # noqa: E712
-        )
-        wr_result = await self.db.execute(wr_stmt)
-        repos.update(row[0] for row in wr_result.all())
+            wr_result = await self.db.execute(wr_stmt)
+            repos.update(row[0] for row in wr_result.all())
 
         return list(repos)
 
@@ -2930,6 +2970,7 @@ class DeveloperInsightsService:
         start: datetime,
         end: datetime,
         include_external: bool = False,
+        workspace_id: str | None = None,
     ) -> list[dict]:
         """Compute per-repository activity metrics.
 
@@ -2948,7 +2989,7 @@ class DeveloperInsightsService:
         repo_filter: list[str] | None = None
         if include_external:
             repo_filter = await self._find_workspace_repositories(
-                developer_ids, start, end
+                developer_ids, start, end, workspace_id=workspace_id
             )
             if not repo_filter:
                 return []

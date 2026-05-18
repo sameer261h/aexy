@@ -41,6 +41,9 @@ async def _user_can_read_repo(
         .where(
             Repository.full_name == repository_full_name,
             WorkspaceMember.developer_id == developer_id,
+            # Removed members keep historical attribution but lose
+            # workspace read access — gate on active membership.
+            WorkspaceMember.status == "active",
             WorkspaceRepository.is_active == True,  # noqa: E712
         )
         .limit(1)

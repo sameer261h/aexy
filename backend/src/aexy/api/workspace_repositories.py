@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.api.developers import get_current_developer_id
 from aexy.core.database import get_db
-from aexy.models.repository import Repository
+from aexy.models.repository import DeveloperRepository, Repository
 from aexy.models.team import Team
 from aexy.models.workspace import WorkspaceMember
 from aexy.services.workspace_repository_service import WorkspaceRepositoryService
@@ -47,6 +47,9 @@ class WorkspaceRepositoryResponse(BaseModel):
     sync_status: str
     last_sync_at: datetime | None = None
     sync_error: str | None = None
+    commits_synced: int = 0
+    prs_synced: int = 0
+    reviews_synced: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -68,8 +71,10 @@ def _wr_to_response(
     *,
     adopter_name: str | None = None,
     adopter_active: bool = True,
+    sync_override: dict | None = None,
 ) -> WorkspaceRepositoryResponse:
     repo = wr.repository
+    sync = sync_override or {}
     return WorkspaceRepositoryResponse(
         id=str(wr.id),
         workspace_id=str(wr.workspace_id),
@@ -90,9 +95,12 @@ def _wr_to_response(
         adopted_by_name=adopter_name,
         adopter_active=adopter_active,
         is_active=wr.is_active,
-        sync_status=wr.sync_status,
-        last_sync_at=wr.last_sync_at,
-        sync_error=wr.sync_error,
+        sync_status=sync.get("sync_status", wr.sync_status),
+        last_sync_at=sync.get("last_sync_at", wr.last_sync_at),
+        sync_error=sync.get("sync_error", wr.sync_error),
+        commits_synced=sync.get("commits_synced", wr.commits_synced),
+        prs_synced=sync.get("prs_synced", wr.prs_synced),
+        reviews_synced=sync.get("reviews_synced", wr.reviews_synced),
         created_at=wr.created_at,
         updated_at=wr.updated_at,
     )
@@ -170,6 +178,50 @@ async def _resolve_adopter_metadata(
     }
 
 
+async def _resolve_sync_metadata(db: AsyncSession, wrs: list) -> dict[str, dict]:
+    """Resolve effective sync state for workspace repos.
+
+    WorkspaceRepository is the workspace-owned catalog, but older sync paths
+    still update DeveloperRepository counters. Use the adopter row as a
+    compatibility source so settings and analytics do not disagree while the
+    sync pipeline migration is completed.
+    """
+    pairs = [
+        (str(wr.id), str(wr.adopted_by_developer_id), str(wr.repository_id))
+        for wr in wrs
+        if wr.adopted_by_developer_id and wr.repository_id
+    ]
+    if not pairs:
+        return {}
+
+    developer_ids = {developer_id for _, developer_id, _ in pairs}
+    repository_ids = {repository_id for _, _, repository_id in pairs}
+    stmt = select(DeveloperRepository).where(
+        DeveloperRepository.developer_id.in_(developer_ids),
+        DeveloperRepository.repository_id.in_(repository_ids),
+    )
+    result = await db.execute(stmt)
+    by_pair = {
+        (str(dr.developer_id), str(dr.repository_id)): dr
+        for dr in result.scalars().all()
+    }
+
+    resolved: dict[str, dict] = {}
+    for wr_id, developer_id, repository_id in pairs:
+        dr = by_pair.get((developer_id, repository_id))
+        if not dr:
+            continue
+        resolved[wr_id] = {
+            "sync_status": dr.sync_status,
+            "last_sync_at": dr.last_sync_at,
+            "sync_error": dr.sync_error,
+            "commits_synced": dr.commits_synced,
+            "prs_synced": dr.prs_synced,
+            "reviews_synced": dr.reviews_synced,
+        }
+    return resolved
+
+
 # ─── Workspace catalog ──────────────────────────────────────────────────
 @router.get(
     "/workspaces/{workspace_id}/repositories",
@@ -188,11 +240,13 @@ async def list_workspace_repositories(
         workspace_id, include_inactive=include_inactive
     )
     adopter_meta = await _resolve_adopter_metadata(db, workspace_id, wrs)
+    sync_meta = await _resolve_sync_metadata(db, wrs)
     return [
         _wr_to_response(
             wr,
             adopter_name=adopter_meta.get(str(wr.id), {}).get("name"),
             adopter_active=adopter_meta.get(str(wr.id), {}).get("active", True),
+            sync_override=sync_meta.get(str(wr.id)),
         )
         for wr in wrs
     ]
@@ -257,10 +311,12 @@ async def adopt_repository(
     await db.refresh(wr)
     wr.repository = repo
     adopter_meta = await _resolve_adopter_metadata(db, workspace_id, [wr])
+    sync_meta = await _resolve_sync_metadata(db, [wr])
     return _wr_to_response(
         wr,
         adopter_name=adopter_meta.get(str(wr.id), {}).get("name"),
         adopter_active=adopter_meta.get(str(wr.id), {}).get("active", True),
+        sync_override=sync_meta.get(str(wr.id)),
     )
 
 
@@ -358,10 +414,12 @@ async def reclaim_repository(
     repo = await db.get(Repository, wr.repository_id)
     wr.repository = repo
     adopter_meta = await _resolve_adopter_metadata(db, workspace_id, [wr])
+    sync_meta = await _resolve_sync_metadata(db, [wr])
     return _wr_to_response(
         wr,
         adopter_name=adopter_meta.get(str(wr.id), {}).get("name"),
         adopter_active=adopter_meta.get(str(wr.id), {}).get("active", True),
+        sync_override=sync_meta.get(str(wr.id)),
     )
 
 
@@ -382,11 +440,13 @@ async def list_team_repositories(
     adopter_meta = await _resolve_adopter_metadata(
         db, str(team.workspace_id), wrs
     )
+    sync_meta = await _resolve_sync_metadata(db, wrs)
     return [
         _wr_to_response(
             wr,
             adopter_name=adopter_meta.get(str(wr.id), {}).get("name"),
             adopter_active=adopter_meta.get(str(wr.id), {}).get("active", True),
+            sync_override=sync_meta.get(str(wr.id)),
         )
         for wr in wrs
     ]

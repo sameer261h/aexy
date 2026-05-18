@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.models.activity import Commit, PullRequest
 from aexy.models.sprint import SprintTask, TaskGitHubLink, Sprint
+from aexy.models.team import Team
 from aexy.services.task_reference_parser import (
     TaskReferenceParser,
     TaskReference,
@@ -271,8 +272,10 @@ class GitHubTaskSyncService:
                 TeamRepository,
                 TeamRepository.workspace_repository_id == WorkspaceRepository.id,
             )
+            .join(Team, Team.id == TeamRepository.team_id)
             .where(
                 TeamRepository.team_id == team_id,
+                WorkspaceRepository.workspace_id == Team.workspace_id,
                 WorkspaceRepository.is_active == True,  # noqa: E712
             )
             .distinct()

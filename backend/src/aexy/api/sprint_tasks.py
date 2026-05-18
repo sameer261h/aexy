@@ -662,6 +662,7 @@ async def search_pull_requests_for_task_linking(
 
     conditions = [
         TeamRepository.team_id == sprint.team_id,
+        WorkspaceRepository.workspace_id == sprint.workspace_id,
         WorkspaceRepository.is_active == True,  # noqa: E712
     ]
     if query:

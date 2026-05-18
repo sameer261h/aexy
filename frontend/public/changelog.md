@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.81] - 2026-05-19
+
+This release hardens analytics authorization, scopes repository insights
+strictly to adopted workspace repos, and adds an evidence drill-down on
+the team insights page.
+
+### Added
+
+- Added an `AnalyticsDetailsModal` on the team insights page with
+  Summary / Sources / Commits tabs surfacing the rows behind each
+  aggregate. A workspace-admin-only Raw tab exposes the underlying
+  JSON for debugging.
+- Added `commits_synced`, `prs_synced`, `reviews_synced` to the
+  workspace repository response, overlayed from the adopter's
+  `DeveloperRepository` row so the catalog and analytics agree on sync
+  state during the sync-pipeline migration.
+
+### Changed
+
+- Repository insights now intersect a workspace member's commits and PRs
+  against the workspace's adopted-repo allow-list, so a member's
+  personal or open-source contributions no longer leak into team-level
+  insights.
+- Team insights now refuse requests from non-active workspace members.
+  Removed and suspended members keep their historical attribution but
+  cannot keep calling analytics endpoints.
+- Project and sprint PR search and the GitHub task sync explicitly scope
+  by `WorkspaceRepository.workspace_id`, making the cross-workspace
+  guarantee a query invariant instead of relying on data invariants.
+
+### Security
+
+- Closed six unauthenticated reads in `/intelligence/team/{workspace_id}`
+  endpoints (burnout, expertise, collaboration, collaboration graph,
+  complexity, technology) that previously returned data when the caller
+  was not a workspace member.
+- Gated the analytics modal Raw tab behind workspace admin so commit
+  author emails are not exposed to non-admin viewers.
+- Workspace-member-based authorization now uniformly requires active
+  membership. A teammate marked as "left" keeps their historical
+  attribution but can no longer read workspace notification settings,
+  AI code insights, role-gated resources via `is_owner`, billing
+  fallback workspaces, or per-app permission paths. Affects
+  `notifications.py`, `code_insights.py`, `workspace_service.is_owner`,
+  `billing.py` workspace selection, and `app_access_service` member
+  lookup (which protects four downstream config callsites).
+
+### Fixed
+
+- Fixed a `NameError` in the project PR search endpoint where the team
+  variable was bound in the wrong function.
+
 ## [0.7.80] - 2026-05-19
 
 This release improves developer identity handling in insights and adds
