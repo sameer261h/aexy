@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,12 +37,57 @@ router = APIRouter(
 )
 
 
+_WORKSPACE_LOOKUP_PER_IP_PER_MIN = 30
+
+
+async def _rate_limit_public_lookup(request) -> None:
+    """Per-IP throttle on public-booking discovery endpoints (WS-064).
+
+    Workspace slugs are short and human-readable; without a throttle, an
+    attacker can iterate the space and build a directory of every
+    workspace + its event types in seconds. 30/min/IP is generous for a
+    real user but blocks naive enumeration.
+    """
+    try:
+        import redis.asyncio as _aioredis
+        from aexy.core.config import get_settings as _get_settings
+        settings = _get_settings()
+        client = _aioredis.from_url(settings.redis_url)
+    except Exception:
+        # Fail-open on Redis unavailability rather than break public booking.
+        return
+    try:
+        forwarded = request.headers.get("x-forwarded-for") if request and request.headers else None
+        if forwarded:
+            ip = forwarded.split(",")[0].strip()
+        elif request and request.client:
+            ip = request.client.host
+        else:
+            ip = "unknown"
+        key = f"booking:public_lookup:ip:{ip}"
+        count = await client.incr(key)
+        if count == 1:
+            await client.expire(key, 60)
+        if count > _WORKSPACE_LOOKUP_PER_IP_PER_MIN:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many lookups. Try again in a minute.",
+            )
+    finally:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+
+
 @router.get("/{workspace_slug}")
 async def get_workspace_booking_page(
     workspace_slug: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Get workspace info and available event types for booking."""
+    await _rate_limit_public_lookup(request)
     # Get workspace
     stmt = select(Workspace).where(Workspace.slug == workspace_slug)
     result = await db.execute(stmt)
@@ -119,6 +164,9 @@ async def get_workspace_teams(
     team_result = await db.execute(team_stmt)
     teams = team_result.scalars().all()
 
+    # WS-060: do NOT expose member emails on a public booking surface;
+    # the workspace slug is the only thing gating the response, which is
+    # effectively a public directory of every employee's email once leaked.
     return {
         "teams": [
             {
@@ -130,7 +178,6 @@ async def get_workspace_teams(
                     {
                         "id": m.developer.id,
                         "name": m.developer.name,
-                        "email": m.developer.email,
                         "avatar_url": m.developer.avatar_url,
                     }
                     for m in t.members
@@ -185,6 +232,7 @@ async def get_team_info(
             detail="Team not found",
         )
 
+    # WS-060: name + avatar only; email stays private.
     return {
         "id": team.id,
         "name": team.name,
@@ -194,7 +242,6 @@ async def get_team_info(
             {
                 "id": m.developer.id,
                 "name": m.developer.name,
-                "email": m.developer.email,
                 "avatar_url": m.developer.avatar_url,
             }
             for m in team.members
@@ -477,11 +524,14 @@ async def create_public_booking(
         host_result = await db.execute(host_stmt)
         host = host_result.scalar_one_or_none()
 
+        # WS-060: don't echo the host's email back to the invitee. The
+        # invitee already received a confirmation email from us; their UI
+        # doesn't need the host's address.
         return BookingConfirmationResponse(
             id=booking.id,
             event_name=event_type.name,
             host_name=host.name if host else None,
-            host_email=host.email if host else None,
+            host_email=None,
             invitee_name=booking.invitee_name,
             invitee_email=booking.invitee_email,
             start_time=booking.start_time,

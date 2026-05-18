@@ -12,11 +12,11 @@ from aexy.core.database import get_db
 from aexy.core.sanitize import sanitize_title, sanitize_description, sanitize_comment
 from aexy.api.developers import get_current_developer, get_optional_current_developer
 from aexy.models.developer import Developer
-from aexy.models.project import Project
+from aexy.models.project import Project, ProjectTeam
 from aexy.models.sprint import Sprint, SprintTask
 from aexy.models.story import UserStory
 from aexy.models.bug import Bug
-from aexy.models.goal import Goal as OKRGoal
+from aexy.models.goal import Goal as OKRGoal, GoalProject
 from aexy.models.release import Release
 from aexy.models.epic import Epic
 from aexy.models.roadmap_voting import RoadmapRequest, RoadmapVote, RoadmapComment
@@ -57,6 +57,22 @@ def get_public_tabs(project: Project) -> list[str]:
     enabled = public_tabs.get("enabled_tabs", ["overview"])
     # Filter to only valid tabs
     return [tab for tab in enabled if tab in VALID_TABS]
+
+
+async def _project_team_ids(db: AsyncSession, project_id: str) -> list[str]:
+    """Return the team ids associated with a project.
+
+    WS-061: public-project endpoints previously filtered by
+    `workspace_id == project.workspace_id`, which exposed every other
+    project's data in the same workspace. Scoping by project team ids
+    narrows tasks/sprints to *this* project's surface area without a
+    schema migration on `Sprint`/`SprintTask` (which already carry
+    `team_id`).
+    """
+    result = await db.execute(
+        select(ProjectTeam.team_id).where(ProjectTeam.project_id == project_id)
+    )
+    return [str(t) for t in result.scalars().all()]
 
 
 async def get_public_project_or_404(
@@ -191,11 +207,19 @@ async def get_public_backlog(
     """Get public backlog tasks for a project."""
     project = await get_public_project_or_404(public_slug, db, required_tab="backlog")
 
+    # WS-061: narrow to tasks whose team belongs to this project. Without
+    # the team_id intersection, a single public project would expose every
+    # backlog task in its workspace, including tasks from private projects.
+    team_ids = await _project_team_ids(db, project.id)
+    if not team_ids:
+        return []
+
     result = await db.execute(
         select(SprintTask)
         .where(
             SprintTask.workspace_id == project.workspace_id,
-            SprintTask.status == 'backlog',  # Backlog items have no sprint
+            SprintTask.team_id.in_(team_ids),
+            SprintTask.status == 'backlog',
         )
         .order_by(SprintTask.created_at.desc())
         .limit(limit)
@@ -226,11 +250,17 @@ async def get_public_board(
     """Get public board data (tasks grouped by status) for a project."""
     project = await get_public_project_or_404(public_slug, db, required_tab="board")
 
+    # WS-061: narrow to tasks whose team belongs to this project.
+    team_ids = await _project_team_ids(db, project.id)
+    if not team_ids:
+        return {"todo": [], "in_progress": [], "review": [], "done": [], "backlog": []}
+
     result = await db.execute(
         select(SprintTask)
         .where(
             SprintTask.workspace_id == project.workspace_id,
-            SprintTask.sprint_id != None,  # Only tasks assigned to sprints, not backlog
+            SprintTask.team_id.in_(team_ids),
+            SprintTask.sprint_id != None,  # Only tasks assigned to sprints
         )
         .order_by(SprintTask.created_at.desc())
         .limit(200)
@@ -282,10 +312,27 @@ async def get_public_stories(
     """Get public user stories for a project."""
     project = await get_public_project_or_404(public_slug, db, required_tab="stories")
 
+    # WS-061: scope to stories that have at least one task in this
+    # project's teams. UserStory has no direct project_id today, so this
+    # is the narrowest correct intersection without a schema migration.
+    team_ids = await _project_team_ids(db, project.id)
+    if not team_ids:
+        return []
+
+    story_ids_q = (
+        select(SprintTask.story_id)
+        .where(
+            SprintTask.workspace_id == project.workspace_id,
+            SprintTask.team_id.in_(team_ids),
+            SprintTask.story_id != None,
+        )
+        .distinct()
+    )
     result = await db.execute(
         select(UserStory)
         .where(
             UserStory.workspace_id == project.workspace_id,
+            UserStory.id.in_(story_ids_q),
         )
         .order_by(UserStory.created_at.desc())
         .limit(limit)
@@ -360,10 +407,16 @@ async def get_public_goals(
     """Get public OKR goals for a project."""
     project = await get_public_project_or_404(public_slug, db, required_tab="goals")
 
+    # WS-061: filter via the GoalProject junction so only goals explicitly
+    # linked to this project are exposed publicly.
+    linked_goal_ids = (
+        select(GoalProject.goal_id).where(GoalProject.project_id == project.id)
+    )
     result = await db.execute(
         select(OKRGoal)
         .where(
             OKRGoal.workspace_id == project.workspace_id,
+            OKRGoal.id.in_(linked_goal_ids),
         )
         .order_by(OKRGoal.created_at.desc())
         .limit(limit)
@@ -433,6 +486,7 @@ async def _fetch_sprints_with_stats(
     limit: int,
     offset: int,
     order_ascending: bool = False,
+    team_ids: list[str] | None = None,
 ) -> list[dict]:
     """
     Fetch sprints with task statistics for a workspace.
@@ -452,13 +506,20 @@ async def _fetch_sprints_with_stats(
     """
     order = Sprint.start_date.asc() if order_ascending else Sprint.start_date.desc()
 
-    result = await db.execute(
+    # WS-061: scope sprints to the project's teams. `_fetch_sprints_with_stats`
+    # is now called only by the public-project routes, all of which pass
+    # the project's team_ids via the new `team_ids` parameter.
+    stmt = (
         select(Sprint)
         .where(Sprint.workspace_id == workspace_id)
         .order_by(order)
         .limit(limit)
         .offset(offset)
     )
+    if team_ids is not None:
+        stmt = stmt.where(Sprint.team_id.in_(team_ids))
+
+    result = await db.execute(stmt)
     sprints = result.scalars().all()
 
     # Get task stats for all sprints in a single query (avoids N+1)
@@ -491,8 +552,11 @@ async def get_public_roadmap(
 ):
     """Get public roadmap (sprints) for a project."""
     project = await get_public_project_or_404(public_slug, db, required_tab="roadmap")
+    team_ids = await _project_team_ids(db, project.id)
+    if not team_ids:
+        return []
     sprint_data = await _fetch_sprints_with_stats(
-        db, project.workspace_id, limit, offset, order_ascending=False
+        db, project.workspace_id, limit, offset, order_ascending=False, team_ids=team_ids
     )
     return [PublicRoadmapItem(**data) for data in sprint_data]
 
@@ -506,8 +570,11 @@ async def get_public_sprints(
 ):
     """Get public sprints for a project."""
     project = await get_public_project_or_404(public_slug, db, required_tab="sprints")
+    team_ids = await _project_team_ids(db, project.id)
+    if not team_ids:
+        return []
     sprint_data = await _fetch_sprints_with_stats(
-        db, project.workspace_id, limit, offset, order_ascending=False
+        db, project.workspace_id, limit, offset, order_ascending=False, team_ids=team_ids
     )
     return [PublicSprintItem(**data) for data in sprint_data]
 
@@ -521,8 +588,11 @@ async def get_public_timeline(
 ):
     """Get public timeline (sprints for timeline view) for a project."""
     project = await get_public_project_or_404(public_slug, db, required_tab="timeline")
+    team_ids = await _project_team_ids(db, project.id)
+    if not team_ids:
+        return []
     sprint_data = await _fetch_sprints_with_stats(
-        db, project.workspace_id, limit, offset, order_ascending=True
+        db, project.workspace_id, limit, offset, order_ascending=True, team_ids=team_ids
     )
     return [PublicSprintItem(**data) for data in sprint_data]
 

@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.86] - 2026-05-19
+
+Closes the remaining `High` rows in the workspace-scope leak tracker
+(WS-060, WS-061, WS-067, WS-068) plus seven related Medium/Low rows on
+the public/embed surface. Tracker now has zero open `Critical` or `High`
+items.
+
+### Security
+
+- **Public booking surface** (`booking/public.py`) —
+  `get_workspace_teams`, `get_team_info`, and the booking confirmation
+  response no longer leak member emails. Only `id`/`name`/`avatar_url`
+  is exposed. A new Redis-backed per-IP rate limit (30/min) gates
+  `GET /public/book/{workspace_slug}` to make slug enumeration costly.
+  Closes WS-060, WS-064.
+- **Public project surface** (`public_projects.py`) — added
+  `_project_team_ids` helper. Backlog, board, stories, goals, roadmap,
+  sprints, and timeline endpoints now intersect with `ProjectTeam` /
+  `GoalProject` so a public project never leaks data from the other
+  projects in the same workspace. `_fetch_sprints_with_stats` accepts
+  a `team_ids` parameter; all callers now pass it. No schema migration
+  required. Closes WS-061.
+- **Calendar OAuth** (`booking/calendars.py`) — `start_oauth` signs
+  `settings.frontend_url` into state instead of the request `Origin`
+  header. Callback always redirects to `settings.frontend_url`,
+  ignoring any legacy signed value. Open-redirect via OAuth state is
+  closed. Closes WS-063.
+- **Booking webhook admin CRUD** (`booking/webhooks.py`) — added
+  `_require_workspace_admin` helper applied to every route
+  (list/create/get/secret/update/delete/test). An authenticated user
+  from workspace A can no longer read/modify webhooks (or their HMAC
+  secrets) for workspace B. Closes WS-062.
+- **Public table share links** (`public_tables.py`,
+  `models/crm.py`) — added `TableShareLink.allowed_origins` column
+  (migration `backend/scripts/migrate_table_share_link_allowed_origins.
+  sql`) plus `_origin_matches` helper. Every `/public/tables/{token}*`
+  route now rejects requests whose `Origin` header isn't in the link's
+  allowlist (NULL/empty preserves legacy behaviour). Closes WS-066,
+  WS-074.
+- **Assessment public-take** (`assessment_take.py`) —
+  `get_assessment_by_public_token_or_id` no longer accepts the
+  assessment UUID as a fallback for the public token; only
+  `public_token` matches. Candidate creation in `start_assessment`
+  goes through a Redis sliding-window rate limit
+  (`_check_candidate_create_rate_limit`): 5 candidates per IP per hour
+  and 50 per assessment per hour. Email-verification flow remains
+  backlog. Closes WS-067 fully and WS-068 partial.
+- **RSVP** (`booking/booking_service.py`) — `respond_to_rsvp` is now
+  single-shot: refuses to process an attendee that already has
+  `responded_at` set, and rotates `response_token` after the first
+  use. A leaked email link can no longer be replayed to flip the
+  response later. Closes WS-076.
+
 ## [0.7.85] - 2026-05-19
 
 Closes the remaining four `Critical` and most of the `High` rows in the
