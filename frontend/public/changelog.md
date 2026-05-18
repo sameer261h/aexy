@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.83] - 2026-05-19
+
+Continues the workspace-scope leak audit by closing four more `Critical`
+rows from the tracker: three legacy unauthenticated APIs and the GitHub
+webhook fail-open.
+
+### Security
+
+- Legacy analytics API (`/analytics/*`) — every endpoint now binds
+  `current_user_id` (was discarded as `_`) and runs each request's
+  `developer_ids` (or path `developer_id`) through a
+  `_require_developers_visible` check that requires every target to
+  share an active workspace with the caller. Rejects (403) the whole
+  request rather than silently dropping invisible developers. Closes
+  WS-007.
+- Hiring intelligence API (`/hiring/*` section 1) — added
+  `get_current_developer` to every route in the unauth section
+  (team-gaps, bus-factor, roadmap-skills, requirements list/create/get
+  /jd/rubric/scorecard/status). Helpers `_resolve_team_workspace_or_403`,
+  `_require_developers_visible`, `_require_requirement_workspace_member`
+  enforce workspace membership for the supplied `team_id` /
+  `organization_id` / `requirement_id`. JD generation, rubric
+  generation, requirement create/status update now require workspace
+  admin role. Closes WS-008.
+- Learning paths API (`/learning/*`) — all 16 endpoints require
+  authentication. Personal endpoints (list paths, generate path,
+  stretch tasks) require the caller to be the target developer or
+  hold admin role in a workspace the developer is a member of.
+  Path-scoped endpoints (get/regenerate/progress/milestones/activities
+  /recommended courses) use `_require_path_access` to resolve owner
+  via the path itself. Pause/resume/abandon are owner-only.
+  Team-scoped overview and recommendations require active membership
+  in the team's workspace. Closes WS-009.
+- GitHub webhook (`/webhooks/github`) — fail-closed when a webhook
+  secret is configured: the `X-Hub-Signature-256` header is now
+  mandatory (401 if missing) and verified. When no secret is
+  configured the route returns 503 unless `settings.debug` is True;
+  prevents an empty/typoed env-var from turning ingestion into an
+  open endpoint. Closes WS-059.
+
 ## [0.7.82] - 2026-05-19
 
 This release closes nine `Critical` authentication-bypass issues uncovered

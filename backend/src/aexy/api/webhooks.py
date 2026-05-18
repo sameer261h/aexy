@@ -43,13 +43,28 @@ async def handle_github_webhook(
     webhook_secret = settings.github_webhook_secret if hasattr(settings, 'github_webhook_secret') else ""
     handler = WebhookHandler(webhook_secret=webhook_secret)
 
-    # Verify signature (skip if no secret configured - dev mode)
-    if webhook_secret and x_hub_signature_256:
+    # Signature verification — fail closed in production. The previous
+    # `if secret and signature` shape silently accepted unsigned
+    # webhooks whenever the secret was misconfigured (empty), turning a
+    # config error into an open ingestion endpoint.
+    if webhook_secret:
+        if not x_hub_signature_256:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Missing X-Hub-Signature-256 header",
+            )
         if not handler.verify_signature(body, x_hub_signature_256):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid webhook signature",
             )
+    elif not settings.debug:
+        # No secret AND not in debug mode → refuse rather than fan
+        # out workflow dispatch from unauthenticated callers.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GitHub webhook is not configured",
+        )
 
     # Parse JSON payload
     try:
