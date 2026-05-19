@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import {
+  AlertCircle,
   Bot,
   Save,
   Settings,
@@ -58,7 +59,6 @@ const TABS: Tab[] = [
 
 export default function EditAgentPage() {
   const params = useParams();
-  const router = useRouter();
   const agentId = params.agentId as string;
   const { currentWorkspaceId, currentWorkspaceLoading } = useWorkspace();
 
@@ -103,7 +103,11 @@ export default function EditAgentPage() {
   const [customInstructions, setCustomInstructions] = useState("");
   const [escalationEmail, setEscalationEmail] = useState("");
   const [escalationSlackChannel, setEscalationSlackChannel] = useState("");
-  const [emailEnabled, setEmailEnabled] = useState(false);
+  // Only the setter is consumed — the canonical "is email enabled?" read
+  // comes from `agent.email_enabled`, which the polling query refreshes
+  // after enable / disable mutations. Keeping the setter so the mutation
+  // callbacks can flip the local view optimistically.
+  const [, setEmailEnabled] = useState(false);
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(true);
   const [emailSignature, setEmailSignature] = useState("");
   const [emailCopied, setEmailCopied] = useState(false);
@@ -113,32 +117,42 @@ export default function EditAgentPage() {
   const [newEmailHandle, setNewEmailHandle] = useState("");
   const [newEmailDomain, setNewEmailDomain] = useState("");
 
-  // Initialize form from agent
+  // Initialize form from agent. UX-EDT-021: skip the sync when the
+  // user has unsaved local edits — otherwise an incoming refetch
+  // (the global polling, or an invalidate after another mutation)
+  // can silently clobber in-flight typing. The initial-load case is
+  // identified by `name === ""` (we haven't initialized yet), which
+  // always re-syncs regardless of hasChanges so we don't strand the
+  // form in its empty default.
   useEffect(() => {
-    if (agent) {
-      setName(agent.name);
-      setDescription(agent.description || "");
-      setMentionHandle(agent.mention_handle || "");
-      setAgentType(agent.agent_type);
-      setLlmProvider(agent.llm_provider || "gemini");
-      setLlmModel(agent.llm_model || agent.model || "gemini-2.0-flash");
-      setTemperature(agent.temperature ?? 0.7);
-      setMaxTokens(agent.max_tokens ?? 2000);
-      setTools(agent.tools || []);
-      setAutoRespond(agent.auto_respond ?? true);
-      setConfidenceThreshold(agent.confidence_threshold ?? 0.7);
-      setRequireApprovalBelow(agent.require_approval_below ?? 0.8);
-      setMaxDailyResponses(agent.max_daily_responses ?? 100);
-      setResponseDelayMinutes(agent.response_delay_minutes ?? 5);
-      setWorkingHours(agent.working_hours || null);
-      setSystemPrompt(agent.system_prompt || "");
-      setCustomInstructions(agent.custom_instructions || "");
-      setEscalationEmail(agent.escalation_email || "");
-      setEscalationSlackChannel(agent.escalation_slack_channel || "");
-      setEmailEnabled(agent.email_enabled || false);
-      setAutoReplyEnabled(agent.auto_reply_enabled ?? true);
-      setEmailSignature(agent.email_signature || "");
+    if (!agent) return;
+    const isInitialLoad = name === "";
+    if (!isInitialLoad && hasChanges) {
+      return;
     }
+    setName(agent.name);
+    setDescription(agent.description || "");
+    setMentionHandle(agent.mention_handle || "");
+    setAgentType(agent.agent_type);
+    setLlmProvider(agent.llm_provider || "gemini");
+    setLlmModel(agent.llm_model || agent.model || "gemini-2.0-flash");
+    setTemperature(agent.temperature ?? 0.7);
+    setMaxTokens(agent.max_tokens ?? 2000);
+    setTools(agent.tools || []);
+    setAutoRespond(agent.auto_respond ?? true);
+    setConfidenceThreshold(agent.confidence_threshold ?? 0.7);
+    setRequireApprovalBelow(agent.require_approval_below ?? 0.8);
+    setMaxDailyResponses(agent.max_daily_responses ?? 100);
+    setResponseDelayMinutes(agent.response_delay_minutes ?? 5);
+    setWorkingHours(agent.working_hours || null);
+    setSystemPrompt(agent.system_prompt || "");
+    setCustomInstructions(agent.custom_instructions || "");
+    setEscalationEmail(agent.escalation_email || "");
+    setEscalationSlackChannel(agent.escalation_slack_channel || "");
+    setEmailEnabled(agent.email_enabled || false);
+    setAutoReplyEnabled(agent.auto_reply_enabled ?? true);
+    setEmailSignature(agent.email_signature || "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent]);
 
   // Per-tab dirty tracking — each tab independently reports whether any
@@ -255,8 +269,103 @@ export default function EditAgentPage() {
     [dirtyByTab],
   );
 
+  // Per-tab validation errors. UX-EDT-016: prior to this, the form
+  // passed empty names, malformed emails, and out-of-range numbers
+  // straight to the server. Real-time validation surfaces problems
+  // inline + on the tab (red dot) so users don't get bounced by a
+  // server error after a long save.
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const errorsByTab = useMemo<Record<TabId, string[]>>(() => {
+    const errors: Record<TabId, string[]> = {
+      general: [],
+      llm: [],
+      tools: [],
+      behavior: [],
+      prompts: [],
+      escalation: [],
+      email: [],
+    };
+    // System agents only edit LLM fields; everything else is locked
+    // and can't be in error.
+    if (agent?.is_system) {
+      if (temperature < 0 || temperature > 2) {
+        errors.llm.push("Temperature must be between 0 and 2");
+      }
+      return errors;
+    }
+    // General
+    if (!name.trim()) errors.general.push("Name is required");
+    if (mentionHandle && !/^[a-z0-9-]{2,}$/.test(mentionHandle)) {
+      errors.general.push(
+        "Mention handle must be at least 2 characters, lowercase letters, numbers or hyphens",
+      );
+    }
+    // LLM
+    if (temperature < 0 || temperature > 2) {
+      errors.llm.push("Temperature must be between 0 and 2");
+    }
+    if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 32000) {
+      errors.llm.push("Max tokens must be a whole number between 1 and 32000");
+    }
+    // Behavior
+    if (confidenceThreshold < 0 || confidenceThreshold > 1) {
+      errors.behavior.push("Confidence threshold must be between 0 and 1");
+    }
+    if (requireApprovalBelow < 0 || requireApprovalBelow > 1) {
+      errors.behavior.push("Approval threshold must be between 0 and 1");
+    }
+    if (!Number.isInteger(maxDailyResponses) || maxDailyResponses < 1) {
+      errors.behavior.push("Daily response cap must be at least 1");
+    }
+    if (!Number.isInteger(responseDelayMinutes) || responseDelayMinutes < 0) {
+      errors.behavior.push("Response delay can't be negative");
+    }
+    // Escalation
+    if (escalationEmail.trim() && !EMAIL_RE.test(escalationEmail.trim())) {
+      errors.escalation.push("Escalation email must be a valid email address");
+    }
+    return errors;
+  }, [
+    agent?.is_system,
+    name,
+    mentionHandle,
+    temperature,
+    maxTokens,
+    confidenceThreshold,
+    requireApprovalBelow,
+    maxDailyResponses,
+    responseDelayMinutes,
+    escalationEmail,
+  ]);
+
+  const hasErrors = useMemo(
+    () => Object.values(errorsByTab).some((list) => list.length > 0),
+    [errorsByTab],
+  );
+  const errorTabCount = useMemo(
+    () => Object.values(errorsByTab).filter((list) => list.length > 0).length,
+    [errorsByTab],
+  );
+
+  // UX-EDT-020: the two thresholds invert when require_approval_below >
+  // confidence_threshold — there's then an ambiguous gap where the agent
+  // both auto-responds AND requires approval. Render an inline warning
+  // (not a blocking error) when that's true.
+  const thresholdInverted =
+    !agent?.is_system && requireApprovalBelow > confidenceThreshold;
+
   const handleSave = async () => {
     if (!hasChanges) return;
+    // Block submission when validation errors exist; surface the first
+    // tab with an error so the user lands where they need to look.
+    if (hasErrors) {
+      const firstBad = (Object.keys(errorsByTab) as TabId[]).find(
+        (id) => errorsByTab[id].length > 0,
+      );
+      if (firstBad) setActiveTab(firstBad);
+      setError("Please fix the validation errors before saving.");
+      return;
+    }
 
     setError(null);
     setSaveSuccess(false);
@@ -393,8 +502,16 @@ export default function EditAgentPage() {
                 <input
                   type="text"
                   value={mentionHandle}
-                  onChange={(e) => setMentionHandle(e.target.value.toLowerCase())}
+                  // UX-EDT-022: strip invalid chars on input so users can't
+                  // create a handle the server is just going to reject.
+                  // Matches the same sanitization used by newEmailHandle.
+                  onChange={(e) =>
+                    setMentionHandle(
+                      e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
+                    )
+                  }
                   disabled={isSystemAgent}
+                  placeholder="my-agent"
                   className={cn(
                     "w-full pl-8 pr-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500",
                     isSystemAgent && "opacity-50 cursor-not-allowed"
@@ -675,15 +792,9 @@ export default function EditAgentPage() {
           }
         };
 
-        const handleDisableEmail = async () => {
-          try {
-            await disableEmail();
-            setEmailEnabled(false);
-          } catch (err) {
-            console.error("Failed to disable email:", err);
-            setError(err instanceof Error ? err.message : "Failed to disable email");
-          }
-        };
+        // handleDisableEmail removed — the destructive action now lives in
+        // the page-level ConfirmDialog (UX-EDT-017) whose onConfirm holds
+        // the disableEmail() call directly.
 
         const copyEmailAddress = async () => {
           if (agent?.email_address) {
@@ -964,10 +1075,21 @@ export default function EditAgentPage() {
                 </p>
               </div>
             </div>
-            {/* Pending-tabs hint sits to the left of the save button so
-                users get a count of where their edits are scattered
-                without having to scan the side nav. */}
-            {dirtyTabCount > 0 && !isUpdating && !saveSuccess ? (
+            {/* Validation-errors hint takes priority over the dirty-tabs
+                hint when both apply — fixing errors is the user's next
+                action, not knowing where their edits are scattered. */}
+            {errorTabCount > 0 && !isUpdating && !saveSuccess ? (
+              <span
+                className="hidden sm:inline-flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400 mr-1"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                {errorTabCount === 1
+                  ? "1 tab has errors"
+                  : `${errorTabCount} tabs have errors`}
+              </span>
+            ) : dirtyTabCount > 0 && !isUpdating && !saveSuccess ? (
               <span
                 className="hidden sm:inline-flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 mr-1"
                 role="status"
@@ -981,10 +1103,10 @@ export default function EditAgentPage() {
             ) : null}
             <button
               onClick={handleSave}
-              disabled={!hasChanges || isUpdating}
+              disabled={!hasChanges || isUpdating || hasErrors}
               className={cn(
                 "flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm font-medium flex-shrink-0",
-                hasChanges
+                hasChanges && !hasErrors
                   ? "bg-purple-600 hover:bg-purple-700 text-white"
                   : "bg-accent text-muted-foreground cursor-not-allowed"
               )}
@@ -1025,6 +1147,7 @@ export default function EditAgentPage() {
                 const Icon = tab.icon;
                 const isActive = activeTab === tab.id;
                 const isDirty = dirtyByTab[tab.id];
+                const hasError = errorsByTab[tab.id].length > 0;
                 return (
                   <button
                     key={tab.id}
@@ -1039,10 +1162,16 @@ export default function EditAgentPage() {
                   >
                     <Icon className="h-4 w-4 flex-shrink-0" />
                     <span className="text-sm font-medium flex-1">{tab.label}</span>
-                    {/* Pending-changes dot: surfaces which tabs have edits
-                        that haven't been saved yet. Visible regardless of
-                        whether the tab is the active one. */}
-                    {isDirty ? (
+                    {/* Status dot: red when there are validation errors,
+                        amber when only dirty. Errors take priority since
+                        they block the save the user is about to attempt. */}
+                    {hasError ? (
+                      <span
+                        className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0"
+                        aria-label="validation errors"
+                        title={errorsByTab[tab.id].join("; ")}
+                      />
+                    ) : isDirty ? (
                       <span
                         className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0"
                         aria-label="unsaved changes"
@@ -1056,7 +1185,57 @@ export default function EditAgentPage() {
           </nav>
 
           {/* Tab content */}
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 space-y-4">
+            {/* Validation banner for the active tab — lists every error
+                inline. Rendered above the tab card so users see what to
+                fix without scrolling for the offending field. */}
+            {errorsByTab[activeTab].length > 0 ? (
+              <div
+                role="alert"
+                className="rounded-xl border border-red-500/40 bg-red-500/5 p-4 text-sm text-red-700 dark:text-red-300"
+              >
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1">
+                    <div className="font-medium mb-1">
+                      Fix these before saving
+                    </div>
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      {errorsByTab[activeTab].map((msg) => (
+                        <li key={msg}>{msg}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            {/* Threshold inversion is a footgun, not a blocker — surfaced
+                as a warning on the Behavior tab where it lives. */}
+            {activeTab === "behavior" && thresholdInverted ? (
+              <div
+                role="status"
+                className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 text-sm text-amber-700 dark:text-amber-300"
+              >
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1">
+                    <div className="font-medium mb-0.5">
+                      Approval threshold sits above confidence threshold
+                    </div>
+                    <p className="text-amber-600/90 dark:text-amber-300/90">
+                      The agent will auto-respond at{" "}
+                      {Math.round(confidenceThreshold * 100)}% confidence
+                      yet still require approval up to{" "}
+                      {Math.round(requireApprovalBelow * 100)}%. Drafts in
+                      that overlap will land in the inbox awaiting review
+                      instead of going out automatically. If that's
+                      intentional, ignore — otherwise lower the approval
+                      threshold to be at or below confidence.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <div className="bg-muted rounded-xl border border-border p-6">
               {renderTabContent()}
             </div>
