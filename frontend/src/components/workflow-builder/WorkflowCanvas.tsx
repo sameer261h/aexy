@@ -372,10 +372,28 @@ function WorkflowCanvasInner({
   }, []);
 
   const addNode = useCallback((type: string, subtype?: string, position?: { x: number; y: number }) => {
+    // UX-WFL-008: viewport-aware default position. The hardcoded
+    // (250, 50) misses the visible area entirely on small viewports
+    // or after the user has panned away — the new node spawns off-
+    // screen and the canvas appears not to have responded. Falls back
+    // to (250, 50) for SSR / pre-mount.
+    const fallbackPosition = (() => {
+      if (typeof window === "undefined") return { x: 250, y: 50 };
+      try {
+        const center = screenToFlowPosition({
+          x: window.innerWidth / 2,
+          y: 220,
+        });
+        // Stagger chained adds so they don't stack on the same pixel.
+        return { x: center.x - 90, y: center.y + nodes.length * 100 };
+      } catch {
+        return { x: 250, y: nodes.length * 100 + 50 };
+      }
+    })();
     const newNode: Node = {
       id: `${type}-${Date.now()}`,
       type,
-      position: position || { x: 250, y: nodes.length * 100 + 50 },
+      position: position || fallbackPosition,
       data: {
         label: getNodeLabel(type, subtype),
         ...(type === "trigger" && { trigger_type: subtype || "record.created" }),
@@ -390,7 +408,7 @@ function WorkflowCanvasInner({
     setNodes((nds) => [...nds, newNode]);
     setSelectedNode(newNode);
     setHasChanges(true);
-  }, [nodes.length]);
+  }, [nodes.length, screenToFlowPosition]);
 
   const updateNodeData = useCallback((nodeId: string, data: Record<string, unknown>) => {
     setNodes((nds) =>

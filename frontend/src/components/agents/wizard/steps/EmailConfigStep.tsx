@@ -129,7 +129,7 @@ export function EmailConfigStep({
                   value={localHandle}
                   onChange={(e) => handleLocalHandleChange(e.target.value)}
                   placeholder="support"
-                  className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
                 />
                 <p className="mt-1 text-xs text-muted-foreground">
                   Letters, numbers, and hyphens only
@@ -147,7 +147,7 @@ export function EmailConfigStep({
                     value={emailDomain}
                     onChange={(e) => onEmailDomainChange(e.target.value)}
                     disabled={isLoading}
-                    className="w-full pl-10 pr-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500 appearance-none"
+                    className="w-full pl-10 pr-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 appearance-none"
                   >
                     {domains.map((d) => (
                       <option key={d.domain} value={d.domain}>
@@ -217,7 +217,7 @@ export function EmailConfigStep({
               onChange={(e) => onEmailSignatureChange(e.target.value)}
               rows={4}
               placeholder={`Best regards,\n${agentName}`}
-              className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"
+              className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 resize-none"
             />
             <p className="text-sm text-muted-foreground">
               This signature will be appended to all outgoing emails from this agent.
