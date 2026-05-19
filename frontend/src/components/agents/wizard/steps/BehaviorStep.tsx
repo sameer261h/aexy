@@ -53,7 +53,7 @@ export function BehaviorStep({
             type="checkbox"
             checked={autoRespond}
             onChange={(e) => onAutoRespondChange(e.target.checked)}
-            className="w-5 h-5 mt-0.5 rounded border-border bg-accent text-purple-500 focus:ring-purple-500"
+            className="w-5 h-5 mt-0.5 rounded border-border bg-accent text-purple-500 focus-visible:ring-2 focus-visible:ring-purple-500"
           />
           <div>
             <div className="font-medium text-foreground flex items-center gap-1.5">
@@ -115,7 +115,7 @@ export function BehaviorStep({
               onChange={(e) => onMaxDailyResponsesChange(parseInt(e.target.value) || 100)}
               min={1}
               max={10000}
-              className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500"
+              className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
             />
             <p className="mt-1 text-sm text-muted-foreground">
               Maximum responses per day
@@ -135,7 +135,7 @@ export function BehaviorStep({
               onChange={(e) => onResponseDelayMinutesChange(parseInt(e.target.value) || 0)}
               min={0}
               max={1440}
-              className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500"
+              className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
             />
             <p className="mt-1 text-sm text-muted-foreground">
               Wait time before sending

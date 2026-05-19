@@ -27,6 +27,14 @@ import {
 } from "@/hooks/useAutomationAgents";
 import { useAgents } from "@/hooks/useAgents";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 
 interface AgentTriggerConfigProps {
   workspaceId: string;
@@ -141,16 +149,31 @@ export function AgentTriggerConfig({
         </button>
       </div>
 
-      {/* Add Trigger Form */}
-      {isAdding && (
-        <AddTriggerForm
-          agents={agents}
-          existingTriggerPoints={triggers.map(t => t.trigger_point)}
-          onSubmit={handleAddTrigger}
-          onCancel={() => setIsAdding(false)}
-          isSubmitting={isCreating}
-        />
-      )}
+      {/* UX-AUT-AGT-001: Add Trigger form moved into a right-side
+          Sheet so it matches the NodeConfigPanel / TestResults
+          drawer pattern across the workflow surface. The prior
+          inline expand was cramped and inconsistent with how the
+          rest of the canvas surfaces edit configuration. */}
+      <Sheet open={isAdding} onOpenChange={(open) => !open && setIsAdding(false)}>
+        <SheetContent side="right" className="p-0 flex flex-col">
+          <SheetHeader className="px-4 py-3">
+            <SheetTitle>Add agent trigger</SheetTitle>
+            <SheetDescription>
+              Pick which agent runs and where it fires in this
+              automation's lifecycle.
+            </SheetDescription>
+          </SheetHeader>
+          <SheetBody className="p-4">
+            <AddTriggerForm
+              agents={agents}
+              existingTriggerPoints={triggers.map(t => t.trigger_point)}
+              onSubmit={handleAddTrigger}
+              onCancel={() => setIsAdding(false)}
+              isSubmitting={isCreating}
+            />
+          </SheetBody>
+        </SheetContent>
+      </Sheet>
 
       {/* Trigger List */}
       {triggers.length > 0 ? (
@@ -239,7 +262,7 @@ function AddTriggerForm({
   );
 
   return (
-    <form onSubmit={handleSubmit} className="rounded-lg border bg-card p-4 space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2">
         {/* Agent Selection */}
         <div className="space-y-2">

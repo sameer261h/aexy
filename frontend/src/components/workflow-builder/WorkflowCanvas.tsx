@@ -179,41 +179,57 @@ function WorkflowCanvasInner({
     return map;
   }, [testResult]);
 
-  // Enhance nodes with error states, highlighting, and execution status
+  // UX-WFL-007: Per-node memo cache. React Flow reconciles by id; if
+  // we return the *same* enhanced object reference for an unchanged
+  // node, RF skips that node's rerender. The prior implementation
+  // produced new objects every render (since useMemo's `nodes`
+  // dependency changes on every position drag + every config keystroke
+  // in NodeConfigPanel), reflowing all 20+ nodes on each keystroke.
+  // Cache keyed by nodeId; invalidates when the per-node inputs
+  // actually change (deep-equal would be overkill — we compare the
+  // primitive inputs we use to build the augmentation).
+  const enhancedNodeCacheRef = useRef(new Map<string, { node: Node; key: string }>());
   const enhancedNodes = useMemo(() => {
-    return nodes.map((node) => {
+    const cache = enhancedNodeCacheRef.current;
+    const nextCache = new Map<string, { node: Node; key: string }>();
+    const result = nodes.map((node) => {
       const nodeErrors = getNodeErrors(node.id);
       const hasErrors = nodeErrors.length > 0;
       const errorMessage = hasErrors ? nodeErrors.map((e) => e.message).join(", ") : undefined;
       const isHighlighted = highlightedNodeIds.has(node.id);
-
-      // Get execution status from test results
       const nodeResult = nodeResultsMap.get(node.id);
       let executionStatus: ExecutionStatus = "idle";
       if (isTestRunning && !testResult) {
-        // Test is starting, mark trigger as running
-        if (node.type === "trigger") {
-          executionStatus = "running";
-        }
+        if (node.type === "trigger") executionStatus = "running";
       } else if (nodeResult) {
-        // Map node result status to execution status
         switch (nodeResult.status) {
-          case "success":
-            executionStatus = "success";
-            break;
-          case "failed":
-            executionStatus = "failed";
-            break;
-          case "skipped":
-            executionStatus = "skipped";
-            break;
-          case "waiting":
-            executionStatus = "running";
-            break;
+          case "success": executionStatus = "success"; break;
+          case "failed": executionStatus = "failed"; break;
+          case "skipped": executionStatus = "skipped"; break;
+          case "waiting": executionStatus = "running"; break;
         }
       }
 
-      return {
+      // Cache key encodes every input that affects the augmented data.
+      // `node` itself is part of identity — when its data changes
+      // (config edit), the upstream reducer hands us a new reference,
+      // and the cached entry below misses on `cached.node !== node`.
+      const augmentationKey = [
+        errorMessage ?? "",
+        isHighlighted ? "1" : "0",
+        executionStatus,
+        nodeResult?.duration_ms ?? "",
+        nodeResult?.condition_result ?? "",
+        nodeResult?.selected_branch ?? "",
+      ].join("|");
+
+      const cached = cache.get(node.id);
+      if (cached && cached.node === node && cached.key === augmentationKey) {
+        nextCache.set(node.id, cached);
+        return cached.node;
+      }
+
+      const enhanced: Node = {
         ...node,
         data: {
           ...node.data,
@@ -226,10 +242,25 @@ function WorkflowCanvasInner({
           selectedBranch: nodeResult?.selected_branch,
         },
       };
+      nextCache.set(node.id, { node: enhanced, key: augmentationKey });
+      return enhanced;
     });
+    enhancedNodeCacheRef.current = nextCache;
+    return result;
   }, [nodes, getNodeErrors, highlightedNodeIds, nodeResultsMap, isTestRunning, testResult]);
 
   // Enhance edges with execution status
+  // UX-DEF-008 (branch-edge labels): derive a label from the source
+  // node's branch/condition definition so multi-branch workflows are
+  // readable. Lives in enhancedEdges (not onConnect) so renaming a
+  // branch's label propagates to the connected edges automatically.
+  // Indexed by node.id so the lookup is O(1) per edge.
+  const nodeIndex = useMemo(() => {
+    const map = new Map<string, Node>();
+    nodes.forEach((n) => map.set(n.id, n));
+    return map;
+  }, [nodes]);
+
   const enhancedEdges = useMemo(() => {
     return edges.map((edge) => {
       // Check if the source node has been executed successfully
@@ -255,6 +286,22 @@ function WorkflowCanvasInner({
         }
       }
 
+      // Resolve a branch label for the edge. Branch nodes carry
+      // `branches: [{id, label}]`; condition nodes use hard-coded
+      // true/false handles. Other source types have no branch label.
+      let branchLabel: string | undefined;
+      const sourceNode = nodeIndex.get(edge.source);
+      if (sourceNode && edge.sourceHandle) {
+        if (sourceNode.type === "branch") {
+          const branches = (sourceNode.data?.branches as Array<{ id: string; label: string }> | undefined) || [];
+          const match = branches.find((b) => b.id === edge.sourceHandle);
+          if (match?.label) branchLabel = match.label;
+        } else if (sourceNode.type === "condition") {
+          if (edge.sourceHandle === "true") branchLabel = "Yes";
+          else if (edge.sourceHandle === "false") branchLabel = "No";
+        }
+      }
+
       return {
         ...edge,
         type: "animated",
@@ -262,13 +309,18 @@ function WorkflowCanvasInner({
           ...edge.data,
           executionStatus,
           durationMs: sourceResult?.duration_ms,
+          label: branchLabel,
         },
       };
     });
-  }, [edges, nodeResultsMap]);
+  }, [edges, nodeResultsMap, nodeIndex]);
 
   // Handle test execution
   const handleTest = useCallback(async (recordId?: string) => {
+    // UX-DEF-001 (partial): close sibling drawers when test results
+    // open so the stacks don't pile on top of each other.
+    setShowExecutionHistory(false);
+    setShowVersionHistory(false);
     setShowTestResults(true);
     setIsTestRunning(true);
     setTestResult(null);
@@ -338,6 +390,89 @@ function WorkflowCanvasInner({
     []
   );
 
+  // UX-DEF-002: One-shot auto-layout. BFS from the set of "root"
+  // nodes (no incoming edges, in practice triggers) and assigns each
+  // node a `(depth, lane)` slot which maps to `(x, y)` on canvas. Pure
+  // frontend — no dagre dep. Gets a messy canvas tidy enough that the
+  // user can keep working without nodes overlapping the palette / FAB.
+  // Multi-root automations spread horizontally; cycles fall back to
+  // their existing position so we don't infinite-loop.
+  const onAutoLayout = useCallback(() => {
+    if (nodes.length === 0) return;
+    const HORIZONTAL_GAP = 280;
+    const VERTICAL_GAP = 140;
+    const ORIGIN = { x: 80, y: 80 };
+
+    const incomingByNode = new Map<string, string[]>();
+    const outgoingByNode = new Map<string, string[]>();
+    nodes.forEach((n) => {
+      incomingByNode.set(n.id, []);
+      outgoingByNode.set(n.id, []);
+    });
+    edges.forEach((e) => {
+      incomingByNode.get(e.target)?.push(e.source);
+      outgoingByNode.get(e.source)?.push(e.target);
+    });
+
+    // Roots = nodes with no incoming edge. Sorted by id for stable
+    // placement so re-running the layout doesn't shuffle lanes.
+    const roots = nodes
+      .filter((n) => (incomingByNode.get(n.id) ?? []).length === 0)
+      .map((n) => n.id)
+      .sort();
+
+    const depthByNode = new Map<string, number>();
+    const queue: Array<{ id: string; depth: number }> = roots.map((id) => ({ id, depth: 0 }));
+    const seen = new Set<string>();
+    while (queue.length > 0) {
+      const { id, depth } = queue.shift()!;
+      if (seen.has(id)) {
+        // Cycle — keep the earlier depth.
+        depthByNode.set(id, Math.max(depthByNode.get(id) ?? 0, depth));
+        continue;
+      }
+      seen.add(id);
+      depthByNode.set(id, Math.max(depthByNode.get(id) ?? 0, depth));
+      (outgoingByNode.get(id) ?? []).forEach((tgt) => {
+        queue.push({ id: tgt, depth: depth + 1 });
+      });
+    }
+    // Orphaned nodes (unreachable from any root) get depth 0 so they
+    // line up next to roots instead of vanishing.
+    nodes.forEach((n) => {
+      if (!depthByNode.has(n.id)) depthByNode.set(n.id, 0);
+    });
+
+    // Lane assignment per depth column. Stable order = source id then
+    // node id so repeated layout runs are idempotent.
+    const byDepth = new Map<number, string[]>();
+    nodes
+      .slice()
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .forEach((n) => {
+        const d = depthByNode.get(n.id) ?? 0;
+        if (!byDepth.has(d)) byDepth.set(d, []);
+        byDepth.get(d)!.push(n.id);
+      });
+
+    setNodes((current) =>
+      current.map((n) => {
+        const depth = depthByNode.get(n.id) ?? 0;
+        const lane = byDepth.get(depth)?.indexOf(n.id) ?? 0;
+        return {
+          ...n,
+          position: {
+            x: ORIGIN.x + depth * HORIZONTAL_GAP,
+            y: ORIGIN.y + lane * VERTICAL_GAP,
+          },
+        };
+      }),
+    );
+    setHasChanges(true);
+    // Re-fit after layout so the user immediately sees the result.
+    requestAnimationFrame(() => fitView({ padding: 0.2, duration: 400 }));
+  }, [nodes, edges, setNodes, fitView]);
+
   const onConnect = useCallback(
     (connection: Connection) => {
       const newEdge: Edge = {
@@ -372,10 +507,28 @@ function WorkflowCanvasInner({
   }, []);
 
   const addNode = useCallback((type: string, subtype?: string, position?: { x: number; y: number }) => {
+    // UX-WFL-008: viewport-aware default position. The hardcoded
+    // (250, 50) misses the visible area entirely on small viewports
+    // or after the user has panned away — the new node spawns off-
+    // screen and the canvas appears not to have responded. Falls back
+    // to (250, 50) for SSR / pre-mount.
+    const fallbackPosition = (() => {
+      if (typeof window === "undefined") return { x: 250, y: 50 };
+      try {
+        const center = screenToFlowPosition({
+          x: window.innerWidth / 2,
+          y: 220,
+        });
+        // Stagger chained adds so they don't stack on the same pixel.
+        return { x: center.x - 90, y: center.y + nodes.length * 100 };
+      } catch {
+        return { x: 250, y: nodes.length * 100 + 50 };
+      }
+    })();
     const newNode: Node = {
       id: `${type}-${Date.now()}`,
       type,
-      position: position || { x: 250, y: nodes.length * 100 + 50 },
+      position: position || fallbackPosition,
       data: {
         label: getNodeLabel(type, subtype),
         ...(type === "trigger" && { trigger_type: subtype || "record.created" }),
@@ -390,7 +543,7 @@ function WorkflowCanvasInner({
     setNodes((nds) => [...nds, newNode]);
     setSelectedNode(newNode);
     setHasChanges(true);
-  }, [nodes.length]);
+  }, [nodes.length, screenToFlowPosition]);
 
   const updateNodeData = useCallback((nodeId: string, data: Record<string, unknown>) => {
     setNodes((nds) =>
@@ -442,7 +595,12 @@ function WorkflowCanvasInner({
   // Export workflow as JSON file
   const handleExport = useCallback(async () => {
     if (!automationId || automationId === "new") {
-      console.warn("Cannot export workflow for unsaved automation");
+      // UX-AUT-DTL-005: surface the precondition to the user instead of
+      // silently no-op'ing into the console — the Export button stays
+      // clickable in this state, so a click that does nothing visible
+      // reads as "Export is broken." Telling the user "save first"
+      // points them at the only action that unblocks export.
+      toast.error("Save the automation before exporting");
       return;
     }
     try {
@@ -471,7 +629,7 @@ function WorkflowCanvasInner({
   // Import workflow from JSON data
   const handleImport = useCallback(async (data: unknown) => {
     if (!automationId || automationId === "new") {
-      console.warn("Cannot import workflow for unsaved automation");
+      toast.error("Save the automation before importing");
       return;
     }
     try {
@@ -506,7 +664,7 @@ function WorkflowCanvasInner({
   // Handle version restore
   const handleRestoreVersion = useCallback(async () => {
     if (!automationId || automationId === "new") {
-      console.warn("Cannot restore version for unsaved automation");
+      toast.error("Save the automation before restoring a version");
       return;
     }
     // Fetch the updated workflow after restore
@@ -798,9 +956,28 @@ function WorkflowCanvasInner({
               onUnpublish={onUnpublish}
               onTest={handleTest}
               onFitView={() => fitView()}
-              onHistoryOpen={() => setShowExecutionHistory(true)}
-              onVersionHistoryOpen={() => setShowVersionHistory(true)}
-              onTestResultsOpen={() => setShowTestResults(true)}
+              onAutoLayout={onAutoLayout}
+              // UX-DEF-001 (partial): right-drawer cohesion. Toolbar
+              // openers now close the other panels first so only one
+              // right-drawer is ever visible at a time. Full tabbed
+              // Inspector consolidation is deferred — this kills the
+              // stacking artifact without restructuring each panel's
+              // lifecycle.
+              onHistoryOpen={() => {
+                setShowTestResults(false);
+                setShowVersionHistory(false);
+                setShowExecutionHistory(true);
+              }}
+              onVersionHistoryOpen={() => {
+                setShowTestResults(false);
+                setShowExecutionHistory(false);
+                setShowVersionHistory(true);
+              }}
+              onTestResultsOpen={() => {
+                setShowExecutionHistory(false);
+                setShowVersionHistory(false);
+                setShowTestResults(true);
+              }}
               onExport={handleExport}
               onImport={handleImport}
               currentVersion={currentVersion}

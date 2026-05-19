@@ -462,7 +462,7 @@ export default function EditAgentPage() {
         return (
           <div className="space-y-6">
             {isSystemAgent && (
-              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 dark:text-amber-300 text-sm">
                 This is a system agent. Only LLM configuration (provider, model, temperature) can be modified.
               </div>
             )}
@@ -631,13 +631,13 @@ export default function EditAgentPage() {
         return (
           <div>
             {isSystemAgent && (
-              <div className="mb-4 p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+              <div className="mb-4 p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 dark:text-amber-300 text-sm">
                 This is a system agent. Tools cannot be modified.
               </div>
             )}
             {toolsLoading ? (
               <div className="text-center py-8">
-                <Loader2 className="h-8 w-8 text-purple-400 animate-spin mx-auto mb-4" />
+                <Loader2 className="h-8 w-8 text-purple-700 dark:text-purple-300 animate-spin mx-auto mb-4" />
                 <p className="text-muted-foreground">Loading tools...</p>
               </div>
             ) : (
@@ -659,7 +659,7 @@ export default function EditAgentPage() {
         return (
           <div className="space-y-8">
             {isSystemAgent && (
-              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 dark:text-amber-300 text-sm">
                 This is a system agent. Behavior settings cannot be modified.
               </div>
             )}
@@ -755,10 +755,17 @@ export default function EditAgentPage() {
         return (
           <div className="space-y-6">
             {isSystemAgent && (
-              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 dark:text-amber-300 text-sm">
                 This is a system agent. Prompts cannot be modified.
               </div>
             )}
+            <p className="text-sm text-muted-foreground">
+              The system prompt anchors the agent's tone and behavior on
+              every run. Custom instructions are layered on top for run-
+              specific guidance — use them for policy ("never quote a
+              price"), style ("be terse"), or escalation logic the
+              behavior thresholds can't express.
+            </p>
             <div>
               <PromptEditor
                 value={systemPrompt}
@@ -784,15 +791,24 @@ export default function EditAgentPage() {
         return (
           <div className="space-y-6">
             {isSystemAgent && (
-              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 dark:text-amber-300 text-sm">
                 This is a system agent. Escalation settings cannot be modified.
               </div>
             )}
+            <p className="text-sm text-muted-foreground">
+              The agent escalates when it falls below the approval
+              threshold on the Behavior tab, hits a manual "Escalate"
+              from the inbox, or encounters a tool failure it can't
+              recover from. The routes below are the destinations for
+              those events — either is fine on its own, both is fine
+              for higher-criticality agents.
+            </p>
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
+              <label htmlFor="escalation-email" className="block text-sm font-medium text-foreground mb-2">
                 Escalation Email
               </label>
               <input
+                id="escalation-email"
                 type="email"
                 value={escalationEmail}
                 onChange={(e) => setEscalationEmail(e.target.value)}
@@ -803,16 +819,18 @@ export default function EditAgentPage() {
                   isSystemAgent && "opacity-50 cursor-not-allowed"
                 )}
               />
-              <p className="mt-1 text-sm text-muted-foreground">
-                Email address to notify when agent escalates an issue
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Inbox + thread context land here as a regular email.
+                Leave blank to disable email escalation.
               </p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
+              <label htmlFor="escalation-slack" className="block text-sm font-medium text-foreground mb-2">
                 Slack Channel
               </label>
               <input
+                id="escalation-slack"
                 type="text"
                 value={escalationSlackChannel}
                 onChange={(e) => setEscalationSlackChannel(e.target.value)}
@@ -823,8 +841,10 @@ export default function EditAgentPage() {
                   isSystemAgent && "opacity-50 cursor-not-allowed"
                 )}
               />
-              <p className="mt-1 text-sm text-muted-foreground">
-                Slack channel to post escalation notifications
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Posts a summary card with a deep-link back to the
+                original inbox message. Requires the workspace Slack
+                integration; leave blank to skip.
               </p>
             </div>
           </div>
@@ -874,7 +894,7 @@ export default function EditAgentPage() {
         return (
           <div className="space-y-6">
             {isSystemAgent && (
-              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 dark:text-amber-300 text-sm">
                 This is a system agent. Email settings cannot be modified.
               </div>
             )}
@@ -883,7 +903,7 @@ export default function EditAgentPage() {
               <div className="p-4 bg-purple-500/10 border border-purple-500/30 rounded-lg">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
                   <h3 className="font-medium text-foreground flex items-center gap-2">
-                    <AtSign className="h-4 w-4 text-purple-400" />
+                    <AtSign className="h-4 w-4 text-purple-700 dark:text-purple-300" />
                     Configure Email Address
                   </h3>
                   <button
@@ -944,7 +964,16 @@ export default function EditAgentPage() {
 
                 <div className="flex justify-end gap-2">
                   <button
-                    onClick={() => setShowEmailSetup(false)}
+                    // UX-EDT-027: Cancel clears the draft handle +
+                    // domain so reopening the panel starts from the
+                    // user's persisted state, not whatever they typed
+                    // and abandoned. The prior implementation left the
+                    // draft latent which read as a UI bug.
+                    onClick={() => {
+                      setShowEmailSetup(false);
+                      setNewEmailHandle("");
+                      setNewEmailDomain("");
+                    }}
                     className="px-4 py-2 text-muted-foreground hover:text-foreground transition-colors"
                   >
                     Cancel
@@ -983,7 +1012,7 @@ export default function EditAgentPage() {
                     </h3>
                     {agent?.email_address ? (
                       <div className="flex items-center gap-2 mt-1">
-                        <code className="text-sm text-blue-400 bg-muted px-2 py-0.5 rounded">
+                        <code className="text-sm text-blue-700 dark:text-blue-400 bg-muted px-2 py-0.5 rounded">
                           {agent.email_address}
                         </code>
                         <button
@@ -992,7 +1021,7 @@ export default function EditAgentPage() {
                           title="Copy email address"
                         >
                           {emailCopied ? (
-                            <Check className="h-4 w-4 text-green-400" />
+                            <Check className="h-4 w-4 text-green-700 dark:text-green-400" />
                           ) : (
                             <Copy className="h-4 w-4" />
                           )}
@@ -1163,6 +1192,13 @@ export default function EditAgentPage() {
             <button
               onClick={handleSave}
               disabled={!hasChanges || isUpdating || hasErrors}
+              // UX-EDT-026: aria-label always carries the resolved
+              // state so SR users + mobile (icon-only) users don't see
+              // an ambiguous Save vs Saving vs Saved.
+              aria-label={
+                isUpdating ? "Saving changes" : saveSuccess ? "Changes saved" : "Save changes"
+              }
+              title={isUpdating ? "Saving..." : saveSuccess ? "Saved!" : "Save changes"}
               className={cn(
                 "flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm font-medium flex-shrink-0",
                 hasChanges && !hasErrors
@@ -1172,17 +1208,17 @@ export default function EditAgentPage() {
             >
               {isUpdating ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
                   <span className="hidden sm:inline">Saving...</span>
                 </>
               ) : saveSuccess ? (
                 <>
-                  <Check className="h-4 w-4" />
+                  <Check className="h-4 w-4" aria-hidden />
                   <span className="hidden sm:inline">Saved!</span>
                 </>
               ) : (
                 <>
-                  <Save className="h-4 w-4" />
+                  <Save className="h-4 w-4" aria-hidden />
                   <span className="hidden sm:inline">Save Changes</span>
                 </>
               )}
@@ -1193,15 +1229,24 @@ export default function EditAgentPage() {
 
       <main className="max-w-5xl mx-auto px-4 py-8">
         {error && (
-          <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400">
+          <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-600 dark:text-red-400">
             {error}
           </div>
         )}
 
         <div className="flex gap-6 flex-col sm:flex-row">
           {/* Tabs sidebar */}
-          <nav className="w-full sm:w-48 flex-shrink-0">
-            <div className="bg-muted rounded-xl border border-border p-2 sticky top-24 flex sm:block overflow-x-auto gap-1 sm:gap-0">
+          <nav className="w-full sm:w-48 flex-shrink-0" aria-label="Edit sections">
+            {/* UX-MOB-003: keep the horizontal scroller on mobile but
+                strengthen the active-tab affordance so it doesn't get
+                lost next to the dirty/error dot, AND scroll the active
+                tab into view on mount + activeTab change so a tab the
+                user just jumped to via the validation banner isn't
+                stranded off-screen on a phone. The active state on
+                mobile gets a 2px purple bottom border that survives the
+                scroll; on desktop it stays the rounded fill it always
+                was. */}
+              <div className="bg-muted rounded-xl border border-border p-2 sticky top-24 flex sm:block overflow-x-auto gap-1 sm:gap-0 scroll-smooth">
               {TABS.map((tab) => {
                 const Icon = tab.icon;
                 const isActive = activeTab === tab.id;
@@ -1212,14 +1257,22 @@ export default function EditAgentPage() {
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
                     aria-current={isActive ? "page" : undefined}
+                    ref={(el) => {
+                      if (isActive && el && typeof window !== "undefined" && window.innerWidth < 640) {
+                        el.scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" });
+                      }
+                    }}
                     className={cn(
-                      "flex items-center gap-2 sm:gap-3 px-3 py-2 rounded-lg text-left transition whitespace-nowrap sm:w-full relative",
+                      "flex items-center gap-2 sm:gap-3 px-3 py-2 rounded-lg sm:rounded-lg text-left transition whitespace-nowrap sm:w-full relative",
+                      // Active state — stronger fill on desktop, fill+
+                      // bottom underline on mobile so it survives the
+                      // horizontal scroll-truncation.
                       isActive
-                        ? "bg-purple-500/20 text-purple-400"
+                        ? "bg-purple-500/20 text-purple-700 dark:text-purple-300 shadow-[inset_0_-2px_0_0_rgb(168,85,247)] sm:shadow-none"
                         : "text-muted-foreground hover:text-foreground hover:bg-accent"
                     )}
                   >
-                    <Icon className="h-4 w-4 flex-shrink-0" />
+                    <Icon className="h-4 w-4 flex-shrink-0" aria-hidden />
                     <span className="text-sm font-medium flex-1">{tab.label}</span>
                     {/* Status dot: red when there are validation errors,
                         amber when only dirty. Errors take priority since

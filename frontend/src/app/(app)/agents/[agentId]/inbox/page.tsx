@@ -24,6 +24,7 @@ import {
   Loader2,
   Keyboard,
   X,
+  Copy,
 } from "lucide-react";
 import DOMPurify from "isomorphic-dompurify";
 import { toast } from "sonner";
@@ -88,6 +89,17 @@ const priorityConfig = {
 // formatRelative is locale-aware and matches operations + automations
 // so "3h ago" reads identically across surfaces.
 const formatDate = formatRelative;
+
+// Human-readable byte sizes for attachment chips. Keeps the chip
+// width tight ("128 KB" instead of "131072 bytes"). Falls back to
+// the raw byte count for sub-kilobyte sizes.
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
 
 function MessageCard({
   message,
@@ -208,8 +220,8 @@ function MessageCard({
       </div>
       {message.confidence_score !== null && (
         <div className="flex items-center gap-2 mt-2">
-          <Sparkles className="h-3 w-3 text-purple-400" />
-          <span className="text-xs text-purple-400">
+          <Sparkles className="h-3 w-3 text-purple-600 dark:text-purple-400" aria-hidden />
+          <span className="text-xs text-purple-700 dark:text-purple-300">
             {Math.round(message.confidence_score * 100)}% confidence
           </span>
         </div>
@@ -420,6 +432,41 @@ function MessageDetail({
           )}
         </div>
 
+        {/* UX-INB-026: render attachments[] when present so the user
+            knows the sender included files even though we don't yet
+            expose a download endpoint. Chips show filename + type +
+            human-readable size. Click is a no-op (cursor: default) for
+            now — when the backend lands a /attachments/:id route the
+            anchor target can be wired in here without changing the
+            visual shape. */}
+        {message.attachments && message.attachments.length > 0 && (
+          <div className="mt-5 pt-4 border-t border-border">
+            <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+              Attachments ({message.attachments.length})
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {message.attachments.map((att, idx) => (
+                <div
+                  key={`${att.name}-${idx}`}
+                  className="inline-flex items-center gap-2 px-2.5 py-1.5 bg-accent/50 border border-border rounded-lg text-xs text-foreground max-w-[240px]"
+                  title={att.content_type ? `${att.content_type} - ${att.name}` : att.name}
+                >
+                  <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" aria-hidden />
+                  <span className="truncate">{att.name}</span>
+                  {typeof att.length === "number" && (
+                    <span className="text-muted-foreground shrink-0">
+                      {formatBytes(att.length)}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] text-muted-foreground/80">
+              Stored with the message. Download not available yet.
+            </p>
+          </div>
+        )}
+
         {/* Suggested Response — UX-INB-024: prior version was a one-click
             commit ("Send Suggested Response") with no edit step. Users
             who wanted to tweak the AI suggestion had to copy-paste it
@@ -563,8 +610,8 @@ function MessageDetail({
 
       {message.status === "responded" && (
         <div className="p-4 border-t border-border bg-green-500/10">
-          <div className="flex items-center gap-2 text-green-400">
-            <CheckCircle className="h-5 w-5" />
+          <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
+            <CheckCircle className="h-5 w-5" aria-hidden />
             <span className="text-sm font-medium">
               Response sent on {message.responded_at ? new Date(message.responded_at).toLocaleString() : "Unknown"}
             </span>
@@ -574,8 +621,8 @@ function MessageDetail({
 
       {message.status === "escalated" && (
         <div className="p-4 border-t border-border bg-orange-500/10">
-          <div className="flex items-center gap-2 text-orange-400">
-            <ArrowUpRight className="h-5 w-5" />
+          <div className="flex items-center gap-2 text-orange-700 dark:text-orange-400">
+            <ArrowUpRight className="h-5 w-5" aria-hidden />
             <span className="text-sm font-medium">
               Escalated on {message.escalated_at ? new Date(message.escalated_at).toLocaleString() : "Unknown"}
             </span>
@@ -779,6 +826,19 @@ export default function AgentInboxPage() {
   } = useAgentInbox(workspaceId, agentId, { status: statusFilter });
 
   const selectedMessage = messages.find((m) => m.id === selectedMessageId);
+
+  // UX-INB-030: per-status counts on the filter dropdown. Only
+  // populated when the user is on the unfiltered "All Status" view
+  // since that's the only state where we have every message in
+  // `messages`. When a status is selected the dropdown shows labels
+  // only — the count would lie since we only fetched one slice.
+  const statusCounts = useMemo<Record<string, number> | null>(() => {
+    if (statusFilter) return null;
+    return messages.reduce<Record<string, number>>((acc, m) => {
+      acc[m.status] = (acc[m.status] ?? 0) + 1;
+      return acc;
+    }, {});
+  }, [messages, statusFilter]);
 
   // Drop any checked ids that vanished after a filter change / refetch so
   // the bulk bar's count stays accurate.
@@ -1033,7 +1093,7 @@ export default function AgentInboxPage() {
             <div className="flex items-center gap-4">
               <div>
                 <div className="flex items-center gap-2">
-                  <Mail className="h-5 w-5 text-blue-400" />
+                  <Mail className="h-5 w-5 text-blue-600 dark:text-blue-400" aria-hidden />
                   <h1 className="text-xl font-bold text-foreground">
                     {agent?.name || "Agent"} Inbox
                   </h1>
@@ -1048,14 +1108,27 @@ export default function AgentInboxPage() {
               <select
                 value={statusFilter || ""}
                 onChange={(e) => setStatusFilter(e.target.value || undefined)}
+                aria-label="Filter by status"
                 className="bg-accent border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
               >
-                <option value="">All Status</option>
-                <option value="pending">Pending</option>
-                <option value="processing">Processing</option>
-                <option value="responded">Responded</option>
-                <option value="escalated">Escalated</option>
-                <option value="archived">Archived</option>
+                <option value="">
+                  All Status{statusCounts ? ` (${messages.length})` : ""}
+                </option>
+                <option value="pending">
+                  Pending{statusCounts?.pending !== undefined ? ` (${statusCounts.pending})` : ""}
+                </option>
+                <option value="processing">
+                  Processing{statusCounts?.processing !== undefined ? ` (${statusCounts.processing})` : ""}
+                </option>
+                <option value="responded">
+                  Responded{statusCounts?.responded !== undefined ? ` (${statusCounts.responded})` : ""}
+                </option>
+                <option value="escalated">
+                  Escalated{statusCounts?.escalated !== undefined ? ` (${statusCounts.escalated})` : ""}
+                </option>
+                <option value="archived">
+                  Archived{statusCounts?.archived !== undefined ? ` (${statusCounts.archived})` : ""}
+                </option>
               </select>
               <button
                 onClick={() => refetch()}
@@ -1119,16 +1192,57 @@ export default function AgentInboxPage() {
             </Link>
           </div>
         ) : messages.length === 0 ? (
-          <div className="text-center py-12">
-            <MailOpen className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <h2 className="text-lg font-medium text-foreground mb-2">No Messages</h2>
-            <p className="text-muted-foreground">
-              {statusFilter
-                ? `No ${statusFilter} messages found.`
-                : "This inbox is empty. Send an email to start."}
-            </p>
-          </div>
+          // UX-INB-028: when the global inbox is empty, surface the
+          // agent's email address as a copy-friendly affordance. Without
+          // this users had to scroll up to the header to find where to
+          // send mail to in the first place — the empty state ended up
+          // being a dead-end. Filtered-empty (statusFilter set) keeps
+          // the terser copy because the address is already visible
+          // above and the user is mid-triage.
+          statusFilter ? (
+            <div className="text-center py-12">
+              <MailOpen className="h-12 w-12 text-muted-foreground mx-auto mb-4" aria-hidden />
+              <h2 className="text-lg font-medium text-foreground mb-2">No Messages</h2>
+              <p className="text-muted-foreground">
+                {`No ${statusFilter} messages found.`}
+              </p>
+            </div>
+          ) : (
+            <div className="text-center py-12 max-w-md mx-auto">
+              <MailOpen className="h-12 w-12 text-muted-foreground mx-auto mb-4" aria-hidden />
+              <h2 className="text-lg font-medium text-foreground mb-2">Send the first email</h2>
+              <p className="text-muted-foreground mb-4">
+                This inbox is empty. Forward or send mail to the address
+                below — the agent picks up new messages every few seconds.
+              </p>
+              {agent?.email_address ? (
+                <div className="inline-flex items-center gap-2 bg-muted border border-border rounded-lg px-3 py-2">
+                  <code className="text-sm text-foreground font-mono select-all">
+                    {agent.email_address}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (typeof navigator !== "undefined" && navigator.clipboard) {
+                        navigator.clipboard.writeText(agent.email_address || "");
+                        toast.success("Email address copied");
+                      }
+                    }}
+                    aria-label="Copy inbox email address"
+                    title="Copy address"
+                    className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors focus-visible:ring-2 focus-visible:ring-blue-500"
+                  >
+                    <Copy className="h-4 w-4" aria-hidden />
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          )
         ) : (
+          // 200px ≈ AppShell sidebar header (16px mobile bar +
+          // breadcrumb + page header + filter row + outer padding).
+          // Pin the message grid to the available viewport so the
+          // list scrolls within its column rather than the page.
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-200px)]">
             {/* Message List — on mobile, hidden when a message is open
                 so the detail view gets the full viewport. The "Back to
@@ -1300,15 +1414,14 @@ export default function AgentInboxPage() {
   );
 }
 
+// UX-INB-021: ShortcutsOverlay was a raw fixed-inset div with a manual
+// Escape handler that fought the page-level keyboard nav for focus and
+// Esc handling. Migrated to the Radix Dialog primitive — focus trap,
+// scroll lock, Esc serialization, and aria-modal all come from Radix,
+// and the page-level keydown handler bails out the moment focus is in
+// a dialog (Radix dispatches a portal).
 function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
   const ti = useTranslations("inbox.shortcuts");
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
 
   const rows: { keys: string[]; label: string }[] = [
     { keys: ["j", "↓"], label: ti("nextMessage") },
@@ -1321,33 +1434,17 @@ function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
   ];
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-sm bg-muted border border-border rounded-xl p-5 shadow-2xl"
-      >
-        <div className="flex items-center justify-between mb-4">
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
           <div className="flex items-center gap-2">
-            <Keyboard className="h-4 w-4 text-foreground" />
-            <h2 className="text-sm font-semibold text-foreground">
+            <Keyboard className="h-4 w-4 text-foreground" aria-hidden />
+            <DialogTitle className="text-sm font-semibold">
               {ti("title")}
-            </h2>
+            </DialogTitle>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1 text-muted-foreground hover:text-foreground rounded transition-colors"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <ul className="space-y-1.5">
+        </DialogHeader>
+        <ul className="space-y-1.5 pt-1">
           {rows.map(({ keys, label }) => (
             <li
               key={label}
@@ -1367,8 +1464,8 @@ function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
             </li>
           ))}
         </ul>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

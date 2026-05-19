@@ -1447,20 +1447,22 @@ export function NodePalette({
       <div className="w-14 bg-muted/50 border-r border-border flex flex-col">
         <button
           onClick={onToggleCollapse}
+          aria-label="Expand node palette"
           className="p-3 border-b border-border hover:bg-accent/50"
           title="Expand palette"
         >
-          <ChevronRight className="h-5 w-5 text-muted-foreground" />
+          <ChevronRight className="h-5 w-5 text-muted-foreground" aria-hidden />
         </button>
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
           {nodeCategories.map((category) => (
             <button
               key={category.type}
               onClick={() => onAddNode(category.type)}
+              aria-label={`Add ${category.label}`}
               className={`w-full p-2 rounded-lg hover:bg-accent/50 flex items-center justify-center ${category.bgColor}`}
               title={category.label}
             >
-              <category.icon className={`h-5 w-5 ${category.color}`} />
+              <category.icon className={`h-5 w-5 ${category.color}`} aria-hidden />
             </button>
           ))}
         </div>
@@ -1480,10 +1482,11 @@ export function NodePalette({
         {onToggleCollapse && (
           <button
             onClick={onToggleCollapse}
+            aria-label="Collapse node palette"
             className="p-1.5 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground lg:hidden"
             title="Collapse palette"
           >
-            <ChevronLeft className="h-4 w-4" />
+            <ChevronLeft className="h-4 w-4" aria-hidden />
           </button>
         )}
       </div>

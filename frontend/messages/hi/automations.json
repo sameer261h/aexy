@@ -10,7 +10,8 @@
     },
 
     "search": {
-      "placeholder": "Automations खोजें..."
+      "placeholder": "Automations खोजें...",
+      "clear": "खोज साफ़ करें"
     },
 
     "stats": {
@@ -58,12 +59,17 @@
       "title": "अभी कोई automation नहीं",
       "description": "एक trigger को एक action से जोड़ें और Aexy को दोहराव वाला काम करने दें। एक template से शुरू करें या अपना खुद का बनाएं।",
       "primaryAction": "Templates देखें",
-      "secondaryAction": "शून्य से शुरू करें"
+      "secondaryAction": "शून्य से शुरू करें",
+      "moduleTitle": "अभी कोई {module} automation नहीं",
+      "moduleDescription": "अपने workflows को सरल बनाने के लिए पहली {module} automation बनाएं",
+      "searchTitle": "\"{query}\" से मेल खाती कोई automation नहीं",
+      "searchDescription": "एक अलग कीवर्ड आज़माएं या सभी automations देखने के लिए खोज साफ़ करें।"
     },
 
     "delete": {
       "title": "इस automation को हटाएं?",
       "description": "सभी निर्धारित रन और निष्पादन इतिहास खो जाएगा। यह कार्रवाई पूर्ववत नहीं की जा सकती।",
+      "descriptionNamed": "\"{name}\" के सभी निर्धारित रन और निष्पादन इतिहास खो जाएगा। यह कार्रवाई पूर्ववत नहीं की जा सकती।",
       "confirm": "Automation हटाएं"
     },
 

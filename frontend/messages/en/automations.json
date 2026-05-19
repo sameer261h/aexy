@@ -10,7 +10,8 @@
     },
 
     "search": {
-      "placeholder": "Search automations..."
+      "placeholder": "Search automations...",
+      "clear": "Clear search"
     },
 
     "stats": {
@@ -58,12 +59,17 @@
       "title": "No automations yet",
       "description": "Connect a trigger to an action and let Aexy do the repetitive work. Start from a template or build your own.",
       "primaryAction": "Browse templates",
-      "secondaryAction": "Start from scratch"
+      "secondaryAction": "Start from scratch",
+      "moduleTitle": "No {module} automations yet",
+      "moduleDescription": "Create your first {module} automation to streamline your workflows",
+      "searchTitle": "No automations match \"{query}\"",
+      "searchDescription": "Try a different keyword or clear the search to see all automations."
     },
 
     "delete": {
       "title": "Delete this automation?",
       "description": "All scheduled runs and execution history will be lost. This cannot be undone.",
+      "descriptionNamed": "All scheduled runs and execution history for \"{name}\" will be lost. This cannot be undone.",
       "confirm": "Delete automation"
     },
 

@@ -395,6 +395,19 @@ function OperationListRow({ row }: { row: OperationRow }) {
       {/* Name + description */}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
+          {/* UX-MOB-002: compact status dot lives in the title row on
+              mobile only — the full pill on the right is hidden on
+              <sm so phone users had no way to tell active/paused apart.
+              The dot doubles as the title for screen readers via
+              aria-label so it doesn't need the visible pill copy. */}
+          <span
+            aria-label={row.isActive ? t("filter.active") : t("filter.paused")}
+            title={row.isActive ? t("filter.active") : t("filter.paused")}
+            className={cn(
+              "h-2 w-2 rounded-full shrink-0 sm:hidden",
+              row.isActive ? "bg-emerald-500" : "bg-muted-foreground/40",
+            )}
+          />
           <span className="text-sm font-semibold text-foreground truncate">
             {row.name}
           </span>

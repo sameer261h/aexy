@@ -52,6 +52,7 @@ export const AnimatedEdge = memo(
 
     const executionStatus = data?.executionStatus || "idle";
     const durationMs = data?.durationMs;
+    const branchLabel = data?.label;
     const colors = statusColors[executionStatus];
 
     const isAnimating = executionStatus === "running";
@@ -129,6 +130,29 @@ export const AnimatedEdge = memo(
             <animateMotion dur="1s" repeatCount="indefinite" path={edgePath} />
           </circle>
         )}
+
+        {/* UX-DEF-008: Branch/condition label rides the edge whenever
+            the source node defines one. Renders independently from the
+            duration label so a successful branch shows both ("Yes"
+            stacked above "123ms"). The label sits centered on the edge
+            via the renderer's labelX/labelY plus a y-offset when a
+            duration label is also present, so they don't overlap. */}
+        {branchLabel ? (
+          <EdgeLabelRenderer>
+            <div
+              style={{
+                position: "absolute",
+                transform: `translate(-50%, -50%) translate(${labelX}px, ${
+                  showDuration ? labelY - 14 : labelY
+                }px)`,
+                pointerEvents: "none",
+              }}
+              className="px-1.5 py-0.5 rounded-full bg-muted/95 border border-border text-[10px] text-foreground font-medium shadow-sm select-none"
+            >
+              {branchLabel}
+            </div>
+          </EdgeLabelRenderer>
+        ) : null}
 
         {/* Duration label for completed edges */}
         {showDuration && (

@@ -115,7 +115,7 @@ export function LLMConfigStep({
             onChange={(e) => onMaxTokensChange(parseInt(e.target.value) || 2000)}
             min={100}
             max={32000}
-            className="w-28 px-3 py-1.5 bg-accent border border-border rounded-lg text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+            className="w-28 px-3 py-1.5 bg-accent border border-border rounded-lg text-foreground text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
           />
         </div>
         <p className="mt-2 text-sm text-muted-foreground">

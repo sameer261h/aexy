@@ -195,7 +195,6 @@ export default function NewAutomationPage() {
             ...(recordId?.trim() ? { record_id: recordId.trim() } : {}),
           }
         );
-        console.log("Test execution result:", response.data);
         return response.data;
       } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : "Failed to test workflow";

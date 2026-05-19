@@ -68,6 +68,63 @@ function formatDuration(ms: number | null): string {
   return `${(ms / 60000).toFixed(1)}m`;
 }
 
+// UX-AGT-DTL-008: per-agent-type quick-start prompts. Replaces the
+// blank-textarea cold-start with three concrete starting points the user
+// can either fire as-is or edit. Keyed by agent_type so each agent gets
+// scaffolding that matches what it can actually do. Custom / unknown
+// types fall through to the freeform-only flow.
+const RUN_QUICK_STARTS: Record<string, string[]> = {
+  support: [
+    "Triage the latest inbox messages by urgency and surface the top 3.",
+    "Draft replies for any unread customer messages from the past 24 hours.",
+    "Summarize open issues across the inbox grouped by topic.",
+  ],
+  sales: [
+    "Identify high-intent leads in the inbox and draft warm follow-ups.",
+    "Send a check-in to contacts I haven't reached in 14 days.",
+    "Score the latest inbound leads and tee up the top 5 for outreach.",
+  ],
+  scheduling: [
+    "Propose times for any pending meeting requests in the inbox.",
+    "Confirm tomorrow's meetings and re-send calendar holds where needed.",
+    "Find the next 30-minute slot across all attendees in the latest thread.",
+  ],
+  onboarding: [
+    "Send the next onboarding step to users who've completed step 1.",
+    "Create tasks for any new signups from the last 24 hours.",
+    "Summarize where each onboarding user is in the funnel.",
+  ],
+  recruiting: [
+    "Draft outreach to the latest applicants matched to open roles.",
+    "Schedule screening calls with candidates who responded yes.",
+    "Summarize candidate pipeline by role and stage.",
+  ],
+  newsletter: [
+    "Draft this week's newsletter from recent shipped activity.",
+    "Audit the subscriber list and surface any anomalies.",
+    "Summarize last week's open + click rates.",
+  ],
+  triage: [
+    "Classify the open tickets by priority and department.",
+    "Re-route any misassigned tickets from the past 24h.",
+    "Flag tickets that have been waiting > 48h for response.",
+  ],
+  insights: [
+    "Surface the top 3 team metrics that changed this week.",
+    "Identify any burnout-risk signals in the team's activity.",
+    "Compare velocity this sprint vs last and explain the delta.",
+  ],
+  standup: [
+    "Draft today's standup summary for the team.",
+    "List everyone's blockers from the past 24 hours.",
+    "Remind anyone who hasn't posted yet.",
+  ],
+};
+
+function getRunQuickStarts(agentType: string): string[] {
+  return RUN_QUICK_STARTS[agentType] ?? [];
+}
+
 // Run Agent Dialog Component
 function RunAgentDialog({
   isOpen,
@@ -75,6 +132,7 @@ function RunAgentDialog({
   onRun,
   isRunning,
   agentName,
+  agentType,
   tools,
 }: {
   isOpen: boolean;
@@ -82,6 +140,7 @@ function RunAgentDialog({
   onRun: (context: Record<string, unknown>) => void;
   isRunning: boolean;
   agentName: string;
+  agentType: string;
   tools: string[];
 }) {
   const t = useTranslations("agents");
@@ -126,6 +185,24 @@ function RunAgentDialog({
             >
               {t("runDialog.taskDescription")}
             </label>
+            {/* UX-AGT-DTL-008: quick-start chips above the textarea.
+                Clicking one drops it into the task field; the user can
+                edit before running. Empty for agent types without
+                presets (custom / unknown) — falls back to freeform. */}
+            {getRunQuickStarts(agentType).length > 0 && !task ? (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {getRunQuickStarts(agentType).map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setTask(preset)}
+                    className="text-left text-xs px-2.5 py-1.5 rounded-full border border-border bg-accent/50 text-muted-foreground hover:text-foreground hover:border-purple-500/40 hover:bg-purple-500/5 transition-colors focus-visible:ring-2 focus-visible:ring-purple-500/40"
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <textarea
               id="run-agent-task"
               value={task}
@@ -288,7 +365,7 @@ function ExecutionDetail({ execution }: ExecutionDetailProps) {
                   <span className="text-foreground font-medium">
                     Step {step.step_number}
                     {step.tool_name && (
-                      <span className="ml-2 text-purple-400">{step.tool_name}</span>
+                      <span className="ml-2 text-purple-700 dark:text-purple-300">{step.tool_name}</span>
                     )}
                   </span>
                   {step.timestamp && (
@@ -337,6 +414,8 @@ export default function AgentDetailPage() {
   const {
     agent,
     isLoading: agentLoading,
+    error: agentError,
+    refetch: refetchAgent,
     toggleAgent,
     deleteAgent,
     executeAgent,
@@ -440,18 +519,65 @@ export default function AgentDetailPage() {
   }
 
   if (!agent) {
+    // UX-LE-002: distinguish 404 / 403 / network. axios surfaces the
+    // HTTP status as `error.response?.status`; absence of `response`
+    // means the request never reached the server (CORS / offline /
+    // dropped). Each case gets its own copy + appropriate next-action
+    // so a workspace-switched user (403) isn't told their agent was
+    // deleted (404). Anchor the lift on agentError shape.
+    const status =
+      (agentError as { response?: { status?: number } } | null | undefined)
+        ?.response?.status;
+    const variant: "notFound" | "forbidden" | "network" =
+      status === 404 ? "notFound" : status === 403 ? "forbidden" : agentError ? "network" : "notFound";
+    const copy: Record<typeof variant, { title: string; body: React.ReactNode }> = {
+      notFound: {
+        title: "Agent Not Found",
+        body: (
+          <>The agent you&apos;re looking for doesn&apos;t exist or has been deleted.</>
+        ),
+      },
+      forbidden: {
+        title: "You don't have access to this agent",
+        body: (
+          <>
+            This agent belongs to a workspace you can't see. If you
+            switched workspaces in another tab, head back to the agents
+            list to find what you're working in now.
+          </>
+        ),
+      },
+      network: {
+        title: "Couldn't load this agent",
+        body: (
+          <>
+            The request failed before it reached the server — check your
+            connection and try again.
+          </>
+        ),
+      },
+    };
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <Bot className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-          <h2 className="text-xl font-medium text-foreground mb-2">Agent Not Found</h2>
-          <p className="text-muted-foreground mb-4">
-            The agent you&apos;re looking for doesn&apos;t exist or has been deleted.
-          </p>
-          <Breadcrumb
-            items={[{ label: "Agents", href: "/agents" }]}
-            className="justify-center"
-          />
+        <div className="text-center max-w-md">
+          <Bot className="h-16 w-16 text-muted-foreground mx-auto mb-4" aria-hidden />
+          <h2 className="text-xl font-medium text-foreground mb-2">{copy[variant].title}</h2>
+          <p className="text-muted-foreground mb-4">{copy[variant].body}</p>
+          <div className="flex items-center justify-center gap-2">
+            {variant === "network" ? (
+              <button
+                type="button"
+                onClick={() => refetchAgent()}
+                className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg bg-purple-600 text-white hover:bg-purple-700 transition-colors focus-visible:ring-2 focus-visible:ring-purple-500"
+              >
+                Retry
+              </button>
+            ) : null}
+            <Breadcrumb
+              items={[{ label: "Agents", href: "/agents" }]}
+              className="justify-center"
+            />
+          </div>
         </div>
       </div>
     );
@@ -776,6 +902,7 @@ export default function AgentDetailPage() {
         onRun={handleExecute}
         isRunning={isExecuting}
         agentName={agent.name}
+        agentType={agent.agent_type}
         tools={agent.tools}
       />
 
@@ -882,6 +1009,9 @@ export default function AgentDetailPage() {
                   <RefreshCw className="h-4 w-4" />
                 </button>
               </div>
+              {/* 600px = ~10 execution rows at typical row height.
+                  Past that the panel scrolls; the user opens the full
+                  Executions sheet from the toolbar for deeper paging. */}
               <div className="p-4 space-y-2 max-h-[600px] overflow-y-auto">
                 {executionsLoading ? (
                   <div className="text-center py-8">
