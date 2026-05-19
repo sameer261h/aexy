@@ -9,11 +9,13 @@ import { KeyboardShortcutsHelp } from "@/components/KeyboardShortcutsHelp";
 import { ChatWebSocketProvider } from "@/contexts/ChatWebSocketContext";
 import { FloatingChatWidget } from "@/components/chat/FloatingChatWidget";
 import { WorkspaceSearchPalette } from "@/components/search/WorkspaceSearchPalette";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
     const router = useRouter();
+    const queryClient = useQueryClient();
     const { user, logout, isLoading, isAuthenticated, isResolved } = useAuth();
 
     // Track page visits for frequently-used sidebar section
@@ -21,9 +23,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
     useEffect(() => {
         if (isResolved && !isAuthenticated) {
+            // WS-075: clear React Query cache before the redirect fires so
+            // ghost-cached workspace data from a prior session can't be
+            // momentarily visible during the unresolved → unauthenticated
+            // transition. `logout()` already does this, but a logout that
+            // happened in another tab won't have cleared this tab's cache.
+            queryClient.clear();
             router.push("/");
         }
-    }, [isResolved, isAuthenticated, router]);
+    }, [isResolved, isAuthenticated, router, queryClient]);
 
     // Show skeleton until auth state is definitively resolved
     if (!isResolved || isLoading) {

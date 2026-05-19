@@ -744,6 +744,40 @@ async def get_roadmap_request(
     return _build_request_response(request, str(current_user.id) if current_user else None, user_voted_ids)
 
 
+async def _check_roadmap_rate_limit(developer_id: str, kind: str) -> None:
+    """Per-developer rate limit for roadmap request create/vote (WS-065).
+
+    Without this, any authenticated user on the platform can spam any
+    public project's roadmap inbox. Limit: 10 requests / 50 votes per
+    developer per hour. Falls open on Redis unavailability.
+    """
+    limits = {"create": 10, "vote": 50}
+    cap = limits.get(kind)
+    if cap is None:
+        return
+    try:
+        import redis.asyncio as _aioredis
+        from aexy.core.config import get_settings as _get_settings
+        client = _aioredis.from_url(_get_settings().redis_url)
+    except Exception:
+        return
+    try:
+        key = f"roadmap:{kind}:dev:{developer_id}"
+        count = await client.incr(key)
+        if count == 1:
+            await client.expire(key, 3600)
+        if count > cap:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Roadmap {kind} rate limit reached. Try again later.",
+            )
+    finally:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+
+
 @router.post("/{public_slug}/roadmap-requests", response_model=RoadmapRequestResponse)
 async def create_roadmap_request(
     public_slug: str,
@@ -753,6 +787,7 @@ async def create_roadmap_request(
 ):
     """Create a new roadmap request (requires authentication)."""
     project = await get_public_project_or_404(public_slug, db, required_tab="roadmap")
+    await _check_roadmap_rate_limit(str(current_user.id), "create")
 
     # Validate category
     valid_categories = ["feature", "improvement", "integration", "bug_fix", "other"]
@@ -792,6 +827,7 @@ async def vote_roadmap_request(
 ):
     """Vote for a roadmap request (requires authentication). Toggle vote on/off."""
     project = await get_public_project_or_404(public_slug, db, required_tab="roadmap")
+    await _check_roadmap_rate_limit(str(current_user.id), "vote")
 
     # Get the request
     result = await db.execute(

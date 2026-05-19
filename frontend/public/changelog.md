@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.87] - 2026-05-19
+
+Closes the seven `Medium`/`Low` confirmed rows in the workspace-scope
+leak tracker (WS-013, WS-065, WS-069, WS-070, WS-075, WS-082, WS-083).
+
+### Security
+
+- **Leave approver lookup** (WS-013) —
+  `LeaveRequestService._find_approver` now joins `Team` and constrains
+  `Team.workspace_id == workspace_id`, so a developer's team lead in
+  another workspace can no longer become the approver on this
+  workspace's leave requests.
+- **Roadmap requests** (WS-065) — added `_check_roadmap_rate_limit`
+  (Redis sliding window: 10 creates / 50 votes per developer per
+  hour) on `public_projects.create_roadmap_request` and
+  `vote_roadmap_request`. Caps the spam vector while keeping the
+  public roadmap open to any authenticated developer.
+- **One-click unsubscribe** (WS-069) — `/u/{token}` now serves a
+  confirmation page on GET and only mutates subscriber state on POST.
+  Email prefetchers and link-checkers no longer trigger unsubscribes
+  while mail clients implementing RFC 8058's `List-Unsubscribe-Post`
+  still work.
+- **Email click tracker** (WS-070) — `_record_click_event` resolves
+  the `?r=<recipient_id>` query parameter and drops the attribution
+  if `recipient.campaign_id != link.campaign_id`. The click is still
+  recorded at the link level; only the forged per-recipient
+  attribution is rejected.
+- **Webhook rate limits** (WS-082) — `_enforce_webhook_rate_limit`
+  (Redis sliding window) applied to `/webhooks/github` (600 per IP
+  per minute) and `/webhooks/automations/{id}/trigger` (60 per
+  automation per minute). Caps Temporal workflow / LLM token spam.
+- **Webhook source-IP capture** (WS-083) —
+  `/webhooks/automations/{id}/trigger` now records `source_ip` via
+  the shared `get_client_ip` helper instead of `request.client.host`,
+  so the captured IP honours `X-Forwarded-For` behind a load
+  balancer.
+- **`(app)/layout.tsx`** (WS-075) — adds `queryClient.clear()` before
+  the `isResolved && !isAuthenticated` redirect fires, eliminating
+  the brief window during a cross-tab logout where ghost-cached
+  React Query workspace data could be visible. The workspace-scoped
+  providers (`ChatWebSocketProvider`, `WorkspaceSearchPalette`,
+  `FloatingChatWidget`) were already gated on
+  `isResolved && isAuthenticated`.
+
 ## [0.7.86] - 2026-05-19
 
 Closes the remaining `High` rows in the workspace-scope leak tracker
