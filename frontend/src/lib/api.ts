@@ -1,4 +1,5 @@
 import axios from "axios";
+import { clearAuthPresenceCookie } from "./authCookie";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
@@ -38,6 +39,11 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       if (typeof window !== "undefined") {
         localStorage.removeItem("token");
+        // Keep the middleware-visible presence cookie in sync. Without
+        // this, the landing page would see no token but the middleware
+        // would still consider the user authed for some other tab's
+        // request, and we'd race against the next render.
+        clearAuthPresenceCookie();
         const path = window.location.pathname;
         const isProtected = PROTECTED_PATH_PREFIXES.some(
           (prefix) => path === prefix || path.startsWith(`${prefix}/`)
