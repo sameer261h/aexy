@@ -317,6 +317,10 @@ function WorkflowCanvasInner({
 
   // Handle test execution
   const handleTest = useCallback(async (recordId?: string) => {
+    // UX-DEF-001 (partial): close sibling drawers when test results
+    // open so the stacks don't pile on top of each other.
+    setShowExecutionHistory(false);
+    setShowVersionHistory(false);
     setShowTestResults(true);
     setIsTestRunning(true);
     setTestResult(null);
@@ -953,9 +957,27 @@ function WorkflowCanvasInner({
               onTest={handleTest}
               onFitView={() => fitView()}
               onAutoLayout={onAutoLayout}
-              onHistoryOpen={() => setShowExecutionHistory(true)}
-              onVersionHistoryOpen={() => setShowVersionHistory(true)}
-              onTestResultsOpen={() => setShowTestResults(true)}
+              // UX-DEF-001 (partial): right-drawer cohesion. Toolbar
+              // openers now close the other panels first so only one
+              // right-drawer is ever visible at a time. Full tabbed
+              // Inspector consolidation is deferred — this kills the
+              // stacking artifact without restructuring each panel's
+              // lifecycle.
+              onHistoryOpen={() => {
+                setShowTestResults(false);
+                setShowVersionHistory(false);
+                setShowExecutionHistory(true);
+              }}
+              onVersionHistoryOpen={() => {
+                setShowTestResults(false);
+                setShowExecutionHistory(false);
+                setShowVersionHistory(true);
+              }}
+              onTestResultsOpen={() => {
+                setShowExecutionHistory(false);
+                setShowVersionHistory(false);
+                setShowTestResults(true);
+              }}
               onExport={handleExport}
               onImport={handleImport}
               currentVersion={currentVersion}
