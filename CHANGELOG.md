@@ -5,6 +5,126 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.01] - 2026-05-19
+
+Post-review hardening of the 0.8.0 workspace-scope authz pass. Four
+parallel reviewers audited the branch and flagged five Criticals plus
+several Mediums that were missed in the original sweep; this release
+closes all of them.
+
+### Security (Critical)
+
+- **`api/sprint_tasks.py` — bulk task ops 500'd on the new authz path**.
+  `_filter_task_ids_to_workspace` ended with a stray `return sprint`
+  (undefined name), so `bulk_assign_tasks`, `bulk_update_status`, and
+  `bulk_move_tasks` raised `NameError` for every in-workspace call
+  instead of authorizing them. Removed the dead return.
+- **`api/reviews.py` — submit/finalize routes missed caller-identity
+  checks**. `submit_self_review`, `submit_manager_review`, and
+  `finalize_review` accepted any authenticated caller. Added
+  `_require_reviewee` (caller must equal `review.developer_id`) and
+  `_require_review_manager_or_admin` (caller must equal
+  `review.manager_id` or hold workspace `admin`); both return 404 to
+  avoid existence oracles.
+- **`api/dependencies.py` — story/task dependency mutations had no
+  workspace scope**. `update_story_dependency`, `delete_story_dependency`,
+  `resolve_story_dependency` and the three task-dependency twins
+  loaded by id with `db.get()` and mutated without any tenancy check.
+  Added `_load_story_dependency_authorized` and
+  `_load_task_dependency_authorized` helpers that resolve the
+  dependent resource's workspace, assert active membership, and 404
+  on mismatch. Wired into all six routes.
+- **`api/email_webhooks.py` — SES SNS Notification path skipped
+  signature verification** (WS-082). Only the `TopicArn` was checked
+  against the allowlist; the field is attacker-controlled in the body,
+  so anyone who knew or guessed an allow-listed ARN could POST forged
+  Bounce/Complaint events. Added `verify_sns_message_signature` that
+  builds the canonical AWS SNS string-to-sign, validates
+  `SigningCertURL` against the AWS SNS host pattern (no SSRF), fetches
+  the cert (cached by URL), and RSA-verifies the message envelope.
+  Supports SignatureVersion 1 (SHA-1) and 2 (SHA-256).
+- **`services/email_webhook_verify.py` — no replay window on SendGrid /
+  Mailgun verifiers** (WS-082). A captured signed payload could be
+  replayed indefinitely. Added a 300s skew check on both providers,
+  matching the mailagent internal-auth middleware.
+
+### Security (Medium)
+
+- **`services/github_task_sync_service.py` — cross-workspace
+  `[slug:task-key]` auto-link** (WS-083). `_find_aexy_task` resolved by
+  workspace slug alone, so a malicious PR body in repo X (owned by
+  workspace A) containing `[victim-workspace:42]` could create a
+  `TaskGitHubLink` row pointing at workspace B's task. The lookup now
+  requires the resolved task's workspace to have actively adopted the
+  mentioning repo (`WorkspaceRepository.is_active`).
+- **`api/tracking.py` — four POST endpoints trusted body refs**
+  (WS-084). `submit_standup`, `create_work_log`, `log_time`, and
+  `report_blocker` accepted `task_id`/`sprint_id`/`team_id` from the
+  request body without scoping; the row was stamped with the caller's
+  first team's workspace. Replaced with `_resolve_tracking_workspace`
+  which derives the workspace from the supplied refs (in
+  task → sprint → team priority), rejects bodies that mix refs across
+  workspaces, and asserts the caller is an active member of the
+  resolved workspace.
+- **`api/developer_insights.py` — non-admins received `author_email`
+  PII** (WS-085). `list_developer_commits` returned the raw email
+  field for every active workspace member. Added `_is_workspace_admin`
+  helper that gates the field on owner/admin role; non-admins receive
+  `null`.
+- **`mailagent/main.py` — empty `internal_secret` failed open in prod**
+  (WS-086). When the shared secret was missing, the middleware silently
+  passed every request through to handlers. Mailagent now raises
+  `RuntimeError` at boot when `environment in {production, staging}`
+  and the secret is empty; dev/test continue to pass through with the
+  existing warning.
+- **`auth/callback/page.tsx` — JWT lingered in URL bar and Referer**.
+  The OAuth callback hung onto `?token=…` in the address bar until the
+  next navigation. Now scrubbed via `history.replaceState` before any
+  token use, mirroring the `/p/[publicSlug]` flow.
+- **`/p/[publicSlug]/page.tsx` — public-slug login didn't sync the
+  presence cookie**. The page wrote `token` to localStorage but skipped
+  `setAuthPresenceCookie()`, reintroducing the redirect-loop class that
+  `5895c1da` had fixed for the landing page. Cookie now set inline.
+
+### Security (Low)
+
+- **`lib/authCookie.ts` — presence cookie missing `Secure`**. Added
+  `Secure` attribute on HTTPS so the flag isn't sent in cleartext if a
+  proxy ever downgrades the connection.
+- **`AnalyticsDetailsModal.tsx` — external commit links missing
+  `noopener`**. `rel="noreferrer"` only; added `noopener` for explicit
+  tabnabbing defense (modern browsers imply it, but the codebase
+  convention is to set both).
+
+### Frontend
+
+- **i18n compliance on `AnalyticsDetailsModal.tsx`**. Per CLAUDE.md's
+  rule that all user-facing strings in new components must use
+  `useTranslations()`, the modal's ~30 hardcoded English strings (tab
+  labels, table headers, loading/empty states, etc.) are now driven
+  by the new `insights.details` namespace in `messages/en` +
+  `messages/hi`. The same pass i18n'd three new strings in
+  `insights/page.tsx` (Sources / Profile / Show inactive / "still
+  loading" toast).
+
+### Tests
+
+- **`tests/unit/test_dependency_authz.py` (new)** — six cases pinning
+  the story- and task-dependency loader helpers: active member passes,
+  cross-workspace caller gets 404, missing id gets 404, removed-status
+  member is rejected.
+- **`tests/unit/test_email_webhook_verify.py`** — four SNS signature
+  tests (attacker cert URL rejected, valid sig accepted, tampered
+  payload rejected, dev-mode short-circuit) plus replay-window tests
+  for SendGrid and Mailgun. Refreshed the Mailgun happy-path fixtures
+  to use current timestamps.
+- **`tests/unit/test_github_issue_auto_link.py`** — `_adopt_repo`
+  fixture that wires `Repository` + `WorkspaceRepository` for the test
+  workspace; new `test_cross_workspace_slug_injection_is_blocked`
+  exercising the WS-083 fix, plus `test_shared_adoption_still_links`
+  pinning that shared-repo adoption still resolves correctly to the
+  workspace whose slug was used.
+
 ## [0.8.0] - 2026-05-19
 
 Code review cleanup of work that originated on the long-running
