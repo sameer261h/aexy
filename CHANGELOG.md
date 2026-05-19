@@ -5,6 +5,106 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.91] - 2026-05-19
+
+Replace manual GitHub issue/PR linking with mention-based auto-linking
+via `[workspace-slug:task-key]` in PR or issue title/body.
+
+### Added
+
+- **Issue webhook now auto-links tasks**. `api/webhooks.py` routes
+  `issues` events (opened/reopened/edited/closed) through
+  `GitHubTaskSyncService.process_issue`, which parses the issue title +
+  body for `[slug:key]` mentions and upserts a `TaskGitHubLink` row per
+  match with `is_auto_linked=True`. Works from any repo — the slug
+  resolves against `Workspace.slug`, the number against the
+  workspace-wide `task_key`.
+- **Edit re-sync**. On `pull_request.edited`/`synchronize` and
+  `issues.edited`, auto-links whose mention is no longer present in the
+  fresh body are deleted. Manual edits to the GitHub source are now the
+  way to add or remove links.
+- **`link_issue_manually` is now upsert**. If a row already exists for
+  `(task_id, repo, number)`, its cached `github_issue_title`/`state`/`url`
+  refresh when fresher values arrive (issue renamed on GitHub →
+  link metadata updates).
+- **Copy-mention chip** in the task modal showing `[slug:task_key]`
+  inline help so users know what to paste into a PR/issue body.
+
+### Removed
+
+- **Manual link POST endpoints** in both `api/sprint_tasks.py` and
+  `api/project_tasks.py`:
+  `POST /github-links/pull-requests` and `POST /github-links/issues`.
+- **Orphan search endpoints** that only powered the manual dropdowns:
+  `GET /github/pull-requests`, `GET /github/issues`,
+  `GET /{task_id}/github-links/issue-repositories` (both scopes).
+- **Manual linking UI** in `board/page.tsx` — the PR + issue
+  search dropdowns, the manual `owner/repo#123` entry, and ~300 lines
+  of supporting state/queries/mutations.
+- **Client functions** `linkPullRequest`, `linkGitHubIssue`,
+  `searchPullRequests`, `searchGitHubIssues`, and
+  `getGitHubIssueRepositoryContext` from `lib/api.ts` (sprint and team
+  scopes). `getTaskGitHubLinks` and `unlinkGitHubLink` retained.
+
+### Tests
+
+- `tests/unit/test_github_issue_auto_link.py` — process_issue creates
+  one auto-linked row per mention, case-insensitive slug match,
+  hyphens in slug, edit-then-remove drops the stale row, edit refreshes
+  cached title/state, `closed`/`reopened` refresh state without
+  pruning (only `edited` is allowed to remove mentions).
+
+## [0.7.90] - 2026-05-19
+
+Fix duplicate developer rows in team insights, plus auto-hide
+zero-contribution members.
+
+### Fixed
+
+- **Ghost dedup**: `compute_team_distribution` now takes a `member_ids`
+  list distinct from the activity-expanded `developer_ids`, so
+  `_build_developer_alias_map` can actually map ghost ids onto their
+  canonical workspace-member rows. The prior code passed the same
+  list as both args, which made the `NOT IN` filter exclude the
+  ghosts we wanted to bridge — producing two rows for "Ritesh
+  Biswas" (active vs ghost-with-personal-email) on the team insights
+  endpoint.
+- **`identity_key` fallbacks** when a developer has no
+  `GitHubConnection`:
+  1. Pull `Commit.author_github_login` (most-frequent value per
+     developer) and use it as the github login key.
+  2. Parse `<id>+<login>@users.noreply.github.com` out of the
+     developer's email. Together these collapse the two Mobashir
+     ghost rows that shared the same GitHub login but were never
+     linked to a Connection row.
+- Aliased ghost ids are now removed from the display set so
+  `_rollup_by_identity` never sees a ghost+canonical pair — fewer
+  reliances on the identity_key tie-breaker.
+
+### Added
+
+- `compute_team_distribution(..., hide_zero_contribution=False)`
+  optionally filters out members whose four counters (commits, PRs
+  merged, lines changed, reviews given) are all zero in the window.
+- `GET /workspaces/{id}/insights/team?include_inactive=false`
+  (default) — applies the filter. `?include_inactive=true` restores
+  the full roster.
+- Frontend toggle "Show inactive" on the Team Insights page
+  (`insights/page.tsx`) wired through `useTeamInsights` and the
+  generated `getTeamInsights` client.
+- Regression tests for: ghost-via-email collapse, ghost-via-commit-
+  author-github-login collapse, and zero-contribution filter.
+
+### Known limitation
+
+- An active workspace member with neither a `GitHubConnection` nor
+  any name/email overlap with their ghost rows cannot be linked
+  automatically. The three "Mobashir" rows in the original example
+  collapse from 3 → 2 (two ghosts merge), but the active member
+  `mobashir.r@bimaplan.co` stays separate until either an admin
+  links their GitHub login, or a manual "merge identities" action
+  is added.
+
 ## [0.7.89] - 2026-05-19
 
 Post-review hardening for the 0.7.82-0.7.88 workspace-scope leak audit.

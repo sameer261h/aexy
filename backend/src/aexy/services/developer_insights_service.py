@@ -1205,52 +1205,64 @@ class DeveloperInsightsService:
 
     async def _build_developer_alias_map(
         self,
-        developer_ids: list[str],
+        member_ids: list[str],
+        ghost_pool: list[str] | None = None,
     ) -> dict[str, str]:
-        """Build a mapping from ghost/duplicate developer IDs to canonical workspace member IDs.
+        """Build a mapping from ghost/duplicate developer IDs to canonical
+        workspace member IDs.
 
-        When commits are synced, they may be attributed to auto-created ghost developers
-        (matched by email) rather than the workspace member record. This finds those
-        duplicates by matching on email and maps ghost_id -> member_id so stats can be merged.
+        `member_ids` is the canonical set — typically the WorkspaceMember
+        developer_ids. `ghost_pool` is the wider set of developer_ids we
+        also pulled activity for (members + external contributors); the
+        function looks for ghosts inside `ghost_pool \ member_ids` and
+        also globally (for the previous behavior). If `ghost_pool` is
+        None, falls back to the legacy behavior of searching all
+        non-member developers.
+
+        The fix landed because the caller used to pass the activity-
+        expanded list as both arguments, which made the NOT IN
+        filter exclude the very ghosts we were trying to bridge.
         """
-        if not developer_ids:
+        if not member_ids:
             return {}
 
-        # Get emails for all developer IDs
+        # Get emails for the CANONICAL set so we know what to dedup *against*.
         email_stmt = select(Developer.id, Developer.email).where(
-            and_(Developer.id.in_(developer_ids), Developer.email.isnot(None))
+            and_(Developer.id.in_(member_ids), Developer.email.isnot(None))
         )
         email_result = await self.db.execute(email_stmt)
         dev_emails = {row[0]: row[1] for row in email_result.all()}
 
-        # Find other developer records with matching emails that aren't in our list
-        emails = list(set(dev_emails.values()))
-        if not emails:
-            return {}
-
-        dup_stmt = select(Developer.id, Developer.email).where(
-            and_(
-                Developer.email.in_(emails),
-                Developer.id.notin_(developer_ids),
-            )
-        )
-        dup_result = await self.db.execute(dup_stmt)
-        # Build reverse map: email -> canonical developer_id (from our list)
+        # Build reverse map: email -> canonical developer_id (a member).
         email_to_canonical: dict[str, str] = {}
         for dev_id, email in dev_emails.items():
             if email:
                 email_to_canonical[email.lower()] = dev_id
 
-        # Map duplicate IDs to canonical IDs
         alias_map: dict[str, str] = {}
-        for dup_id, dup_email in dup_result.all():
-            if dup_email and dup_email.lower() in email_to_canonical:
-                alias_map[dup_id] = email_to_canonical[dup_email.lower()]
 
-        # Also check via github_username matching
+        # 1. Email-keyed: find developers OUTSIDE the canonical set whose
+        # email matches a canonical member. Restrict to ghost_pool when
+        # provided so we don't scan all developers in the database.
+        emails = list(set(dev_emails.values()))
+        if emails:
+            dup_conditions = [
+                Developer.email.in_(emails),
+                Developer.id.notin_(member_ids),
+            ]
+            if ghost_pool is not None:
+                dup_conditions.append(Developer.id.in_(ghost_pool))
+            dup_stmt = select(Developer.id, Developer.email).where(and_(*dup_conditions))
+            dup_result = await self.db.execute(dup_stmt)
+            for dup_id, dup_email in dup_result.all():
+                if dup_email and dup_email.lower() in email_to_canonical:
+                    alias_map[dup_id] = email_to_canonical[dup_email.lower()]
+
+        # 2. GitHub-username-keyed: pull canonical members' GH logins and
+        # find ghosts whose attributed commits carry the same login.
         from aexy.models.developer import GitHubConnection
         gh_stmt = select(GitHubConnection.developer_id, GitHubConnection.github_username).where(
-            GitHubConnection.developer_id.in_(developer_ids)
+            GitHubConnection.developer_id.in_(member_ids)
         )
         gh_result = await self.db.execute(gh_stmt)
         member_gh_logins: dict[str, str] = {}  # github_login -> member_id
@@ -1259,15 +1271,15 @@ class DeveloperInsightsService:
                 member_gh_logins[gh_username.lower()] = dev_id
 
         if member_gh_logins:
-            # Find commits by non-member developers with matching github logins
+            ghost_conditions = [
+                Commit.developer_id.notin_(member_ids),
+                func.lower(Commit.author_github_login).in_(list(member_gh_logins.keys())),
+            ]
+            if ghost_pool is not None:
+                ghost_conditions.append(Commit.developer_id.in_(ghost_pool))
             ghost_stmt = select(
                 distinct(Commit.developer_id), Commit.author_github_login
-            ).where(
-                and_(
-                    Commit.developer_id.notin_(developer_ids),
-                    func.lower(Commit.author_github_login).in_(list(member_gh_logins.keys())),
-                )
-            )
+            ).where(and_(*ghost_conditions))
             ghost_result = await self.db.execute(ghost_stmt)
             for ghost_id, gh_login in ghost_result.all():
                 if gh_login and gh_login.lower() in member_gh_logins:
@@ -1282,17 +1294,49 @@ class DeveloperInsightsService:
         end: datetime,
         workspace_id: str | None = None,
         role_weighted: bool = False,
+        member_ids: list[str] | None = None,
+        hide_zero_contribution: bool = False,
     ) -> TeamDistribution:
+        """Compute team distribution metrics.
+
+        `developer_ids` is the full set to display (members + external
+        contributors with activity). `member_ids` names the canonical
+        workspace-member subset within that — if provided, the alias map
+        will map ghost rows in `developer_ids \\ member_ids` to their
+        canonical member, so a real team member with a ghost shadow
+        collapses to one row. When `member_ids` is None, the function
+        falls back to the legacy behavior of treating every id as
+        canonical (no dedup), preserving the API for non-workspace
+        callers.
+
+        `hide_zero_contribution=True` drops rows whose commits, PRs
+        merged, lines changed, and reviews given are all zero — useful
+        for team insights where the dropdown is the workspace roster.
+        """
         if not developer_ids:
             return TeamDistribution()
 
         member_summaries: list[MemberSummary] = []
         total_loads: list[float] = []
 
-        # Build alias map: ghost developer IDs -> canonical workspace member IDs
-        alias_map = await self._build_developer_alias_map(developer_ids)
-        # Query IDs = workspace members + their ghost aliases
+        # Build alias map: ghost developer IDs -> canonical workspace member IDs.
+        # When `member_ids` is supplied, ghosts are members ∪ contributors
+        # minus members; otherwise the function falls back to the legacy
+        # "everything is canonical" behavior, which is wrong for the team
+        # insights endpoint and is what produced duplicate rows in 0.7.89.
+        canonical_ids = member_ids if member_ids is not None else developer_ids
+        alias_map = await self._build_developer_alias_map(
+            canonical_ids,
+            ghost_pool=developer_ids,
+        )
+        # Query IDs = canonical set + every alias we discovered. Ghost rows
+        # that map to a canonical id will not appear in member_summaries
+        # but their stats are still pulled and merged into the canonical row.
         all_query_ids = list(set(developer_ids) | set(alias_map.keys()))
+        # Display set excludes any developer_id that aliases to a canonical
+        # member — otherwise we'd render a ghost row alongside its canonical
+        # twin. This is what closes the Ritesh / Mobashir duplicate rows.
+        developer_ids = [d for d in developer_ids if d not in alias_map]
 
         # Batch query: developer name + email + avatar. github_login and
         # workspace membership status come from joined tables below — we
@@ -1320,6 +1364,58 @@ class DeveloperInsightsService:
         dev_gh_logins: dict[str, str | None] = {
             row[0]: row[1] for row in gh_login_result.all()
         }
+
+        # Fallback A: pull github_login from Commit.author_github_login for
+        # any developer who has no GitHubConnection row. Ghost developers
+        # synced from external commit activity often lack a connection but
+        # still carry the author_github_login on their commits; without
+        # this fallback, identity_key falls all the way through to
+        # `email:` or `dev:` and the rollup can't collapse two ghosts
+        # that obviously share a GH login (the Mobashir case in 0.7.89).
+        missing_gh = [d for d in developer_ids if not dev_gh_logins.get(d)]
+        if missing_gh:
+            # Pick the most-frequent author_github_login per developer (a
+            # developer could have commits under multiple logins if a
+            # rebase rewrote authorship; "most-frequent" is the sensible
+            # canonical pick).
+            fallback_stmt = select(
+                Commit.developer_id,
+                Commit.author_github_login,
+                func.count(Commit.id).label("c"),
+            ).where(
+                and_(
+                    Commit.developer_id.in_(missing_gh),
+                    Commit.author_github_login.isnot(None),
+                )
+            ).group_by(Commit.developer_id, Commit.author_github_login)
+            fallback_result = await self.db.execute(fallback_stmt)
+            best: dict[str, tuple[str, int]] = {}
+            for dev_id, login, c in fallback_result.all():
+                if not login:
+                    continue
+                prev = best.get(dev_id)
+                if prev is None or c > prev[1]:
+                    best[dev_id] = (login, c)
+            for dev_id, (login, _c) in best.items():
+                dev_gh_logins.setdefault(dev_id, login)
+
+        # Fallback B: parse `<id>+<login>@users.noreply.github.com` out of
+        # the developer's email when the activity-table fallback didn't
+        # produce a login either. Catches ghost rows that only have
+        # review activity (PR/Review tables don't carry author_github_login)
+        # but were created from a commit-author resolver with a noreply
+        # email.
+        import re as _re
+        _NOREPLY_RE = _re.compile(
+            r"^(?:\d+\+)?([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,38}))@users\.noreply\.github\.com$",
+            _re.IGNORECASE,
+        )
+        for dev_id, email in dev_emails.items():
+            if dev_gh_logins.get(dev_id) or not email:
+                continue
+            m = _NOREPLY_RE.match(email)
+            if m:
+                dev_gh_logins[dev_id] = m.group(1)
 
         # Workspace membership status is only meaningful when we know
         # which workspace this rollup belongs to. External contributors
@@ -1443,14 +1539,31 @@ class DeveloperInsightsService:
         # merged stats, not the rows themselves, leaving dup display
         # entries in the picker.
         member_summaries = _rollup_by_identity(member_summaries)
-        # Rebuild total_loads from the deduped rows so Gini /
-        # top-contributor calculations match the rows we actually return.
+
+        # Optional: drop rows with no activity at all in the window. By
+        # default we keep them (the picker shows the full roster). The
+        # team-insights endpoint passes True so the "35 members" list
+        # doesn't bury 7-real-contributors among 28 zero rows.
+        if hide_zero_contribution:
+            member_summaries = [
+                m for m in member_summaries
+                if (
+                    m.commits_count
+                    or m.prs_merged
+                    or m.lines_changed
+                    or m.reviews_given
+                )
+            ]
+
+        # Rebuild total_loads from the (possibly filtered) deduped rows so
+        # Gini / top-contributor calculations match the rows we actually
+        # return.
         total_loads = [
             m.commits_count + m.prs_merged * 3 + m.reviews_given
             for m in member_summaries
         ]
         # `developer_ids` is used below for role-weighting and bottleneck
-        # detection; sync it to the deduped set so we don't index past
+        # detection; sync it to the final set so we don't index past
         # the end of total_loads or look up role multipliers we just
         # collapsed away.
         developer_ids = [m.developer_id for m in member_summaries]

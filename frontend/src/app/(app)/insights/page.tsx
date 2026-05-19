@@ -98,13 +98,17 @@ export default function InsightsPage() {
   const { currentWorkspaceId } = useWorkspace();
   const { hasEnabledRepos, hasInstallation, installUrl, isLoading: reposLoading } = useEnabledRepositories();
   const [periodType, setPeriodType] = useState<InsightsPeriodType>("weekly");
+  const [includeInactive, setIncludeInactive] = useState(false);
   const [details, setDetails] = useState<AnalyticsDetailsContext | null>(null);
 
   const {
     teamInsights,
     isLoading: teamLoading,
     refetch: refetchTeam,
-  } = useTeamInsights(currentWorkspaceId, { period_type: periodType });
+  } = useTeamInsights(currentWorkspaceId, {
+    period_type: periodType,
+    include_inactive: includeInactive,
+  });
 
   const { leaderboard, isLoading: lbLoading } = useLeaderboard(
     currentWorkspaceId,
@@ -332,6 +336,19 @@ export default function InsightsPage() {
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           {/* Period Selector */}
+
+          <label
+            className="flex items-center gap-2 px-3 py-1.5 bg-accent hover:bg-muted text-foreground text-sm rounded-lg transition cursor-pointer select-none"
+            title="By default, members with zero contribution in the period are hidden."
+          >
+            <input
+              type="checkbox"
+              checked={includeInactive}
+              onChange={(e) => setIncludeInactive(e.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            Show inactive
+          </label>
 
           <Link
             href="/insights/compare"

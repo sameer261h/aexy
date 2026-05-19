@@ -741,6 +741,14 @@ async def get_team_insights(
     period_type: PeriodTypeParam = Query(default=PeriodTypeParam.weekly),
     start_date: datetime | None = Query(default=None),
     end_date: datetime | None = Query(default=None),
+    include_inactive: bool = Query(
+        default=False,
+        description=(
+            "Include workspace members with zero contribution in the "
+            "window. Default False — the dashboard hides them so the "
+            "active contributors aren't lost in a long roster."
+        ),
+    ),
 ):
     """Get team-wide insights with workload distribution."""
     from aexy.services.developer_insights_service import DeveloperInsightsService
@@ -756,6 +764,7 @@ async def get_team_insights(
         workspace_id, "team",
         team_id=team_id, period_type=period_type.value,
         start_date=start_date, end_date=end_date,
+        include_inactive=include_inactive,
     )
     if cache:
         cached = await cache.get(cache_key)
@@ -763,16 +772,19 @@ async def get_team_insights(
             return cached
 
     if team_id:
-        dev_ids = await _get_team_developer_ids(db, workspace_id, team_id)
+        canonical_ids = await _get_team_developer_ids(db, workspace_id, team_id)
     else:
-        dev_ids = await _get_workspace_developer_ids(db, workspace_id)
+        canonical_ids = await _get_workspace_developer_ids(db, workspace_id)
 
-    if not dev_ids:
+    if not canonical_ids:
         raise HTTPException(status_code=404, detail="No team members found")
 
-    # Include external contributors (ghost developers) who have activity
+    # Include external contributors (ghost developers) who have activity.
+    # Keep `canonical_ids` separately so compute_team_distribution can
+    # identify which IDs are "real" members and which are ghosts to alias
+    # back onto them.
     dev_ids = await _get_all_contributor_ids(
-        db, dev_ids, start_date, end_date, workspace_id=workspace_id
+        db, canonical_ids, start_date, end_date, workspace_id=workspace_id
     )
 
     service = DeveloperInsightsService(db)
@@ -781,7 +793,12 @@ async def get_team_insights(
     # "external" by default, which breaks the picker's "hide past
     # members" filter.
     distribution = await service.compute_team_distribution(
-        dev_ids, start_date, end_date, workspace_id=workspace_id
+        dev_ids,
+        start_date,
+        end_date,
+        workspace_id=workspace_id,
+        member_ids=canonical_ids,
+        hide_zero_contribution=not include_inactive,
     )
 
     total_commits = sum(m.commits_count for m in distribution.member_metrics)

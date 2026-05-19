@@ -2548,11 +2548,6 @@ export interface GitHubIssueSummary {
   url: string;
 }
 
-export interface GitHubIssueRepositoryContext {
-  repositories: string[];
-  inferred_repository: string | null;
-}
-
 export interface TaskGitHubLink {
   id: string;
   link_type: "pull_request" | "commit" | "github_issue";
@@ -3269,59 +3264,8 @@ export const sprintApi = {
     return response.data;
   },
 
-  searchPullRequests: async (
-    sprintId: string,
-    query?: string,
-    opts?: { limit?: number; offset?: number },
-  ): Promise<PullRequestSummary[]> => {
-    const response = await api.get(`/sprints/${sprintId}/tasks/github/pull-requests`, {
-      params: {
-        ...(query && { query }),
-        ...(opts?.limit !== undefined && { limit: opts.limit }),
-        ...(opts?.offset !== undefined && { offset: opts.offset }),
-      },
-    });
-    return response.data;
-  },
-
-  searchGitHubIssues: async (
-    sprintId: string,
-    query?: string,
-    opts?: { limit?: number; offset?: number },
-  ): Promise<GitHubIssueSummary[]> => {
-    const response = await api.get(`/sprints/${sprintId}/tasks/github/issues`, {
-      params: {
-        ...(query && { query }),
-        ...(opts?.limit !== undefined && { limit: opts.limit }),
-        ...(opts?.offset !== undefined && { offset: opts.offset }),
-      },
-    });
-    return response.data;
-  },
-
   getTaskGitHubLinks: async (sprintId: string, taskId: string): Promise<TaskGitHubLink[]> => {
     const response = await api.get(`/sprints/${sprintId}/tasks/${taskId}/github-links`);
-    return response.data;
-  },
-
-  getGitHubIssueRepositoryContext: async (sprintId: string, taskId: string): Promise<GitHubIssueRepositoryContext> => {
-    const response = await api.get(`/sprints/${sprintId}/tasks/${taskId}/github-links/issue-repositories`);
-    return response.data;
-  },
-
-  linkPullRequest: async (sprintId: string, taskId: string, pullRequestId: string): Promise<TaskGitHubLink> => {
-    const response = await api.post(`/sprints/${sprintId}/tasks/${taskId}/github-links/pull-requests`, {
-      pull_request_id: pullRequestId,
-    });
-    return response.data;
-  },
-
-  linkGitHubIssue: async (
-    sprintId: string,
-    taskId: string,
-    issue: { repository?: string; issue_number: number; title?: string | null; state?: string | null; url?: string | null }
-  ): Promise<TaskGitHubLink> => {
-    const response = await api.post(`/sprints/${sprintId}/tasks/${taskId}/github-links/issues`, issue);
     return response.data;
   },
 
@@ -3862,48 +3806,6 @@ export const projectTasksApi = {
     );
   },
 
-  searchGitHubIssues: async (
-    teamId: string,
-    query?: string,
-    opts?: { limit?: number; offset?: number },
-  ): Promise<GitHubIssueSummary[]> => {
-    const response = await api.get(`/teams/${teamId}/tasks/github/issues`, {
-      params: {
-        ...(query && { query }),
-        ...(opts?.limit !== undefined && { limit: opts.limit }),
-        ...(opts?.offset !== undefined && { offset: opts.offset }),
-      },
-    });
-    return response.data;
-  },
-
-  searchPullRequests: async (
-    teamId: string,
-    query?: string,
-    opts?: { limit?: number; offset?: number },
-  ): Promise<PullRequestSummary[]> => {
-    const response = await api.get(`/teams/${teamId}/tasks/github/pull-requests`, {
-      params: {
-        ...(query && { query }),
-        ...(opts?.limit !== undefined && { limit: opts.limit }),
-        ...(opts?.offset !== undefined && { offset: opts.offset }),
-      },
-    });
-    return response.data;
-  },
-
-  linkPullRequest: async (
-    teamId: string,
-    taskId: string,
-    pullRequestId: string,
-  ): Promise<TaskGitHubLink> => {
-    const response = await api.post(
-      `/teams/${teamId}/tasks/${taskId}/github-links/pull-requests`,
-      { pull_request_id: pullRequestId },
-    );
-    return response.data;
-  },
-
   importTasks: async (
     teamId: string,
     source: TaskSourceType,
@@ -3944,20 +3846,6 @@ export const projectTasksApi = {
 
   getTaskGitHubLinks: async (teamId: string, taskId: string): Promise<TaskGitHubLink[]> => {
     const response = await api.get(`/teams/${teamId}/tasks/${taskId}/github-links`);
-    return response.data;
-  },
-
-  getGitHubIssueRepositoryContext: async (teamId: string, taskId: string): Promise<GitHubIssueRepositoryContext> => {
-    const response = await api.get(`/teams/${teamId}/tasks/${taskId}/github-links/issue-repositories`);
-    return response.data;
-  },
-
-  linkGitHubIssue: async (
-    teamId: string,
-    taskId: string,
-    issue: { repository?: string; issue_number: number; title?: string | null; state?: string | null; url?: string | null }
-  ): Promise<TaskGitHubLink> => {
-    const response = await api.post(`/teams/${teamId}/tasks/${taskId}/github-links/issues`, issue);
     return response.data;
   },
 
@@ -17429,6 +17317,7 @@ export const insightsApi = {
       period_type?: InsightsPeriodType;
       start_date?: string;
       end_date?: string;
+      include_inactive?: boolean;
     }
   ): Promise<TeamInsightsResponse> => {
     const response = await api.get(`/workspaces/${workspaceId}/insights/team`, {
