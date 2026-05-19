@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
   Bot,
   Play,
@@ -30,6 +31,7 @@ import { useAgent, useAgentExecutions, useAgentMetrics } from "@/hooks/useAgents
 import { CRMAgentExecution, getAgentTypeConfig } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   AgentTypeBadge,
   AgentStatusBadge,
@@ -314,10 +316,12 @@ function ExecutionDetail({ execution }: ExecutionDetailProps) {
 }
 
 export default function AgentDetailPage() {
+  const t = useTranslations("agents");
   const params = useParams();
   const router = useRouter();
   const agentId = params.agentId as string;
   const { currentWorkspaceId, currentWorkspaceLoading } = useWorkspace();
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const {
     agent,
@@ -351,10 +355,11 @@ export default function AgentDetailPage() {
     }
   };
 
-  const handleDelete = async () => {
-    if (!confirm("Are you sure you want to delete this agent? This action cannot be undone.")) {
-      return;
-    }
+  const handleDelete = () => {
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDelete = async () => {
     try {
       await deleteAgent();
       router.push("/agents");
@@ -492,40 +497,32 @@ export default function AgentDetailPage() {
               </div>
             </div>
 
-            {/* Actions - desktop only (inline) */}
+            {/* Actions - desktop only (inline). One decisive primary + a
+                status toggle + an overflow. Run / Edit / Delete live under
+                the overflow so the header doesn't read like five primaries
+                fighting for the same eye. */}
             <div className="hidden sm:flex items-center gap-2 flex-shrink-0">
+              {/* Primary: Chat is the agent's default interaction — always
+                  available regardless of active state. */}
               <Link
                 href={`/agents/${agent.id}/chat`}
-                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition text-sm font-medium"
+                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition text-sm font-medium shadow-sm"
               >
                 <MessageSquare className="h-4 w-4" />
-                Chat
+                {t("actions.chat")}
               </Link>
-              <button
-                onClick={() => setShowRunDialog(true)}
-                disabled={isExecuting || !agent.is_active}
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-foreground rounded-lg transition text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isExecuting ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Running...
-                  </>
-                ) : (
-                  <>
-                    <Zap className="h-4 w-4" />
-                    Run
-                  </>
-                )}
-              </button>
+
+              {/* Status toggle: semantic colors with explicit light/dark
+                  contrast (the prior bg-green-600 + text-foreground combo
+                  failed in light mode). */}
               <button
                 onClick={handleToggle}
                 disabled={isToggling}
                 className={cn(
-                  "flex items-center gap-2 px-4 py-2 rounded-lg transition text-sm font-medium",
+                  "flex items-center gap-2 px-3 py-2 rounded-lg transition text-sm font-medium border",
                   agent.is_active
-                    ? "bg-amber-500/20 text-amber-400 hover:bg-amber-500/30"
-                    : "bg-green-500/20 text-green-400 hover:bg-green-500/30"
+                    ? "border-amber-500/40 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-300"
+                    : "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300",
                 )}
               >
                 {isToggling ? (
@@ -535,36 +532,59 @@ export default function AgentDetailPage() {
                 ) : (
                   <Play className="h-4 w-4" />
                 )}
-                {agent.is_active ? "Pause" : "Activate"}
+                {agent.is_active ? t("actions.pause") : t("actions.activate")}
               </button>
-              <Link
-                href={`/agents/${agent.id}/edit`}
-                className="flex items-center gap-2 px-4 py-2 bg-accent hover:bg-muted text-foreground rounded-lg transition text-sm font-medium"
-              >
-                <Settings className="h-4 w-4" />
-                Edit
-              </Link>
+
+              {/* Overflow: Run + Edit + Delete. Run is gated by `is_active`
+                  per the underlying mutation; we show a tooltip there
+                  instead of disabling a top-level button silently. */}
               <div className="relative">
                 <button
                   onClick={() => setShowMenu(!showMenu)}
                   className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition"
+                  aria-label="More actions"
                 >
                   <MoreVertical className="h-5 w-5" />
                 </button>
                 {showMenu && (
                   <>
                     <div className="fixed inset-0 z-10" onClick={() => setShowMenu(false)} />
-                    <div className="absolute right-0 top-full mt-1 w-48 bg-accent rounded-lg shadow-xl z-20 py-1">
+                    <div className="absolute right-0 top-full mt-1 w-56 bg-popover border border-border rounded-lg shadow-xl z-20 py-1">
+                      <button
+                        onClick={() => {
+                          setShowMenu(false);
+                          setShowRunDialog(true);
+                        }}
+                        disabled={isExecuting || !agent.is_active}
+                        className="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-accent flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title={!agent.is_active ? t("status.inactive") : undefined}
+                      >
+                        {isExecuting ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Zap className="h-4 w-4" />
+                        )}
+                        {isExecuting ? t("status.running") : t("actions.run")}
+                      </button>
+                      <Link
+                        href={`/agents/${agent.id}/edit`}
+                        onClick={() => setShowMenu(false)}
+                        className="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-accent flex items-center gap-2"
+                      >
+                        <Settings className="h-4 w-4" />
+                        {t("actions.editAgent")}
+                      </Link>
+                      <div className="h-px bg-border my-1" />
                       <button
                         onClick={() => {
                           handleDelete();
                           setShowMenu(false);
                         }}
                         disabled={isDeleting}
-                        className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-muted flex items-center gap-2"
+                        className="w-full px-3 py-2 text-left text-sm text-red-600 dark:text-red-400 hover:bg-red-500/10 flex items-center gap-2"
                       >
                         <Trash2 className="h-4 w-4" />
-                        Delete Agent
+                        {t("actions.deleteAgent")}
                       </button>
                     </div>
                   </>
@@ -573,35 +593,92 @@ export default function AgentDetailPage() {
             </div>
           </div>
 
-          {/* Actions - mobile only (second row) */}
+          {/* Live status strip — last execution at a glance, with a pulse
+              dot when a run is currently active. Avoids the "ops dashboard
+              is a 3-card report" feel called out in the audit. */}
+          {(() => {
+            const lastExec = executions?.[0] ?? null;
+            const isRunning =
+              lastExec?.status === "running" || lastExec?.status === "pending";
+            const statusToneClass: Record<string, string> = {
+              running: "text-blue-600 dark:text-blue-400",
+              pending: "text-blue-600 dark:text-blue-400",
+              completed: "text-emerald-600 dark:text-emerald-400",
+              failed: "text-red-600 dark:text-red-400",
+              cancelled: "text-muted-foreground",
+            };
+            const haloColor = getAgentTypeConfig(agent.agent_type).color;
+            return (
+              <div
+                className="hidden sm:flex items-center gap-3 mt-3 px-3 py-2 rounded-lg border border-border bg-background/40"
+                style={{
+                  boxShadow: isRunning
+                    ? `inset 0 0 0 1px ${haloColor}40`
+                    : undefined,
+                }}
+              >
+                <span className="relative inline-flex items-center justify-center">
+                  <span
+                    className={cn(
+                      "h-2 w-2 rounded-full",
+                      lastExec
+                        ? statusToneClass[lastExec.status] ?? "text-muted-foreground"
+                        : "text-muted-foreground",
+                    )}
+                    style={{
+                      backgroundColor: lastExec
+                        ? "currentColor"
+                        : "var(--muted-foreground)",
+                    }}
+                  />
+                  {isRunning ? (
+                    <span
+                      className="absolute h-2 w-2 rounded-full animate-ping opacity-75"
+                      style={{ backgroundColor: haloColor }}
+                    />
+                  ) : null}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {lastExec
+                    ? isRunning
+                      ? `Running since ${formatDate(lastExec.started_at)}`
+                      : `Last run ${formatDate(lastExec.completed_at ?? lastExec.started_at)} - ${lastExec.status}`
+                    : t("detail.noExecutionsYet")}
+                </span>
+                <span className="text-xs text-muted-foreground/60">-</span>
+                <span className="text-xs text-muted-foreground">
+                  {agent.total_executions} {t("stats.totalRuns").toLowerCase()}
+                </span>
+                <span className="text-xs text-muted-foreground/60">-</span>
+                <span className="text-xs text-muted-foreground">
+                  {successRate}% {t("stats.successRate").toLowerCase()}
+                </span>
+                {executionsLoading ? (
+                  <RefreshCw className="h-3 w-3 text-muted-foreground animate-spin ml-auto" />
+                ) : null}
+              </div>
+            );
+          })()}
+
+          {/* Actions - mobile only (second row). Mirrors the desktop
+              vocabulary: one primary (Chat), the status toggle, and an
+              overflow that holds Run / Edit / Delete. */}
           <div className="flex sm:hidden items-center gap-1">
             <Link
               href={`/agents/${agent.id}/chat`}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition text-xs font-medium"
             >
               <MessageSquare className="h-3.5 w-3.5" />
-              Chat
+              {t("actions.chat")}
             </Link>
-            <button
-              onClick={() => setShowRunDialog(true)}
-              disabled={isExecuting || !agent.is_active}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-foreground rounded-lg transition text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isExecuting ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Zap className="h-3.5 w-3.5" />
-              )}
-              Run
-            </button>
             <button
               onClick={handleToggle}
               disabled={isToggling}
               className={cn(
-                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition text-xs font-medium",
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition text-xs font-medium border",
                 agent.is_active
-                  ? "bg-amber-500/20 text-amber-400 hover:bg-amber-500/30"
-                  : "bg-green-500/20 text-green-400 hover:bg-green-500/30"
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                  : "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
               )}
             >
               {isToggling ? (
@@ -611,36 +688,54 @@ export default function AgentDetailPage() {
               ) : (
                 <Play className="h-3.5 w-3.5" />
               )}
-              {agent.is_active ? "Pause" : "Activate"}
+              {agent.is_active ? t("actions.pause") : t("actions.activate")}
             </button>
-            <Link
-              href={`/agents/${agent.id}/edit`}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-muted text-foreground rounded-lg transition text-xs font-medium"
-            >
-              <Settings className="h-3.5 w-3.5" />
-              Edit
-            </Link>
             <div className="relative ml-auto">
               <button
                 onClick={() => setShowMenu(!showMenu)}
                 className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition"
+                aria-label="More actions"
               >
                 <MoreVertical className="h-4 w-4" />
               </button>
               {showMenu && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setShowMenu(false)} />
-                  <div className="absolute right-0 top-full mt-1 w-48 bg-accent rounded-lg shadow-xl z-20 py-1">
+                  <div className="absolute right-0 top-full mt-1 w-56 bg-popover border border-border rounded-lg shadow-xl z-20 py-1">
+                    <button
+                      onClick={() => {
+                        setShowMenu(false);
+                        setShowRunDialog(true);
+                      }}
+                      disabled={isExecuting || !agent.is_active}
+                      className="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-accent flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isExecuting ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Zap className="h-4 w-4" />
+                      )}
+                      {isExecuting ? t("status.running") : t("actions.run")}
+                    </button>
+                    <Link
+                      href={`/agents/${agent.id}/edit`}
+                      onClick={() => setShowMenu(false)}
+                      className="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-accent flex items-center gap-2"
+                    >
+                      <Settings className="h-4 w-4" />
+                      {t("actions.editAgent")}
+                    </Link>
+                    <div className="h-px bg-border my-1" />
                     <button
                       onClick={() => {
                         handleDelete();
                         setShowMenu(false);
                       }}
                       disabled={isDeleting}
-                      className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-muted flex items-center gap-2"
+                      className="w-full px-3 py-2 text-left text-sm text-red-600 dark:text-red-400 hover:bg-red-500/10 flex items-center gap-2"
                     >
                       <Trash2 className="h-4 w-4" />
-                      Delete Agent
+                      {t("actions.deleteAgent")}
                     </button>
                   </div>
                 </>
@@ -808,6 +903,16 @@ export default function AgentDetailPage() {
           </div>
         </div>
       </main>
+
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        title={t("confirmations.deleteAgentTitle")}
+        description={t("confirmations.deleteAgentDescription")}
+        confirmLabel={t("actions.deleteAgent")}
+        onConfirm={confirmDelete}
+        tone="danger"
+      />
     </div>
   );
 }

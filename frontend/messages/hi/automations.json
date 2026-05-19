@@ -1,0 +1,81 @@
+{
+  "automations": {
+    "title": "Automations",
+    "subtitle": "सभी Aexy मॉड्यूल में workflows को स्वचालित करें",
+    "createAutomation": "Automation बनाएं",
+    "untitled": "बिना नाम की Automation",
+
+    "filter": {
+      "allModules": "सभी मॉड्यूल"
+    },
+
+    "search": {
+      "placeholder": "Automations खोजें..."
+    },
+
+    "stats": {
+      "total": "कुल",
+      "active": "सक्रिय",
+      "paused": "रोकी गई",
+      "draft": "ड्राफ्ट",
+      "executions": "कुल निष्पादन"
+    },
+
+    "status": {
+      "active": "सक्रिय",
+      "paused": "रोकी गई",
+      "draft": "ड्राफ्ट",
+      "archived": "संग्रहीत"
+    },
+
+    "actions": {
+      "duplicate": "डुप्लिकेट",
+      "delete": "हटाएं",
+      "pause": "रोकें",
+      "activate": "सक्रिय करें",
+      "edit": "संपादित करें",
+      "run": "टेस्ट रन"
+    },
+
+    "save": {
+      "saving": "सहेज रहे हैं…",
+      "saved": "सहेजा गया",
+      "savedAt": "{time} पर सहेजा गया",
+      "error": "सहेजना विफल",
+      "retry": "पुनः प्रयास"
+    },
+
+    "card": {
+      "executions": "{count, plural, =0 {कोई रन नहीं} =1 {1 रन} other {# रन}}",
+      "lastRun": "अंतिम रन {when}",
+      "neverRun": "अब तक नहीं चला",
+      "successRate": "{rate}% सफल"
+    },
+
+    "empty": {
+      "title": "अभी कोई automation नहीं",
+      "description": "एक trigger को एक action से जोड़ें और Aexy को दोहराव वाला काम करने दें। एक template से शुरू करें या अपना खुद का बनाएं।",
+      "primaryAction": "Templates देखें",
+      "secondaryAction": "शून्य से शुरू करें"
+    },
+
+    "delete": {
+      "title": "इस automation को हटाएं?",
+      "description": "सभी निर्धारित रन और निष्पादन इतिहास खो जाएगा। यह कार्रवाई पूर्ववत नहीं की जा सकती।",
+      "confirm": "Automation हटाएं"
+    },
+
+    "removeAgentTrigger": {
+      "title": "इस agent trigger को हटाएं?",
+      "description": "जब यह automation चलेगा तो agent अब आमंत्रित नहीं होगा।",
+      "confirm": "Trigger हटाएं"
+    },
+
+    "builder": {
+      "namePlaceholder": "इस automation का नाम दें",
+      "addTriggerHint": "शुरू करने के लिए एक trigger चुनें",
+      "addActionHint": "trigger के बगल में एक action जोड़ें",
+      "testRun": "टेस्ट रन"
+    }
+  }
+}

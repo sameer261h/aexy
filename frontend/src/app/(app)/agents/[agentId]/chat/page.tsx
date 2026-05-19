@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import {
   Bot,
   Settings,
@@ -20,12 +21,15 @@ import { getAgentTypeConfig, AgentMessage } from "@/lib/api";
 import { ChatInterface, ConversationSidebar } from "@/components/agents/chat";
 import { AgentStatusBadge } from "@/components/agents/shared";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export default function AgentChatPage() {
+  const t = useTranslations("agents");
   const params = useParams();
   const router = useRouter();
   const agentId = params.agentId as string;
   const { currentWorkspaceId, currentWorkspaceLoading } = useWorkspace();
+  const [deleteTargetConvoId, setDeleteTargetConvoId] = useState<string | null>(null);
 
   const { agent, isLoading: agentLoading } = useAgent(currentWorkspaceId, agentId);
   const {
@@ -67,10 +71,14 @@ export default function AgentChatPage() {
     setMessages([]);
   };
 
-  const handleDeleteConversation = async (conversationId: string) => {
-    if (!confirm("Delete this conversation?")) return;
+  const handleDeleteConversation = (conversationId: string) => {
+    setDeleteTargetConvoId(conversationId);
+  };
+
+  const confirmDeleteConversation = async () => {
+    if (!deleteTargetConvoId) return;
     try {
-      await deleteConversation(conversationId);
+      await deleteConversation(deleteTargetConvoId);
     } catch (error) {
       console.error("Failed to delete conversation:", error);
     }
@@ -199,6 +207,16 @@ export default function AgentChatPage() {
           />
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTargetConvoId}
+        onOpenChange={(open) => !open && setDeleteTargetConvoId(null)}
+        title={t("confirmations.deleteConversationTitle")}
+        description={t("confirmations.deleteConversationDescription")}
+        confirmLabel={t("confirmations.deleteConversationConfirm")}
+        onConfirm={confirmDeleteConversation}
+        tone="danger"
+      />
     </div>
   );
 }

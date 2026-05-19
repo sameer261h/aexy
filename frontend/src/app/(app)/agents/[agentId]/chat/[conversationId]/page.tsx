@@ -2,6 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import {
   Bot,
   Settings,
@@ -22,13 +23,16 @@ import { getAgentTypeConfig } from "@/lib/api";
 import { ChatInterface, ConversationSidebar } from "@/components/agents/chat";
 import { AgentStatusBadge } from "@/components/agents/shared";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export default function ConversationPage() {
+  const t = useTranslations("agents");
   const params = useParams();
   const router = useRouter();
   const agentId = params.agentId as string;
   const conversationId = params.conversationId as string;
   const { currentWorkspaceId, currentWorkspaceLoading } = useWorkspace();
+  const [deleteTargetConvoId, setDeleteTargetConvoId] = useState<string | null>(null);
 
   const { agent, isLoading: agentLoading } = useAgent(currentWorkspaceId, agentId);
   const {
@@ -68,8 +72,13 @@ export default function ConversationPage() {
     router.push(`/agents/${agentId}/chat`);
   };
 
-  const handleDeleteConversation = async (id: string) => {
-    if (!confirm("Delete this conversation?")) return;
+  const handleDeleteConversation = (id: string) => {
+    setDeleteTargetConvoId(id);
+  };
+
+  const confirmDeleteConversation = async () => {
+    if (!deleteTargetConvoId) return;
+    const id = deleteTargetConvoId;
     try {
       await deleteConversation(id);
       if (id === conversationId) {
@@ -245,6 +254,16 @@ export default function ConversationPage() {
           />
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTargetConvoId}
+        onOpenChange={(open) => !open && setDeleteTargetConvoId(null)}
+        title={t("confirmations.deleteConversationTitle")}
+        description={t("confirmations.deleteConversationDescription")}
+        confirmLabel={t("confirmations.deleteConversationConfirm")}
+        onConfirm={confirmDeleteConversation}
+        tone="danger"
+      />
     </div>
   );
 }

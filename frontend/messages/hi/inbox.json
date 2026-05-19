@@ -1,0 +1,56 @@
+{
+  "inbox": {
+    "title": "Agent Inbox",
+    "subtitle": "इस agent द्वारा संभाली गई बातचीत और प्रतिक्रियाएं",
+
+    "filter": {
+      "all": "सभी",
+      "open": "खुले",
+      "awaitingReview": "समीक्षा के लिए प्रतीक्षारत",
+      "snoozed": "स्नूज़",
+      "resolved": "हल",
+      "spam": "स्पैम"
+    },
+
+    "status": {
+      "open": "खुला",
+      "awaitingReview": "समीक्षा के लिए प्रतीक्षारत",
+      "snoozed": "स्नूज़",
+      "resolved": "हल",
+      "spam": "स्पैम"
+    },
+
+    "priority": {
+      "urgent": "अत्यावश्यक",
+      "high": "उच्च",
+      "normal": "सामान्य",
+      "low": "कम"
+    },
+
+    "list": {
+      "empty": "यहाँ कोई संदेश नहीं है।",
+      "loading": "संदेश लोड हो रहे हैं…",
+      "unread": "{count} अपठित"
+    },
+
+    "detail": {
+      "selectAMessage": "पढ़ने के लिए एक संदेश चुनें",
+      "suggestedReply": "सुझाई गई प्रतिक्रिया",
+      "sendReply": "प्रतिक्रिया भेजें",
+      "edit": "संपादित करें",
+      "discard": "छोड़ें",
+      "approve": "स्वीकृत करें और भेजें",
+      "regenerate": "पुनः उत्पन्न करें",
+      "from": "से",
+      "to": "को",
+      "subject": "विषय",
+      "noSubject": "(कोई विषय नहीं)"
+    },
+
+    "emailNotEnabled": {
+      "title": "Email अभी कनेक्ट नहीं है",
+      "description": "संदेश प्राप्त करने और जवाब देने के लिए agent के email चैनल को कॉन्फ़िगर करें।",
+      "cta": "Email कॉन्फ़िगर करें"
+    }
+  }
+}

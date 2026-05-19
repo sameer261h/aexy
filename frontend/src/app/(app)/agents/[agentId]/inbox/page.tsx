@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
   Mail,
   MailOpen,
@@ -100,19 +101,37 @@ function MessageCard({
 }) {
   const status = statusConfig[message.status] || statusConfig.pending;
   const priority = priorityConfig[message.priority] || priorityConfig.normal;
+  // Unread = still awaiting agent triage. After it's been processed/responded/
+  // escalated/archived, the row collapses to neutral weight so the eye can
+  // skip past resolved threads.
+  const isUnread = message.status === "pending";
 
   return (
     <button
       onClick={onClick}
       className={cn(
-        "w-full text-left p-4 border-b border-border hover:bg-muted/50 transition-colors",
-        isSelected && "bg-muted/50 border-l-2 border-l-blue-500"
+        "w-full text-left p-4 border-b border-border hover:bg-muted/50 transition-colors relative",
+        isSelected && "bg-muted/50",
+        isSelected && "before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-blue-500",
       )}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-sm font-medium text-foreground truncate">
+            {isUnread ? (
+              <span
+                className="h-1.5 w-1.5 rounded-full bg-blue-500 shrink-0"
+                aria-label="unread"
+              />
+            ) : null}
+            <span
+              className={cn(
+                "text-sm truncate",
+                isUnread
+                  ? "font-semibold text-foreground"
+                  : "font-normal text-muted-foreground",
+              )}
+            >
               {message.from_name || message.from_email}
             </span>
             {message.priority !== "normal" && (
@@ -121,7 +140,12 @@ function MessageCard({
               </span>
             )}
           </div>
-          <p className="text-sm text-foreground truncate">
+          <p
+            className={cn(
+              "text-sm truncate",
+              isUnread ? "text-foreground font-medium" : "text-muted-foreground",
+            )}
+          >
             {message.subject || "(No subject)"}
           </p>
           <p className="text-xs text-muted-foreground truncate mt-1">
@@ -376,6 +400,7 @@ function MessageDetail({
 }
 
 export default function AgentInboxPage() {
+  const ti = useTranslations("inbox");
   const params = useParams();
   const router = useRouter();
   const { currentWorkspace } = useWorkspace();
@@ -504,15 +529,17 @@ export default function AgentInboxPage() {
         ) : !agent?.email_enabled ? (
           <div className="text-center py-12">
             <Mail className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <h2 className="text-lg font-medium text-foreground mb-2">Email Not Enabled</h2>
+            <h2 className="text-lg font-medium text-foreground mb-2">
+              {ti("emailNotEnabled.title")}
+            </h2>
             <p className="text-muted-foreground mb-4">
-              Enable email for this agent to start receiving messages.
+              {ti("emailNotEnabled.description")}
             </p>
             <Link
-              href={`/settings/agents/${agentId}`}
+              href={`/agents/${agentId}/edit?tab=email`}
               className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
             >
-              Configure Email
+              {ti("emailNotEnabled.cta")}
               <ChevronRight className="h-4 w-4" />
             </Link>
           </div>

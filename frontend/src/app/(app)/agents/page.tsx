@@ -3,9 +3,9 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
 import {
-  ArrowLeft,
   Bot,
   Plus,
   Search,
@@ -31,6 +31,7 @@ import {
   ToolBadges,
 } from "@/components/agents/shared";
 import { EmptyState } from "@/components/EmptyState";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 function formatNumber(num: number): string {
   if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
@@ -233,10 +234,12 @@ function AgentCard({
 
 
 export default function AgentsListPage() {
+  const t = useTranslations("agents");
   const router = useRouter();
   const { currentWorkspaceId, currentWorkspaceLoading } = useWorkspace();
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<string>("all");
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [showFilters, setShowFilters] = useState(false);
 
@@ -259,12 +262,14 @@ export default function AgentsListPage() {
     }
   };
 
-  const handleDelete = async (agentId: string) => {
-    if (!confirm("Are you sure you want to delete this agent? This action cannot be undone.")) {
-      return;
-    }
+  const handleDelete = (agentId: string) => {
+    setDeleteTargetId(agentId);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTargetId) return;
     try {
-      await deleteAgent(agentId);
+      await deleteAgent(deleteTargetId);
     } catch (error) {
       console.error("Failed to delete agent:", error);
     }
@@ -332,21 +337,13 @@ export default function AgentsListPage() {
       <header className="border-b border-border bg-muted/50">
         <div className="max-w-6xl mx-auto px-4 py-4">
           <div className="flex items-center gap-4">
-            <Link
-              href="/dashboard"
-              className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition"
-            >
-              <ArrowLeft className="h-5 w-5" />
-            </Link>
             <div className="flex items-center gap-3 flex-1">
               <div className="p-2 bg-purple-500/20 rounded-lg">
                 <Bot className="h-5 w-5 text-purple-400" />
               </div>
               <div>
-                <h1 className="text-xl font-semibold text-foreground">AI Agents</h1>
-                <p className="text-muted-foreground text-sm">
-                  Create and manage intelligent automation agents
-                </p>
+                <h1 className="text-xl font-semibold text-foreground">{t("title")}</h1>
+                <p className="text-muted-foreground text-sm">{t("description")}</p>
               </div>
             </div>
             <Link
@@ -354,7 +351,7 @@ export default function AgentsListPage() {
               className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition text-sm font-medium"
             >
               <Plus className="h-4 w-4" />
-              Create Agent
+              {t("actions.createAgent")}
             </Link>
           </div>
         </div>
@@ -367,15 +364,15 @@ export default function AgentsListPage() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
           <div className="bg-muted rounded-xl p-4 border border-border">
             <div className="text-2xl font-bold text-foreground">{agents.length}</div>
-            <div className="text-sm text-muted-foreground">Total Agents</div>
+            <div className="text-sm text-muted-foreground">{t("stats.totalAgents")}</div>
           </div>
           <div className="bg-muted rounded-xl p-4 border border-border">
             <div className="text-2xl font-bold text-green-400">{activeCount}</div>
-            <div className="text-sm text-muted-foreground">Active Agents</div>
+            <div className="text-sm text-muted-foreground">{t("stats.activeAgents")}</div>
           </div>
           <div className="bg-muted rounded-xl p-4 border border-border">
             <div className="text-2xl font-bold text-foreground">{formatNumber(totalRuns)}</div>
-            <div className="text-sm text-muted-foreground">Total Executions</div>
+            <div className="text-sm text-muted-foreground">{t("stats.totalExecutions")}</div>
           </div>
         </div>
 
@@ -384,7 +381,7 @@ export default function AgentsListPage() {
           <SearchInput
             value={searchQuery}
             onChange={setSearchQuery}
-            placeholder="Search agents..."
+            placeholder={t("search.agents")}
             wrapperClassName="flex-1"
           />
           <button
@@ -397,7 +394,7 @@ export default function AgentsListPage() {
             )}
           >
             <Filter className="h-4 w-4" />
-            Filters
+            {t("actions.filters")}
             <ChevronDown
               className={cn("h-4 w-4 transition-transform", showFilters && "rotate-180")}
             />
@@ -409,13 +406,13 @@ export default function AgentsListPage() {
           <div className="bg-muted rounded-xl p-4 border border-border mb-6">
             <div className="flex flex-wrap gap-4">
               <div>
-                <label className="block text-sm text-muted-foreground mb-2">Type</label>
+                <label className="block text-sm text-muted-foreground mb-2">{t("config.type")}</label>
                 <select
                   value={filterType}
                   onChange={(e) => setFilterType(e.target.value)}
                   className="px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
                 >
-                  <option value="all">All Types</option>
+                  <option value="all">{t("types.allTypes")}</option>
                   {Object.entries(AGENT_TYPE_CONFIG).map(([key, config]) => (
                     <option key={key} value={key}>
                       {config.label}
@@ -424,15 +421,15 @@ export default function AgentsListPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm text-muted-foreground mb-2">Status</label>
+                <label className="block text-sm text-muted-foreground mb-2">{t("config.status")}</label>
                 <select
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
                   className="px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
                 >
-                  <option value="all">All Status</option>
-                  <option value="active">Active</option>
-                  <option value="inactive">Inactive</option>
+                  <option value="all">{t("status.allStatus")}</option>
+                  <option value="active">{t("status.active")}</option>
+                  <option value="inactive">{t("status.inactive")}</option>
                 </select>
               </div>
             </div>
@@ -443,22 +440,22 @@ export default function AgentsListPage() {
         {agents.length === 0 ? (
           <EmptyState
             icon={Bot}
-            title="No Agents Yet"
-            description="Create AI agents to automate email responses, schedule meetings, manage CRM data, and more."
+            title={t("empty.noAgentsTitle")}
+            description={t("empty.noAgentsDescription")}
             actions={[
-              { label: "Create Your First Agent", href: "/agents/new" },
+              { label: t("actions.createYourFirstAgent"), href: "/agents/new" },
             ]}
             steps={[
-              { label: "Choose an agent type", description: "Support, sales, scheduling, or custom" },
-              { label: "Configure tools & persona", description: "Set up what your agent can do" },
-              { label: "Activate and monitor", description: "Watch your agent handle tasks" },
+              { label: t("wizard.chooseType"), description: t("wizard.chooseTypeDescription") },
+              { label: t("wizard.configureTools"), description: t("wizard.configureToolsDescription") },
+              { label: t("wizard.activateAndMonitor"), description: t("wizard.activateAndMonitorDescription") },
             ]}
           />
         ) : filteredAgents.length === 0 ? (
           <EmptyState
             icon={Search}
-            title="No agents found"
-            description="Try adjusting your search or filters"
+            title={t("empty.noAgentsFound")}
+            description={t("empty.noAgentsFoundDescription")}
             compact
           />
         ) : (
@@ -476,6 +473,16 @@ export default function AgentsListPage() {
           </div>
         )}
       </main>
+
+      <ConfirmDialog
+        open={!!deleteTargetId}
+        onOpenChange={(open) => !open && setDeleteTargetId(null)}
+        title={t("confirmations.deleteAgentTitle")}
+        description={t("confirmations.deleteAgentDescription")}
+        confirmLabel={t("actions.deleteAgent")}
+        onConfirm={confirmDelete}
+        tone="danger"
+      />
     </div>
   );
 }

@@ -1,0 +1,56 @@
+{
+  "inbox": {
+    "title": "Agent Inbox",
+    "subtitle": "Conversations and replies handled by this agent",
+
+    "filter": {
+      "all": "All",
+      "open": "Open",
+      "awaitingReview": "Awaiting review",
+      "snoozed": "Snoozed",
+      "resolved": "Resolved",
+      "spam": "Spam"
+    },
+
+    "status": {
+      "open": "Open",
+      "awaitingReview": "Awaiting review",
+      "snoozed": "Snoozed",
+      "resolved": "Resolved",
+      "spam": "Spam"
+    },
+
+    "priority": {
+      "urgent": "Urgent",
+      "high": "High",
+      "normal": "Normal",
+      "low": "Low"
+    },
+
+    "list": {
+      "empty": "No messages here.",
+      "loading": "Loading messages…",
+      "unread": "{count} unread"
+    },
+
+    "detail": {
+      "selectAMessage": "Select a message to read",
+      "suggestedReply": "Suggested reply",
+      "sendReply": "Send reply",
+      "edit": "Edit",
+      "discard": "Discard",
+      "approve": "Approve & send",
+      "regenerate": "Regenerate",
+      "from": "From",
+      "to": "To",
+      "subject": "Subject",
+      "noSubject": "(no subject)"
+    },
+
+    "emailNotEnabled": {
+      "title": "Email isn't wired up yet",
+      "description": "Configure the agent's email channel to start receiving and replying to messages.",
+      "cta": "Configure email"
+    }
+  }
+}

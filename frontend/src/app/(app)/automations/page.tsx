@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
 import {
-  ChevronLeft,
   Plus,
   Zap,
   Play,
@@ -28,6 +28,7 @@ import { useAutomations } from "@/hooks/useAutomations";
 import { AutomationModule, Automation } from "@/lib/api";
 import { EmptyState } from "@/components/EmptyState";
 import { SearchInput } from "@/components/ui/search-input";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 const moduleLabels: Record<AutomationModule, string> = {
   crm: "CRM",
@@ -173,10 +174,12 @@ function AutomationCard({
 const ALL_MODULES: AutomationModule[] = ["crm", "tickets", "hiring", "email_marketing", "uptime", "sprints", "forms", "booking", "tracking", "compliance"];
 
 export default function AutomationsPage() {
+  const t = useTranslations("automations");
   const router = useRouter();
   const searchParams = useSearchParams();
   const { currentWorkspace } = useWorkspace();
   const workspaceId = currentWorkspace?.id || null;
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
   // Get initial module filter from URL
   const initialModule = searchParams.get("module") as AutomationModule | null;
@@ -206,10 +209,13 @@ export default function AutomationsPage() {
     window.history.replaceState({}, "", url.toString());
   };
 
-  const handleDeleteAutomation = async (id: string) => {
-    if (confirm("Delete this automation?")) {
-      await deleteAutomation(id);
-    }
+  const handleDeleteAutomation = (id: string) => {
+    setDeleteTargetId(id);
+  };
+
+  const confirmDeleteAutomation = async () => {
+    if (!deleteTargetId) return;
+    await deleteAutomation(deleteTargetId);
   };
 
   const handleCreateNew = () => {
@@ -224,26 +230,18 @@ export default function AutomationsPage() {
       <div className="p-8">
         <div className="max-w-6xl mx-auto">
           {/* Header */}
-          <div className="flex items-center gap-4 mb-6">
-            <button
-              onClick={() => router.push("/dashboard")}
-              className="p-2 hover:bg-muted rounded-lg text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <ChevronLeft className="h-5 w-5" />
-            </button>
-            <div className="flex w-full sm:flex-row flex-col sm:items-center sm:justify-between items-start">
-              <div className="flex-1">
-              <h1 className="text-2xl font-bold text-foreground">Automations</h1>
-              <p className="text-sm text-muted-foreground">Automate workflows across all Aexy modules</p>
+          <div className="flex w-full sm:flex-row flex-col sm:items-center sm:justify-between items-start mb-6 gap-3">
+            <div className="flex-1">
+              <h1 className="text-2xl font-bold text-foreground">{t("title")}</h1>
+              <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
             </div>
             <button
               onClick={handleCreateNew}
               className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-medium"
             >
               <Plus className="h-4 w-4" />
-              Create Automation
+              {t("createAutomation")}
             </button>
-            </div>
           </div>
 
           <UpgradeBanner trigger="automation_limit" compact />
@@ -256,7 +254,7 @@ export default function AutomationsPage() {
                 selectedModule === null ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              All Modules
+              {t("filter.allModules")}
             </button>
             {ALL_MODULES.map((module) => {
               const Icon = moduleIcons[module];
@@ -280,7 +278,7 @@ export default function AutomationsPage() {
             <SearchInput
               value={searchQuery}
               onChange={setSearchQuery}
-              placeholder="Search automations..."
+              placeholder={t("search.placeholder")}
               wrapperClassName="flex-1"
             />
           </div>
@@ -300,7 +298,7 @@ export default function AutomationsPage() {
                 ? `Create your first ${moduleLabels[selectedModule]} automation to streamline your workflows`
                 : "Create your first automation to streamline your workflows"}
               actions={[
-                { label: "Create Automation", onClick: handleCreateNew },
+                { label: t("createAutomation"), onClick: handleCreateNew },
               ]}
               templateHref="/templates?category=automations"
             />
@@ -319,6 +317,16 @@ export default function AutomationsPage() {
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTargetId}
+        onOpenChange={(open) => !open && setDeleteTargetId(null)}
+        title={t("delete.title")}
+        description={t("delete.description")}
+        confirmLabel={t("delete.confirm")}
+        onConfirm={confirmDeleteAutomation}
+        tone="danger"
+      />
     </div>
   );
 }

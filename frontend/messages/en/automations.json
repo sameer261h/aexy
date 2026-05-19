@@ -1,0 +1,81 @@
+{
+  "automations": {
+    "title": "Automations",
+    "subtitle": "Automate workflows across all Aexy modules",
+    "createAutomation": "Create Automation",
+    "untitled": "Untitled Automation",
+
+    "filter": {
+      "allModules": "All Modules"
+    },
+
+    "search": {
+      "placeholder": "Search automations..."
+    },
+
+    "stats": {
+      "total": "Total",
+      "active": "Active",
+      "paused": "Paused",
+      "draft": "Draft",
+      "executions": "Total Executions"
+    },
+
+    "status": {
+      "active": "Active",
+      "paused": "Paused",
+      "draft": "Draft",
+      "archived": "Archived"
+    },
+
+    "actions": {
+      "duplicate": "Duplicate",
+      "delete": "Delete",
+      "pause": "Pause",
+      "activate": "Activate",
+      "edit": "Edit",
+      "run": "Test run"
+    },
+
+    "save": {
+      "saving": "Saving…",
+      "saved": "Saved",
+      "savedAt": "Saved {time}",
+      "error": "Save failed",
+      "retry": "Retry"
+    },
+
+    "card": {
+      "executions": "{count, plural, =0 {No runs} =1 {1 run} other {# runs}}",
+      "lastRun": "Last run {when}",
+      "neverRun": "Never run",
+      "successRate": "{rate}% success"
+    },
+
+    "empty": {
+      "title": "No automations yet",
+      "description": "Connect a trigger to an action and let Aexy do the repetitive work. Start from a template or build your own.",
+      "primaryAction": "Browse templates",
+      "secondaryAction": "Start from scratch"
+    },
+
+    "delete": {
+      "title": "Delete this automation?",
+      "description": "All scheduled runs and execution history will be lost. This cannot be undone.",
+      "confirm": "Delete automation"
+    },
+
+    "removeAgentTrigger": {
+      "title": "Remove this agent trigger?",
+      "description": "The agent will no longer be invoked when this automation runs.",
+      "confirm": "Remove trigger"
+    },
+
+    "builder": {
+      "namePlaceholder": "Name this automation",
+      "addTriggerHint": "Pick a trigger to get started",
+      "addActionHint": "Drop an action next to the trigger",
+      "testRun": "Test run"
+    }
+  }
+}

@@ -2,6 +2,8 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
+import { Check, Loader2, AlertCircle } from "lucide-react";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Node, Edge } from "@xyflow/react";
 
@@ -40,7 +42,10 @@ interface Automation {
   is_active: boolean;
 }
 
+type SaveState = "idle" | "saving" | "saved" | "error";
+
 export default function EditAutomationPage() {
+  const t = useTranslations("automations");
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
@@ -53,6 +58,7 @@ export default function EditAutomationPage() {
   const [description, setDescription] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
 
   const workspaceId = currentWorkspace?.id;
 
@@ -94,21 +100,29 @@ export default function EditAutomationPage() {
     loadData();
   }, [workspaceId, automationId]);
 
-  // Update automation name/description when changed
+  // Update automation name/description when changed. Debounced — surfaces
+  // the save state so users can tell whether their edit landed.
   useEffect(() => {
     if (!workspaceId || !automationId || !automation) return;
+    if (name === automation.name && description === (automation.description || "")) {
+      return;
+    }
 
     const updateAutomation = async () => {
-      if (name !== automation.name || description !== (automation.description || "")) {
-        try {
-          await api.patch(`/workspaces/${workspaceId}/automations/${automationId}`, {
-            name,
-            description,
-          });
-          setAutomation((prev) => (prev ? { ...prev, name, description } : prev));
-        } catch (err) {
-          console.error("Failed to update automation:", err);
-        }
+      setSaveState("saving");
+      try {
+        await api.patch(`/workspaces/${workspaceId}/automations/${automationId}`, {
+          name,
+          description,
+        });
+        setAutomation((prev) => (prev ? { ...prev, name, description } : prev));
+        setSaveState("saved");
+        // Fade back to idle after a beat so the indicator doesn't stick.
+        const idleTimer = setTimeout(() => setSaveState("idle"), 1500);
+        return () => clearTimeout(idleTimer);
+      } catch (err) {
+        console.error("Failed to update automation:", err);
+        setSaveState("error");
       }
     };
 
@@ -268,11 +282,44 @@ export default function EditAutomationPage() {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="text-lg font-semibold text-foreground bg-transparent border-none focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-2 py-1 -ml-2"
-                  placeholder="Automation name"
+                  placeholder={t("builder.namePlaceholder")}
                 />
                 {automation?.module && (
                   <span className="text-sm text-muted-foreground bg-accent px-2 py-0.5 rounded">
                     {moduleLabels[automation.module] || automation.module}
+                  </span>
+                )}
+                {/* Live save state — visible feedback for the 1s-debounced
+                    PATCH so users aren't left guessing whether their edit
+                    landed. */}
+                {saveState !== "idle" && (
+                  <span
+                    className="flex items-center gap-1.5 text-xs"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {saveState === "saving" && (
+                      <>
+                        <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                        <span className="text-muted-foreground">{t("save.saving")}</span>
+                      </>
+                    )}
+                    {saveState === "saved" && (
+                      <>
+                        <Check className="h-3 w-3 text-emerald-500" />
+                        <span className="text-emerald-600 dark:text-emerald-400">
+                          {t("save.saved")}
+                        </span>
+                      </>
+                    )}
+                    {saveState === "error" && (
+                      <>
+                        <AlertCircle className="h-3 w-3 text-red-500" />
+                        <span className="text-red-600 dark:text-red-400">
+                          {t("save.error")}
+                        </span>
+                      </>
+                    )}
                   </span>
                 )}
               </div>
