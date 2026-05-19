@@ -6,6 +6,7 @@ import {
   Play,
   Pause,
   Maximize,
+  LayoutGrid,
   Loader2,
   Check,
   AlertCircle,
@@ -53,6 +54,9 @@ interface WorkflowToolbarProps {
   onUnpublish: () => Promise<void>;
   onTest: (recordId?: string) => Promise<void>;
   onFitView: () => void;
+  /** Optional. When wired, renders an Auto-layout button between
+   *  Fit-view and History. */
+  onAutoLayout?: () => void;
   onHistoryOpen?: () => void;
   onVersionHistoryOpen?: () => void;
   onTestResultsOpen?: () => void;
@@ -75,6 +79,7 @@ export function WorkflowToolbar({
   onUnpublish,
   onTest,
   onFitView,
+  onAutoLayout,
   onHistoryOpen,
   onVersionHistoryOpen,
   onTestResultsOpen,
@@ -237,8 +242,24 @@ export function WorkflowToolbar({
           title="Fit view"
           className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         >
-          <Maximize className="h-4 w-4" />
+          <Maximize className="h-4 w-4" aria-hidden />
         </button>
+
+        {/* UX-DEF-002: Auto-layout. Re-runs a topological left-to-right
+            layout so users who dragged nodes around have a one-click
+            "tidy up". Implemented as a heuristic BFS over edges (no
+            dagre dep yet) — gets messy automations into a readable
+            shape in one click. */}
+        {onAutoLayout && (
+          <button
+            onClick={onAutoLayout}
+            aria-label="Auto-layout"
+            title="Auto-layout (tidy)"
+            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          >
+            <LayoutGrid className="h-4 w-4" aria-hidden />
+          </button>
+        )}
 
         {/* History button */}
         {onHistoryOpen && (

@@ -250,6 +250,17 @@ function WorkflowCanvasInner({
   }, [nodes, getNodeErrors, highlightedNodeIds, nodeResultsMap, isTestRunning, testResult]);
 
   // Enhance edges with execution status
+  // UX-DEF-008 (branch-edge labels): derive a label from the source
+  // node's branch/condition definition so multi-branch workflows are
+  // readable. Lives in enhancedEdges (not onConnect) so renaming a
+  // branch's label propagates to the connected edges automatically.
+  // Indexed by node.id so the lookup is O(1) per edge.
+  const nodeIndex = useMemo(() => {
+    const map = new Map<string, Node>();
+    nodes.forEach((n) => map.set(n.id, n));
+    return map;
+  }, [nodes]);
+
   const enhancedEdges = useMemo(() => {
     return edges.map((edge) => {
       // Check if the source node has been executed successfully
@@ -275,6 +286,22 @@ function WorkflowCanvasInner({
         }
       }
 
+      // Resolve a branch label for the edge. Branch nodes carry
+      // `branches: [{id, label}]`; condition nodes use hard-coded
+      // true/false handles. Other source types have no branch label.
+      let branchLabel: string | undefined;
+      const sourceNode = nodeIndex.get(edge.source);
+      if (sourceNode && edge.sourceHandle) {
+        if (sourceNode.type === "branch") {
+          const branches = (sourceNode.data?.branches as Array<{ id: string; label: string }> | undefined) || [];
+          const match = branches.find((b) => b.id === edge.sourceHandle);
+          if (match?.label) branchLabel = match.label;
+        } else if (sourceNode.type === "condition") {
+          if (edge.sourceHandle === "true") branchLabel = "Yes";
+          else if (edge.sourceHandle === "false") branchLabel = "No";
+        }
+      }
+
       return {
         ...edge,
         type: "animated",
@@ -282,10 +309,11 @@ function WorkflowCanvasInner({
           ...edge.data,
           executionStatus,
           durationMs: sourceResult?.duration_ms,
+          label: branchLabel,
         },
       };
     });
-  }, [edges, nodeResultsMap]);
+  }, [edges, nodeResultsMap, nodeIndex]);
 
   // Handle test execution
   const handleTest = useCallback(async (recordId?: string) => {
@@ -357,6 +385,89 @@ function WorkflowCanvasInner({
     },
     []
   );
+
+  // UX-DEF-002: One-shot auto-layout. BFS from the set of "root"
+  // nodes (no incoming edges, in practice triggers) and assigns each
+  // node a `(depth, lane)` slot which maps to `(x, y)` on canvas. Pure
+  // frontend — no dagre dep. Gets a messy canvas tidy enough that the
+  // user can keep working without nodes overlapping the palette / FAB.
+  // Multi-root automations spread horizontally; cycles fall back to
+  // their existing position so we don't infinite-loop.
+  const onAutoLayout = useCallback(() => {
+    if (nodes.length === 0) return;
+    const HORIZONTAL_GAP = 280;
+    const VERTICAL_GAP = 140;
+    const ORIGIN = { x: 80, y: 80 };
+
+    const incomingByNode = new Map<string, string[]>();
+    const outgoingByNode = new Map<string, string[]>();
+    nodes.forEach((n) => {
+      incomingByNode.set(n.id, []);
+      outgoingByNode.set(n.id, []);
+    });
+    edges.forEach((e) => {
+      incomingByNode.get(e.target)?.push(e.source);
+      outgoingByNode.get(e.source)?.push(e.target);
+    });
+
+    // Roots = nodes with no incoming edge. Sorted by id for stable
+    // placement so re-running the layout doesn't shuffle lanes.
+    const roots = nodes
+      .filter((n) => (incomingByNode.get(n.id) ?? []).length === 0)
+      .map((n) => n.id)
+      .sort();
+
+    const depthByNode = new Map<string, number>();
+    const queue: Array<{ id: string; depth: number }> = roots.map((id) => ({ id, depth: 0 }));
+    const seen = new Set<string>();
+    while (queue.length > 0) {
+      const { id, depth } = queue.shift()!;
+      if (seen.has(id)) {
+        // Cycle — keep the earlier depth.
+        depthByNode.set(id, Math.max(depthByNode.get(id) ?? 0, depth));
+        continue;
+      }
+      seen.add(id);
+      depthByNode.set(id, Math.max(depthByNode.get(id) ?? 0, depth));
+      (outgoingByNode.get(id) ?? []).forEach((tgt) => {
+        queue.push({ id: tgt, depth: depth + 1 });
+      });
+    }
+    // Orphaned nodes (unreachable from any root) get depth 0 so they
+    // line up next to roots instead of vanishing.
+    nodes.forEach((n) => {
+      if (!depthByNode.has(n.id)) depthByNode.set(n.id, 0);
+    });
+
+    // Lane assignment per depth column. Stable order = source id then
+    // node id so repeated layout runs are idempotent.
+    const byDepth = new Map<number, string[]>();
+    nodes
+      .slice()
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .forEach((n) => {
+        const d = depthByNode.get(n.id) ?? 0;
+        if (!byDepth.has(d)) byDepth.set(d, []);
+        byDepth.get(d)!.push(n.id);
+      });
+
+    setNodes((current) =>
+      current.map((n) => {
+        const depth = depthByNode.get(n.id) ?? 0;
+        const lane = byDepth.get(depth)?.indexOf(n.id) ?? 0;
+        return {
+          ...n,
+          position: {
+            x: ORIGIN.x + depth * HORIZONTAL_GAP,
+            y: ORIGIN.y + lane * VERTICAL_GAP,
+          },
+        };
+      }),
+    );
+    setHasChanges(true);
+    // Re-fit after layout so the user immediately sees the result.
+    requestAnimationFrame(() => fitView({ padding: 0.2, duration: 400 }));
+  }, [nodes, edges, setNodes, fitView]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -841,6 +952,7 @@ function WorkflowCanvasInner({
               onUnpublish={onUnpublish}
               onTest={handleTest}
               onFitView={() => fitView()}
+              onAutoLayout={onAutoLayout}
               onHistoryOpen={() => setShowExecutionHistory(true)}
               onVersionHistoryOpen={() => setShowVersionHistory(true)}
               onTestResultsOpen={() => setShowTestResults(true)}
