@@ -26,6 +26,7 @@ import {
   getAgentTypeConfig,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { formatRelative } from "@/lib/datetime";
 import { SearchInput } from "@/components/ui/search-input";
 import { EmptyState } from "@/components/EmptyState";
 import {
@@ -94,16 +95,10 @@ function fromAutomation(automation: Automation): OperationRow {
   };
 }
 
-function formatRelative(value: string | null): string {
-  if (!value) return "";
-  const date = new Date(value);
-  const diff = Date.now() - date.getTime();
-  if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  if (diff < 2_592_000_000) return `${Math.floor(diff / 86_400_000)}d ago`;
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
+// formatRelative moved to lib/datetime.ts (UX-CPY-001) so the same
+// "5m ago" / "3h ago" semantics flow through agents + automations +
+// inbox instead of each surface re-implementing slightly different
+// thresholds.
 
 // ---------------------------------------------------------------------------
 // Page
@@ -466,7 +461,10 @@ function OperationListRow({ row }: { row: OperationRow }) {
         </span>
       </div>
 
-      <ChevronRight className="h-4 w-4 text-muted-foreground/60 group-hover:text-foreground transition-colors shrink-0" />
+      <ChevronRight
+        aria-hidden
+        className="h-4 w-4 text-muted-foreground/60 group-hover:text-foreground transition-colors shrink-0"
+      />
     </Link>
   );
 }

@@ -881,7 +881,27 @@ export default function AgentDetailPage() {
                 ) : executions.length === 0 ? (
                   <div className="text-center py-8">
                     <Activity className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-muted-foreground text-sm">No executions yet</p>
+                    <p className="text-muted-foreground text-sm mb-4">
+                      No executions yet
+                    </p>
+                    {/* UX-AGT-DTL-010: surface a primary action here so
+                        users coming straight to the detail page have
+                        an obvious next step instead of having to
+                        discover the Run option in the overflow menu. */}
+                    {!agent.is_system && agent.is_active ? (
+                      <button
+                        type="button"
+                        onClick={() => setShowRunDialog(true)}
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition text-sm font-medium"
+                      >
+                        <Zap className="h-4 w-4" />
+                        Run agent now
+                      </button>
+                    ) : !agent.is_active ? (
+                      <p className="text-xs text-muted-foreground">
+                        Activate the agent to start running it.
+                      </p>
+                    ) : null}
                   </div>
                 ) : (
                   executions.map((execution) => (

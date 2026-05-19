@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
 import {
@@ -61,22 +60,26 @@ function AgentCard({
   isToggling,
 }: AgentCardProps) {
   const [showMenu, setShowMenu] = useState(false);
-  const router = useRouter();
 
   const successRate =
     agent.total_executions > 0
       ? Math.round((agent.successful_executions / agent.total_executions) * 100)
       : 0;
 
+  // UX-AGT-DTL-009: wrap content in <Link> instead of <div onClick>.
+  // Middle / cmd-click open in a new tab, right-click "Copy link"
+  // works, screen readers announce as a link. Nested action buttons
+  // (toggle / delete / edit-menu) preventDefault to keep navigation
+  // tied to the card body click.
   return (
-    <div
+    <Link
+      href={`/agents/${agent.id}`}
       className={cn(
-        "bg-muted rounded-xl border transition-all cursor-pointer group",
+        "bg-muted rounded-xl border transition-all cursor-pointer group block",
         agent.is_active
           ? "border-border hover:border-border"
           : "border-border/50 opacity-75 hover:opacity-100"
       )}
-      onClick={() => router.push(`/agents/${agent.id}`)}
     >
       <div className="p-5">
         {/* Header */}
@@ -107,11 +110,16 @@ function AgentCard({
           <div className="flex items-center gap-2">
             <AgentStatusBadge isActive={agent.is_active} size="sm" />
             <div className="relative">
+              {/* Inline action buttons. preventDefault + stopPropagation
+                  keep the outer <Link> from navigating when the user
+                  is just opening / using the menu. */}
               <button
                 onClick={(e) => {
+                  e.preventDefault();
                   e.stopPropagation();
                   setShowMenu(!showMenu);
                 }}
+                aria-label="More actions"
                 className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition"
               >
                 <MoreVertical className="h-4 w-4" />
@@ -121,6 +129,7 @@ function AgentCard({
                   <div
                     className="fixed inset-0 z-10"
                     onClick={(e) => {
+                      e.preventDefault();
                       e.stopPropagation();
                       setShowMenu(false);
                     }}
@@ -136,6 +145,7 @@ function AgentCard({
                     </Link>
                     <button
                       onClick={(e) => {
+                        e.preventDefault();
                         e.stopPropagation();
                         onToggle(agent.id);
                         setShowMenu(false);
@@ -157,11 +167,12 @@ function AgentCard({
                     </button>
                     <button
                       onClick={(e) => {
+                        e.preventDefault();
                         e.stopPropagation();
                         onDelete(agent.id);
                         setShowMenu(false);
                       }}
-                      className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-muted flex items-center gap-2"
+                      className="w-full px-3 py-2 text-left text-sm text-red-600 dark:text-red-400 hover:bg-muted flex items-center gap-2"
                     >
                       <Trash2 className="h-4 w-4" />
                       Delete Agent
@@ -228,14 +239,13 @@ function AgentCard({
           </div>
         </div>
       </div>
-    </div>
+    </Link>
   );
 }
 
 
 export default function AgentsListPage() {
   const t = useTranslations("agents");
-  const router = useRouter();
   const { currentWorkspaceId, currentWorkspaceLoading } = useWorkspace();
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<string>("all");
@@ -408,8 +418,11 @@ export default function AgentsListPage() {
           <div className="bg-muted rounded-xl p-4 border border-border mb-6">
             <div className="flex flex-wrap gap-4">
               <div>
-                <label className="block text-sm text-muted-foreground mb-2">{t("config.type")}</label>
+                <label htmlFor="agents-filter-type" className="block text-sm text-muted-foreground mb-2">
+                  {t("config.type")}
+                </label>
                 <select
+                  id="agents-filter-type"
                   value={filterType}
                   onChange={(e) => setFilterType(e.target.value)}
                   className="px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
@@ -423,8 +436,11 @@ export default function AgentsListPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm text-muted-foreground mb-2">{t("config.status")}</label>
+                <label htmlFor="agents-filter-status" className="block text-sm text-muted-foreground mb-2">
+                  {t("config.status")}
+                </label>
                 <select
+                  id="agents-filter-status"
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
                   className="px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"

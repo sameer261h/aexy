@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
@@ -11,11 +12,11 @@ import {
   Pause,
   Trash2,
   Clock,
-  Edit2,
 } from "lucide-react";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useAutomations } from "@/hooks/useAutomations";
 import { AutomationModule, Automation } from "@/lib/api";
+import { formatAbsolute, formatRelative } from "@/lib/datetime";
 import { EmptyState } from "@/components/EmptyState";
 import { SearchInput } from "@/components/ui/search-input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -43,18 +44,23 @@ function AutomationCard({
   automation,
   onToggle,
   onDelete,
-  onEdit,
+  editHref,
 }: {
   automation: Automation;
   onToggle: () => void;
   onDelete: () => void;
-  onEdit: () => void;
+  editHref: string;
 }) {
   const t = useTranslations("automations");
+  // UX-AGT-DTL-009: wrap content in a real <Link> instead of
+  // <div onClick={onEdit}>. Middle-click / cmd-click now open in a
+  // new tab; right-click "Copy link" works; screen readers announce
+  // the row as a link. Nested action buttons keep their existing
+  // stopPropagation so they don't trigger the Link navigation.
   return (
-    <div
-      onClick={onEdit}
-      className="bg-muted/50 border border-border rounded-xl p-5 hover:border-blue-500/50 transition-colors cursor-pointer group"
+    <Link
+      href={editHref}
+      className="bg-muted/50 border border-border rounded-xl p-5 hover:border-blue-500/50 transition-colors cursor-pointer group block"
     >
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-3">
@@ -68,17 +74,18 @@ function AutomationCard({
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+        {/* Inline actions. preventDefault + stopPropagation each stop
+            the parent <Link> from navigating when the user wanted
+            Pause / Delete. The Edit-icon button is gone — the whole
+            card is already an edit-link, so it was redundant + nested
+            buttons inside <Link> is invalid HTML. */}
+        <div className="flex items-center gap-2">
           <button
-            onClick={onEdit}
-            aria-label="Edit automation"
-            title="Edit automation"
-            className="p-2 rounded-lg bg-accent text-muted-foreground hover:bg-blue-500/20 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
-          >
-            <Edit2 className="h-4 w-4" />
-          </button>
-          <button
-            onClick={onToggle}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggle();
+            }}
             aria-label={automation.is_active ? "Pause automation" : "Activate automation"}
             title={automation.is_active ? "Pause automation" : "Activate automation"}
             className={`p-2 rounded-lg transition-colors ${
@@ -90,7 +97,11 @@ function AutomationCard({
             {automation.is_active ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
           </button>
           <button
-            onClick={onDelete}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onDelete();
+            }}
             aria-label="Delete automation"
             title="Delete automation"
             className="p-2 rounded-lg bg-accent text-muted-foreground hover:bg-red-500/20 hover:text-red-600 dark:hover:text-red-400 transition-colors"
@@ -123,13 +134,21 @@ function AutomationCard({
           {t("card.runs", { count: automation.total_runs })}
         </span>
         {automation.last_run_at && (
-          <span className="flex items-center gap-1">
+          <span
+            className="flex items-center gap-1"
+            // UX-AUT-LST-010: title carries the absolute local time so
+            // users hovering can see the precise minute even though
+            // the visible label is relative ("3h ago"). Drops the
+            // date-only formatting that lost time-of-day in the prior
+            // implementation.
+            title={formatAbsolute(automation.last_run_at)}
+          >
             <Clock className="h-3 w-3" />
-            Last run: {new Date(automation.last_run_at).toLocaleDateString()}
+            Last run: {formatRelative(automation.last_run_at)}
           </span>
         )}
       </div>
-    </div>
+    </Link>
   );
 }
 
@@ -276,7 +295,7 @@ export default function AutomationsPage() {
                   automation={automation}
                   onToggle={() => toggleAutomation(automation.id)}
                   onDelete={() => handleDeleteAutomation(automation.id)}
-                  onEdit={() => router.push(`/automations/${automation.id}`)}
+                  editHref={`/automations/${automation.id}`}
                 />
               ))}
             </div>
