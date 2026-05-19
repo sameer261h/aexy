@@ -1,11 +1,32 @@
 """Client for integrating with the Mailagent service."""
 
+import hashlib
+import hmac
+import json
+import time
 import httpx
 from typing import Optional, Any
 from uuid import UUID
 from pydantic import BaseModel, EmailStr
 
 from aexy.core.config import get_settings
+
+
+def _sign_request(secret: str, body: bytes) -> dict[str, str]:
+    """Build the HMAC headers that mailagent's InternalAuthMiddleware expects.
+
+    See mailagent/middleware.py:_compute_signature for the wire format.
+    Same shape as Slack's webhook signature scheme: `HMAC-SHA256(secret,
+    "{timestamp}.{body}")`. Returns the two headers to attach to the
+    outbound request.
+    """
+    timestamp = str(int(time.time()))
+    payload = timestamp.encode("utf-8") + b"." + body
+    signature = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    return {
+        "X-Mailagent-Timestamp": timestamp,
+        "X-Mailagent-Signature": signature,
+    }
 
 
 class MailagentError(Exception):
@@ -175,6 +196,38 @@ class MailagentClient:
         **kwargs,
     ) -> dict:
         """Make HTTP request to Mailagent."""
+        # Sign every outbound request when the shared secret is configured.
+        # Mailagent's InternalAuthMiddleware will reject unsigned calls
+        # whenever its `internal_secret` is set — both sides should be set
+        # together in production.
+        settings = get_settings()
+        secret = getattr(settings, "mailagent_signing_secret", "")
+        if secret:
+            # The signature covers the actual body bytes mailagent will
+            # receive. Re-serialize whatever shape the caller passed so the
+            # HMAC stays consistent regardless of httpx's internal encoding.
+            if "json" in kwargs and "content" not in kwargs:
+                body = json.dumps(kwargs.pop("json")).encode("utf-8")
+                kwargs.setdefault("headers", {})["Content-Type"] = "application/json"
+                kwargs["content"] = body
+            elif "content" in kwargs:
+                body = kwargs["content"]
+                if isinstance(body, str):
+                    body = body.encode("utf-8")
+                    kwargs["content"] = body
+            elif "data" in kwargs:
+                # Form-encoded; httpx will encode it itself, but we need the
+                # bytes for the HMAC. Pre-encode here.
+                from urllib.parse import urlencode
+                body = urlencode(kwargs.pop("data")).encode("utf-8")
+                kwargs.setdefault("headers", {})["Content-Type"] = "application/x-www-form-urlencoded"
+                kwargs["content"] = body
+            else:
+                body = b""
+
+            signature_headers = _sign_request(secret, body)
+            kwargs.setdefault("headers", {}).update(signature_headers)
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
                 response = await client.request(method, self._url(path), **kwargs)

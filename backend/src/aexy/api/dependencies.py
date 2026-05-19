@@ -26,8 +26,16 @@ from aexy.schemas.dependency import (
 )
 from aexy.api.developers import get_current_developer
 from aexy.models.developer import Developer
+from aexy.services.workspace_service import WorkspaceService
 
 router = APIRouter(prefix="/dependencies")
+
+
+async def _require_member_of(
+    db: AsyncSession, workspace_id: str, developer_id: str, role: str = "member"
+) -> None:
+    if not await WorkspaceService(db).check_permission(workspace_id, developer_id, role):
+        raise HTTPException(status_code=403, detail="Workspace permission required")
 
 
 # ============================================================================
@@ -54,6 +62,11 @@ async def create_story_dependency(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dependent story not found",
         )
+
+    # Caller must be a member of the dependent story's workspace. The
+    # blocking story can be cross-workspace (this is intentional — see the
+    # is_cross_project flag below).
+    await _require_member_of(db, str(dependent_story.workspace_id), str(current_user.id))
 
     # Validate blocking story exists
     blocking_story = await db.get(UserStory, data.blocking_story_id)
@@ -108,7 +121,7 @@ async def create_story_dependency(
         updated_at=datetime.now(timezone.utc),
     )
 
-    session.add(dependency)
+    db.add(dependency)
     await db.commit()
     await db.refresh(dependency)
 
@@ -131,6 +144,8 @@ async def list_story_dependencies(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Story not found",
         )
+
+    await _require_member_of(db, str(story.workspace_id), str(current_user.id), "viewer")
 
     # Build query based on direction
     conditions = []
@@ -265,6 +280,9 @@ async def create_task_dependency(
             detail="Dependent task not found",
         )
 
+    # Caller must be a member of the dependent task's workspace.
+    await _require_member_of(db, str(dependent_task.workspace_id), str(current_user.id))
+
     # Validate blocking task exists
     blocking_task = await db.get(SprintTask, data.blocking_task_id)
     if not blocking_task:
@@ -316,7 +334,7 @@ async def create_task_dependency(
         updated_at=datetime.now(timezone.utc),
     )
 
-    session.add(dependency)
+    db.add(dependency)
     await db.commit()
     await db.refresh(dependency)
 

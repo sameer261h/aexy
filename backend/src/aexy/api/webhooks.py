@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aexy.api.email_tracking import get_client_ip
 from aexy.core.config import get_settings
 from aexy.core.database import get_db
 from aexy.services.webhook_handler import (
@@ -16,6 +17,37 @@ from aexy.services.github_task_sync_service import GitHubTaskSyncService
 
 router = APIRouter()
 settings = get_settings()
+
+
+# WS-082: per-source rate limiting on webhook ingestion. Combined with the
+# fail-closed signature checks (WS-056, WS-059), this caps the rate at
+# which a misconfigured or malicious sender can dispatch Temporal
+# workflows (each of which consumes LLM tokens).
+_GITHUB_WEBHOOK_LIMIT_PER_IP_PER_MIN = 600     # GitHub sends bursts on big pushes; generous cap.
+_AUTOMATION_WEBHOOK_LIMIT_PER_ID_PER_MIN = 60  # External system per automation.
+
+
+async def _enforce_webhook_rate_limit(scope_key: str, limit: int, window_seconds: int = 60) -> None:
+    """Sliding-window via Redis INCR + EXPIRE; fail-open on Redis errors."""
+    try:
+        import redis.asyncio as _aioredis
+        client = _aioredis.from_url(settings.redis_url)
+    except Exception:
+        return
+    try:
+        count = await client.incr(scope_key)
+        if count == 1:
+            await client.expire(scope_key, window_seconds)
+        if count > limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Webhook rate limit exceeded",
+            )
+    finally:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
 
 
 @router.post("/github")
@@ -36,6 +68,14 @@ async def handle_github_webhook(
             detail="Missing X-GitHub-Event header",
         )
 
+    # WS-082: rate-limit by source IP. GitHub's IPs are stable per
+    # installation; if an attacker spoofs a valid signature (after WS-059
+    # closed the fail-open) they still can't blast workflows.
+    await _enforce_webhook_rate_limit(
+        f"webhook:github:ip:{get_client_ip(request)}",
+        _GITHUB_WEBHOOK_LIMIT_PER_IP_PER_MIN,
+    )
+
     # Get raw body for signature verification
     body = await request.body()
 
@@ -43,13 +83,28 @@ async def handle_github_webhook(
     webhook_secret = settings.github_webhook_secret if hasattr(settings, 'github_webhook_secret') else ""
     handler = WebhookHandler(webhook_secret=webhook_secret)
 
-    # Verify signature (skip if no secret configured - dev mode)
-    if webhook_secret and x_hub_signature_256:
+    # Signature verification — fail closed in production. The previous
+    # `if secret and signature` shape silently accepted unsigned
+    # webhooks whenever the secret was misconfigured (empty), turning a
+    # config error into an open ingestion endpoint.
+    if webhook_secret:
+        if not x_hub_signature_256:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Missing X-Hub-Signature-256 header",
+            )
         if not handler.verify_signature(body, x_hub_signature_256):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid webhook signature",
             )
+    elif not settings.debug:
+        # No secret AND not in debug mode → refuse rather than fan
+        # out workflow dispatch from unauthenticated callers.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GitHub webhook is not configured",
+        )
 
     # Parse JSON payload
     try:
@@ -195,6 +250,35 @@ async def webhook_status() -> dict:
 # =============================================================================
 
 
+def derive_automation_webhook_secret(automation_id: str) -> str:
+    """Per-automation HMAC secret derived from the global settings.secret_key.
+
+    Avoids a migration to add a `webhook_secret` column on CRMAutomation.
+    The UI surfaces this derived value as the automation's webhook secret;
+    customers configure their external system to sign requests with it.
+    """
+    import hashlib
+    import hmac as _hmac
+    return _hmac.new(
+        settings.secret_key.encode("utf-8"),
+        f"automation:{automation_id}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _verify_automation_signature(automation_id: str, signature_header: str | None, body: bytes) -> bool:
+    """Verify `X-Aexy-Signature: sha256=<hex>` against the derived per-automation secret."""
+    import hashlib
+    import hmac as _hmac
+    if not signature_header:
+        return False
+    # Accept both `sha256=<hex>` and bare `<hex>` for client flexibility.
+    sig = signature_header.split("=", 1)[1] if "=" in signature_header else signature_header
+    secret = derive_automation_webhook_secret(automation_id)
+    expected = _hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return _hmac.compare_digest(expected, sig)
+
+
 @router.post("/automations/{automation_id}/trigger")
 async def trigger_automation_webhook(
     automation_id: str,
@@ -204,8 +288,11 @@ async def trigger_automation_webhook(
     """
     Trigger an automation workflow via webhook.
 
-    This is a public endpoint that allows external systems to trigger workflows.
-    The automation must have a webhook trigger type and be published.
+    Authenticated by HMAC: caller signs the raw body with the per-automation
+    secret returned by `derive_automation_webhook_secret`, sets the result
+    in `X-Aexy-Signature: sha256=<hex>`. In debug mode an unsigned request
+    is allowed for local testing; in production a missing/invalid signature
+    is a hard 401. (WS-056)
     """
     from datetime import datetime, timezone
     from uuid import uuid4
@@ -220,9 +307,27 @@ async def trigger_automation_webhook(
     from aexy.temporal.client import get_temporal_client
     from aexy.temporal.workflows.crm_workflow import CRMAutomationWorkflow, CRMWorkflowInput
 
+    # WS-082: per-automation rate limit so a leaked HMAC secret can't
+    # be used to fan out Temporal workflows unbounded.
+    await _enforce_webhook_rate_limit(
+        f"webhook:automation:{automation_id}",
+        _AUTOMATION_WEBHOOK_LIMIT_PER_ID_PER_MIN,
+    )
+
+    # Read raw body once so we can both verify the signature and JSON-parse it.
+    raw_body = await request.body()
+    signature_header = request.headers.get("X-Aexy-Signature") or request.headers.get("x-aexy-signature")
+    if not _verify_automation_signature(automation_id, signature_header, raw_body):
+        if not settings.debug:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Missing or invalid X-Aexy-Signature",
+            )
+
     # Get payload
     try:
-        payload = await request.json()
+        import json as _json
+        payload = _json.loads(raw_body) if raw_body else {}
     except Exception:
         payload = {}
 
@@ -266,15 +371,24 @@ async def trigger_automation_webhook(
         "workspace_id": automation.workspace_id,
         "triggered_at": datetime.now(timezone.utc).isoformat(),
         "payload": payload,
-        "source_ip": request.client.host if request.client else None,
+        # WS-083: use the shared get_client_ip helper which honours
+        # X-Forwarded-For; behind a load balancer `request.client.host`
+        # records the LB IP, blinding abuse forensics.
+        "source_ip": get_client_ip(request),
     }
 
-    # Check for record_id in payload
+    # Check for record_id in payload. The record must belong to the same
+    # workspace as the automation — without this, a caller with a valid
+    # signature for automation A in workspace WS-A can pump WS-B's CRM
+    # record data into WS-A's workflow context (WS-056).
     record_id = payload.get("record_id")
     record_data = {}
 
     if record_id:
-        stmt = select(CRMRecord).where(CRMRecord.id == record_id)
+        stmt = select(CRMRecord).where(
+            CRMRecord.id == record_id,
+            CRMRecord.workspace_id == automation.workspace_id,
+        )
         result = await db.execute(stmt)
         record = result.scalar_one_or_none()
         if record:

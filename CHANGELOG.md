@@ -5,6 +5,516 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.89] - 2026-05-19
+
+Post-review hardening for the 0.7.82-0.7.88 workspace-scope leak audit.
+The fixes were correct but a code review surfaced residual fail-open
+edges and missing test coverage; this release closes those.
+
+### Security
+
+- **Webhook signature verification is now fail-closed by default**
+  (`services/email_webhook_verify.py`). A new
+  `webhooks_require_signing` setting (default `True`) replaces the
+  prior behavior where each provider returned `True` when its env var
+  was missing. SES, SendGrid, Mailgun, and Postmark all reject events
+  outright when the required key isn't configured. Local development
+  can flip the flag off to fall back to the old accept-with-warning
+  behavior; production must keep the default.
+- **Mailagent path-bypass closed** (`mailagent/middleware.py:44`).
+  `_is_public_path` previously OR'd in `path.startswith(p)` (no
+  trailing slash), so `/healthcheck-evil` could skip HMAC auth on the
+  way to a route named with a public-prefix prefix. Tightened to
+  exact-match OR `startswith(p + "/")`.
+- **OAuth interceptor catches keyboard and programmatic navigation**
+  (`frontend/src/lib/oauth.ts`). The 0.7.85 implementation only
+  listened on `mousedown`, breaking OAuth login for keyboard users
+  (Tab + Enter on a focused login link) and any JS-driven navigation
+  (`window.location.assign("/auth/github/login")`). Now also installs
+  a capture-phase `keydown` listener and patches
+  `window.location.{assign,replace}` + the `href` setter so the
+  inflight marker is set on every navigation vector.
+- **Public booking enumeration rate-limit applied to every GET**
+  (`api/booking/public.py`). The 0.7.86 fix only guarded the workspace
+  lookup endpoint; the teams/team-by-id/event-type/slots endpoints
+  inherit the same throttle now via router-level `Depends`.
+- **Frame-ancestors regex tightened** (`frontend/next.config.js`).
+  Negative-lookahead now anchored to `embed/` so `/embedded-*` paths
+  still receive `X-Frame-Options: DENY` and
+  `frame-ancestors 'none'` instead of falling through both rules.
+
+### Added
+
+- `core/workspace_auth.py` — centralizes the
+  `assert_active_member(db, workspace_id, developer_id)` and
+  `assert_resource_in_workspace(db, model, id, workspace_id)`
+  helpers used across the 0.7.82-0.7.88 fixes. Call sites in
+  `app_access.py` and `manager_learning.py` switched to the helpers;
+  remaining inline copies will migrate opportunistically.
+- Regression tests:
+  - `backend/tests/unit/test_email_webhook_verify.py` — pins the
+    fail-closed default for all four providers and the SubscribeURL
+    SSRF guard.
+  - `backend/tests/unit/test_workspace_auth.py` — pins membership
+    checks (active vs pending/suspended/removed) and the
+    resource-in-workspace mismatch case.
+  - `mailagent/tests/test_internal_auth_middleware.py` — pins the
+    public-path matcher against prefix-bypass paths and the HMAC
+    sign/verify wire-format round-trip between backend and mailagent.
+  - `frontend/src/test/oauth.test.ts` — pins `safeInternalPath`
+    against open-redirect inputs and round-trips
+    `stashPostLoginRedirect`.
+
+### Changed
+
+- Middleware redirect to `/?next=...` is now consumed.
+  `frontend/src/app/page.tsx` stashes the (validated) `next` path in
+  `sessionStorage` for the OAuth flow, and `useSetToken` honours it
+  after onboarding completes. Open-redirect protection enforced by
+  `safeInternalPath`.
+
+## [0.7.88] - 2026-05-19
+
+Closes the last 9 `suspect` rows in the workspace-scope leak tracker.
+Five close as fixed with concrete patches; four close as verified-`ok`
+or covered by prior fixes. Tracker is now zero open across every
+severity.
+
+### Security
+
+- **App access** (WS-053) — `update_member_access` and
+  `apply_template_to_member` (`api/app_access.py`) now verify the
+  target `developer_id` is an active `WorkspaceMember` of the route's
+  workspace, and that the `applied_template_id` belongs to that
+  workspace (or is a system template with `workspace_id` NULL).
+- **Manager learning** (WS-055) — `create_learning_goal`
+  (`api/manager_learning.py`) verifies `data.developer_id` is an
+  active `WorkspaceMember` of `current_workspace_id` before stamping
+  a goal. Approval/budget routes follow the existing-goal chain so
+  they inherit the same scope.
+- **Custom reports** (WS-049) — `ReportBuilderService.list_reports`
+  no longer surfaces `is_public=True` reports cross-tenant in the
+  default listing. Public reports now require an explicit matching
+  `organization_id` filter to appear. The reports route doesn't
+  pass `organization_id` today, so the default listing returns the
+  caller's own reports only.
+- **Tracking helper** (WS-020) — `get_developer_team`
+  (`api/tracking.py`) now accepts an optional `workspace_id` and
+  constrains the team join via `Team.workspace_id`. Existing call
+  sites keep historical "first team found" semantics; workspace-
+  prefixed routes can opt in.
+
+### Documentation
+
+- Tracker rows WS-015 (exports), WS-016 (code insights), WS-017
+  (sprint analytics), WS-018 (public renderers), WS-019 (learning
+  services) closed as verified-`ok` or covered by prior fixes
+  (WS-009, WS-039, WS-041, WS-051, WS-055, WS-060, WS-061, WS-066,
+  WS-067, WS-068, WS-074). Each row now records the evidence used to
+  close it.
+
+## [0.7.87] - 2026-05-19
+
+Closes the seven `Medium`/`Low` confirmed rows in the workspace-scope
+leak tracker (WS-013, WS-065, WS-069, WS-070, WS-075, WS-082, WS-083).
+
+### Security
+
+- **Leave approver lookup** (WS-013) —
+  `LeaveRequestService._find_approver` now joins `Team` and constrains
+  `Team.workspace_id == workspace_id`, so a developer's team lead in
+  another workspace can no longer become the approver on this
+  workspace's leave requests.
+- **Roadmap requests** (WS-065) — added `_check_roadmap_rate_limit`
+  (Redis sliding window: 10 creates / 50 votes per developer per
+  hour) on `public_projects.create_roadmap_request` and
+  `vote_roadmap_request`. Caps the spam vector while keeping the
+  public roadmap open to any authenticated developer.
+- **One-click unsubscribe** (WS-069) — `/u/{token}` now serves a
+  confirmation page on GET and only mutates subscriber state on POST.
+  Email prefetchers and link-checkers no longer trigger unsubscribes
+  while mail clients implementing RFC 8058's `List-Unsubscribe-Post`
+  still work.
+- **Email click tracker** (WS-070) — `_record_click_event` resolves
+  the `?r=<recipient_id>` query parameter and drops the attribution
+  if `recipient.campaign_id != link.campaign_id`. The click is still
+  recorded at the link level; only the forged per-recipient
+  attribution is rejected.
+- **Webhook rate limits** (WS-082) — `_enforce_webhook_rate_limit`
+  (Redis sliding window) applied to `/webhooks/github` (600 per IP
+  per minute) and `/webhooks/automations/{id}/trigger` (60 per
+  automation per minute). Caps Temporal workflow / LLM token spam.
+- **Webhook source-IP capture** (WS-083) —
+  `/webhooks/automations/{id}/trigger` now records `source_ip` via
+  the shared `get_client_ip` helper instead of `request.client.host`,
+  so the captured IP honours `X-Forwarded-For` behind a load
+  balancer.
+- **`(app)/layout.tsx`** (WS-075) — adds `queryClient.clear()` before
+  the `isResolved && !isAuthenticated` redirect fires, eliminating
+  the brief window during a cross-tab logout where ghost-cached
+  React Query workspace data could be visible. The workspace-scoped
+  providers (`ChatWebSocketProvider`, `WorkspaceSearchPalette`,
+  `FloatingChatWidget`) were already gated on
+  `isResolved && isAuthenticated`.
+
+## [0.7.86] - 2026-05-19
+
+Closes the remaining `High` rows in the workspace-scope leak tracker
+(WS-060, WS-061, WS-067, WS-068) plus seven related Medium/Low rows on
+the public/embed surface. Tracker now has zero open `Critical` or `High`
+items.
+
+### Security
+
+- **Public booking surface** (`booking/public.py`) —
+  `get_workspace_teams`, `get_team_info`, and the booking confirmation
+  response no longer leak member emails. Only `id`/`name`/`avatar_url`
+  is exposed. A new Redis-backed per-IP rate limit (30/min) gates
+  `GET /public/book/{workspace_slug}` to make slug enumeration costly.
+  Closes WS-060, WS-064.
+- **Public project surface** (`public_projects.py`) — added
+  `_project_team_ids` helper. Backlog, board, stories, goals, roadmap,
+  sprints, and timeline endpoints now intersect with `ProjectTeam` /
+  `GoalProject` so a public project never leaks data from the other
+  projects in the same workspace. `_fetch_sprints_with_stats` accepts
+  a `team_ids` parameter; all callers now pass it. No schema migration
+  required. Closes WS-061.
+- **Calendar OAuth** (`booking/calendars.py`) — `start_oauth` signs
+  `settings.frontend_url` into state instead of the request `Origin`
+  header. Callback always redirects to `settings.frontend_url`,
+  ignoring any legacy signed value. Open-redirect via OAuth state is
+  closed. Closes WS-063.
+- **Booking webhook admin CRUD** (`booking/webhooks.py`) — added
+  `_require_workspace_admin` helper applied to every route
+  (list/create/get/secret/update/delete/test). An authenticated user
+  from workspace A can no longer read/modify webhooks (or their HMAC
+  secrets) for workspace B. Closes WS-062.
+- **Public table share links** (`public_tables.py`,
+  `models/crm.py`) — added `TableShareLink.allowed_origins` column
+  (migration `backend/scripts/migrate_table_share_link_allowed_origins.
+  sql`) plus `_origin_matches` helper. Every `/public/tables/{token}*`
+  route now rejects requests whose `Origin` header isn't in the link's
+  allowlist (NULL/empty preserves legacy behaviour). Closes WS-066,
+  WS-074.
+- **Assessment public-take** (`assessment_take.py`) —
+  `get_assessment_by_public_token_or_id` no longer accepts the
+  assessment UUID as a fallback for the public token; only
+  `public_token` matches. Candidate creation in `start_assessment`
+  goes through a Redis sliding-window rate limit
+  (`_check_candidate_create_rate_limit`): 5 candidates per IP per hour
+  and 50 per assessment per hour. Email-verification flow remains
+  backlog. Closes WS-067 fully and WS-068 partial.
+- **RSVP** (`booking/booking_service.py`) — `respond_to_rsvp` is now
+  single-shot: refuses to process an attendee that already has
+  `responded_at` set, and rotates `response_token` after the first
+  use. A leaked email link can no longer be replayed to flip the
+  response later. Closes WS-076.
+
+## [0.7.85] - 2026-05-19
+
+Closes the remaining four `Critical` and most of the `High` rows in the
+workspace-scope leak tracker: frontend OAuth + framing hardening,
+mailagent isolation, automation webhook signing, and per-provider email
+webhook signature verification.
+
+### Security
+
+- **Automation webhook HMAC** (WS-056) — `POST /webhooks/automations/
+  {id}/trigger` now requires `X-Aexy-Signature: sha256=<hex>` over the
+  raw body, verified with a per-automation HMAC secret derived as
+  `HMAC(settings.secret_key, "automation:" + automation_id)`. Lets us
+  ship signature verification without a `webhook_secret` column
+  migration on `CRMAutomation`; the UI surfaces this derived value as
+  the automation's webhook secret. `record_id` is now constrained to
+  `CRMRecord.workspace_id == automation.workspace_id` before loading.
+- **Email provider webhooks** (WS-057, WS-058, WS-081) — new
+  `services/email_webhook_verify.py` implements:
+  - SendGrid: ECDSA over `timestamp + body` against the configured
+    public key (`X-Twilio-Email-Event-Webhook-Signature`).
+  - Mailgun: HMAC over `timestamp + token` with the signing key.
+  - Postmark: HTTP Basic Auth against the configured `user:pass`.
+  - SES (via SNS): topic-ARN allowlist plus a hostname check on the
+    SNS `SubscribeURL` that restricts auto-confirmation to
+    `sns.<region>.amazonaws.com` (fixes the prior blind-SSRF).
+  Each provider handler now resolves the workspace from the
+  signature-verified sender via `SendingDomain.domain` lookup first,
+  and only falls back to the legacy `message_id` lookup when no
+  matching sending domain exists. New settings:
+  `sendgrid_webhook_public_key`, `mailgun_webhook_signing_key`,
+  `postmark_webhook_basic_auth`, `ses_sns_topic_arn_allowlist`.
+- **Mailagent zero-auth** (WS-077, WS-078, WS-079, WS-080) — new
+  `mailagent/middleware.py` `InternalAuthMiddleware` requires
+  `X-Mailagent-Signature: HMAC-SHA256(internal_secret, timestamp + "." +
+  body)` on every non-public route with a ±5min replay window. The
+  Aexy backend's `mailagent_client._request` signs every outbound call
+  when `settings.mailagent_signing_secret` is configured. CORS now
+  only mounts when `cors_allowed_origins` is set (default empty —
+  server-to-server only), and `allow_credentials` is False. `/send/
+  email` validates `from_address.domain` against the verified
+  `mailagent_domains` catalog and strips arbitrary headers down to a
+  whitelist of threading/unsubscribe ones. Per-workspace
+  `EmailProvider` isolation (full WS-079) is parked as a backlog
+  item — the unauthenticated-access vector is now closed.
+- **Frontend OAuth callback** (WS-071b) — `/auth/callback` now calls
+  `consumeOAuthInflight()` and rejects the URL token (redirects to
+  `/?error=oauth_state_missing`) when the marker isn't present. A new
+  document-level `OAuthInflightTagger` (mounted in `providers.tsx`)
+  watches mousedown events for any `<a href>` matching
+  `/auth/<provider>/(login|connect|connect-crm)` and sets the marker
+  just before navigation. Catches the inline anchor login buttons in
+  `app/page.tsx` and `LandingHeader.tsx` without modifying every
+  callsite. The matching `/p/[publicSlug]` handler (WS-071) is
+  refactored to use the same shared `lib/oauth.ts` helper.
+- **Frontend middleware auth gate** (WS-072) — `middleware.ts` now
+  redirects auth-required path prefixes to `/?next=<path>` when the
+  `aexy_authed` presence cookie is absent. The cookie is mirrored from
+  `localStorage["token"]` by `useAuth` on mount and at
+  `setToken`/`logout`. The JWT itself remains in localStorage and is
+  still validated by the API; the cookie just prevents the SSR app
+  shell from leaking placeholders to logged-out users.
+- **Frame-ancestors / clickjacking** (WS-073) — `next.config.js` now
+  configures `headers()`: `X-Frame-Options: DENY` + CSP
+  `frame-ancestors 'none'` everywhere except `/embed/*` (which gets
+  `frame-ancestors *` until per-link origin allowlisting moves to the
+  API side under WS-074). Also adds `Referrer-Policy:
+  strict-origin-when-cross-origin` and `X-Content-Type-Options:
+  nosniff` site-wide.
+
+## [0.7.84] - 2026-05-19
+
+Closes 24 `High` and `Medium` ID-forgery rows in the workspace-scope leak
+tracker (WS-010..014, WS-027..041, WS-044..047, WS-050..052, WS-054).
+Each fix follows the same shape: load the referenced resource by id and
+assert its `workspace_id` matches the route's workspace before delegating
+to the service.
+
+### Security
+
+- **CRM notes & activities** (`crm.py`) — note CRUD and per-record
+  activity list now verify `CRMRecord.workspace_id == workspace_id`
+  before exposing sub-resources. Stops `POST /workspaces/A/crm/records/
+  <B_record_id>/notes`. Closes WS-027, WS-028.
+- **Data tables / forms** (`tables.py`, `forms.py`) — `list_fields`
+  now 404s on cross-workspace tables; `delete_field` and
+  `reorder_fields` verify form-in-workspace and field-in-form before
+  mutating. Closes WS-029, WS-030.
+- **AI agents** (`agents.py`, `agent_policies.py`,
+  `automation_agents.py`) — added `_assert_agent_in_workspace` helper
+  applied to all inbox actions (get/reply/escalate/archive/process),
+  routing-rule delete, agent-policy create, and automation-agent
+  trigger config. Routing-rule delete additionally verifies the rule
+  belongs to the agent. Closes WS-031..034.
+- **Goals / Epics / Stories / Releases / Sprint Tasks** — every
+  cross-resource link operation now verifies the target shares the
+  workspace: `link_project`, `link_epic`, `add_tasks_to_epic`,
+  `add_tasks_to_story`, `add_sprint_to_release`,
+  `add_stories_to_release`, and sprint-task bulk_assign/status/move.
+  Sprint-task `bulk_move` also requires the target sprint to share
+  the workspace. The `get_sprint_and_check_permission` helper now
+  returns the sprint object so call-sites can scope queries to it.
+  Closes WS-035..039.
+- **On-call** (`oncall.py`) — `verify_workspace_access` now accepts
+  `team_id` and asserts `Team.workspace_id == workspace_id`. All call
+  sites updated. Closes WS-040.
+- **Sprints by team** (`sprints.py`) — `list_sprints` and
+  `get_active_sprint` verify `Team.workspace_id == workspace_id`.
+  Closes WS-041.
+- **Team calendar** (`team_calendar.py`) — three GET endpoints now
+  require workspace viewer-role membership and (when `team_id` is
+  supplied) verify the team's workspace. Closes WS-010.
+- **Tracking team dashboard** (`tracking.py`) —
+  `get_team_tracking_dashboard` now resolves the team's workspace and
+  requires caller viewer-role before reading standups/blockers/time
+  logs. Closes WS-011.
+- **Dependency APIs** (`dependencies.py`) — added `_require_member_of`
+  helper. Caller must be a member of the dependent story/task's
+  workspace before creating or listing dependencies. Also fixed a
+  pre-existing `session.add(...)` NameError on both `create_story_
+  dependency` and `create_task_dependency`. Closes WS-012.
+- **Chat** (`chat_service.py`, `chat.py`) — `update_message` and
+  `delete_message` now accept `workspace_id` and constrain the lookup
+  via a `ChatChannel.workspace_id` join. A sender who is a member of
+  multiple workspaces can no longer edit a message in workspace B by
+  hitting workspace A's route. Closes WS-014.
+- **Leave management** (`leave.py`) — added generic
+  `_assert_resource_in_workspace` helper. Applied to update/delete of
+  `LeaveType` (admin-only), `LeavePolicy` (admin-only), `Holiday`
+  (admin-only), and leave-request approve/reject/cancel/withdraw.
+  `get_developer_balance` requires admin and verifies target is a
+  workspace member; `get_team_balances` verifies `Team.workspace_id`.
+  Closes WS-044..047.
+- **Google email-to-record link** (`google_integration.py`) —
+  `link_email_to_record` now verifies the CRM record belongs to the
+  caller's workspace before inserting the link. Closes WS-050.
+- **Entity activity / comments** (`entity_activity.py`) — added
+  `_entity_model` mapping plus `_assert_entity_in_workspace` helper
+  applied to both `create_activity` and `add_comment`. Validates the
+  10 most common workspace-scoped entity types (task/story/epic/
+  release/goal/crm_record/project/sprint/form/leave_request);
+  remaining types continue to be stamped pending follow-up. Closes
+  WS-051 (partial — see helper note).
+- **Reminders** (`reminders.py`) — control-owner update/delete and
+  domain-team-mapping delete now verify the target's `workspace_id`
+  matches the route. Closes WS-052.
+- **Planning poker** (`planning_poker.py`) —
+  `get_poker_session_state` and the WebSocket entrypoint now resolve
+  the sprint and require viewer-role membership of
+  `sprint.workspace_id`. WebSocket rejects with 4003/4004 on miss.
+  Closes WS-054.
+
+## [0.7.83] - 2026-05-19
+
+Continues the workspace-scope leak audit by closing four more `Critical`
+rows from the tracker: three legacy unauthenticated APIs and the GitHub
+webhook fail-open.
+
+### Security
+
+- Legacy analytics API (`/analytics/*`) — every endpoint now binds
+  `current_user_id` (was discarded as `_`) and runs each request's
+  `developer_ids` (or path `developer_id`) through a
+  `_require_developers_visible` check that requires every target to
+  share an active workspace with the caller. Rejects (403) the whole
+  request rather than silently dropping invisible developers. Closes
+  WS-007.
+- Hiring intelligence API (`/hiring/*` section 1) — added
+  `get_current_developer` to every route in the unauth section
+  (team-gaps, bus-factor, roadmap-skills, requirements list/create/get
+  /jd/rubric/scorecard/status). Helpers `_resolve_team_workspace_or_403`,
+  `_require_developers_visible`, `_require_requirement_workspace_member`
+  enforce workspace membership for the supplied `team_id` /
+  `organization_id` / `requirement_id`. JD generation, rubric
+  generation, requirement create/status update now require workspace
+  admin role. Closes WS-008.
+- Learning paths API (`/learning/*`) — all 16 endpoints require
+  authentication. Personal endpoints (list paths, generate path,
+  stretch tasks) require the caller to be the target developer or
+  hold admin role in a workspace the developer is a member of.
+  Path-scoped endpoints (get/regenerate/progress/milestones/activities
+  /recommended courses) use `_require_path_access` to resolve owner
+  via the path itself. Pause/resume/abandon are owner-only.
+  Team-scoped overview and recommendations require active membership
+  in the team's workspace. Closes WS-009.
+- GitHub webhook (`/webhooks/github`) — fail-closed when a webhook
+  secret is configured: the `X-Hub-Signature-256` header is now
+  mandatory (401 if missing) and verified. When no secret is
+  configured the route returns 503 unless `settings.debug` is True;
+  prevents an empty/typoed env-var from turning ingestion into an
+  open endpoint. Closes WS-059.
+
+## [0.7.82] - 2026-05-19
+
+This release closes nine `Critical` authentication-bypass issues uncovered
+by a platform-wide workspace-scope leak audit. A third pass added 28 new
+tracker rows (WS-056..WS-083) covering the frontend, public/embed
+surfaces, mailagent, and webhook ingress, with one same-day fix applied
+to a frontend session-hijack vector.
+
+### Security
+
+- Notifications API (`/notifications/*`) now binds the developer
+  identity to the JWT via `Depends(get_current_developer_id)` on every
+  one of its 19 endpoints. The previous `developer_id: str = Query(...)`
+  parameter (used as authentication by every list/preference/push/admin
+  route) is removed. Closes WS-042.
+- Slack integration (`/slack/*`) — every admin-surface route now
+  requires authentication and verifies the caller is an active
+  owner/admin of the integration's workspace via a shared
+  `require_integration_admin` helper. OAuth `/install` and `/connect`
+  derive the installer id from the current user, not a query
+  parameter. The signed webhook routes (`/commands`, `/events`,
+  `/interactions`) and the OAuth `/callback` remain public as
+  intended. Closes WS-043.
+- Reviews API (`/reviews/*`) — the entire surface (~28 endpoints
+  covering cycles, individual reviews, work goals, peer requests,
+  contribution summaries) now requires `Depends(get_current_developer)`
+  and enforces resource-appropriate authorization: cycle CRUD requires
+  workspace admin; individual-review reads require reviewee / manager
+  / peer-reviewer / workspace-admin; goal edits require ownership; peer
+  request actions require the actual party. Closes WS-021 through
+  WS-026.
+- Predictive analytics (`/predictions/*`) now binds `current_user_id`
+  (was discarded as `_`) and requires the caller to share an
+  active workspace with the target developer at admin role for
+  attrition / burnout / trajectory / insights endpoints. Team-health
+  POST verifies admin permission in the supplied `team_id`'s
+  workspace, or falls back to per-developer visibility. Closes WS-048.
+- Frontend public project page (`/p/[publicSlug]`) no longer silently
+  writes a URL `?token=` query parameter into `localStorage["token"]`.
+  Token consumption now requires a one-shot `oauthInflight`
+  sessionStorage marker set by the page's own OAuth login button
+  immediately before navigating to the provider. Without that marker
+  the token is stripped from the URL and discarded. Closes WS-071; the
+  residual `/auth/callback` variant is tracked as WS-071b.
+
+### Documentation
+
+- Updated `docs/workspace-scope-leak-tracker.md` with 28 new findings
+  (WS-056..WS-083) covering: cross-workspace CRMRecord pumping through
+  the unauthenticated automation webhook (WS-056), every email
+  provider webhook lacking signature verification (WS-057), an SSRF
+  in the SES `SubscribeURL` auto-confirm flow (WS-058), GitHub
+  webhook fail-open when no secret configured (WS-059), public
+  project endpoints returning entire workspace's data rather than
+  project-scoped data (WS-061), assessment public-token bypass
+  (WS-067), Candidate fan-out without verification (WS-068),
+  mailagent's zero-auth admin surface (WS-077), and cross-tenant
+  event injection through `message_id` lookup (WS-081). Each existing
+  fixed row was relabelled with file:line evidence pointing at the
+  patch.
+
+## [0.7.81] - 2026-05-19
+
+This release hardens analytics authorization, scopes repository insights
+strictly to adopted workspace repos, and adds an evidence drill-down on
+the team insights page.
+
+### Added
+
+- Added an `AnalyticsDetailsModal` on the team insights page with
+  Summary / Sources / Commits tabs surfacing the rows behind each
+  aggregate. A workspace-admin-only Raw tab exposes the underlying
+  JSON for debugging.
+- Added `commits_synced`, `prs_synced`, `reviews_synced` to the
+  workspace repository response, overlayed from the adopter's
+  `DeveloperRepository` row so the catalog and analytics agree on sync
+  state during the sync-pipeline migration.
+
+### Changed
+
+- Repository insights now intersect a workspace member's commits and PRs
+  against the workspace's adopted-repo allow-list, so a member's
+  personal or open-source contributions no longer leak into team-level
+  insights.
+- Team insights now refuse requests from non-active workspace members.
+  Removed and suspended members keep their historical attribution but
+  cannot keep calling analytics endpoints.
+- Project and sprint PR search and the GitHub task sync explicitly scope
+  by `WorkspaceRepository.workspace_id`, making the cross-workspace
+  guarantee a query invariant instead of relying on data invariants.
+
+### Security
+
+- Closed six unauthenticated reads in `/intelligence/team/{workspace_id}`
+  endpoints (burnout, expertise, collaboration, collaboration graph,
+  complexity, technology) that previously returned data when the caller
+  was not a workspace member.
+- Gated the analytics modal Raw tab behind workspace admin so commit
+  author emails are not exposed to non-admin viewers.
+- Workspace-member-based authorization now uniformly requires active
+  membership. A teammate marked as "left" keeps their historical
+  attribution but can no longer read workspace notification settings,
+  AI code insights, role-gated resources via `is_owner`, billing
+  fallback workspaces, or per-app permission paths. Affects
+  `notifications.py`, `code_insights.py`, `workspace_service.is_owner`,
+  `billing.py` workspace selection, and `app_access_service` member
+  lookup (which protects four downstream config callsites).
+
+### Fixed
+
+- Fixed a `NameError` in the project PR search endpoint where the team
+  variable was bound in the wrong function.
+
 ## [0.7.80] - 2026-05-19
 
 This release improves developer identity handling in insights and adds

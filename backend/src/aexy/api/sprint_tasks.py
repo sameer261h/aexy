@@ -149,7 +149,8 @@ async def get_sprint_and_check_permission(
     db: AsyncSession,
     required_role: str = "member",
 ):
-    """Get sprint and check workspace permission."""
+    """Get sprint and check workspace permission. Returns the sprint so callers
+    can scope follow-up queries to `sprint.workspace_id`."""
     sprint_service = SprintService(db)
     workspace_service = WorkspaceService(db)
 
@@ -166,6 +167,30 @@ async def get_sprint_and_check_permission(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not a member of this workspace",
+        )
+
+    return sprint
+
+
+async def _filter_task_ids_to_workspace(
+    db: AsyncSession, task_ids: list[str], workspace_id: str
+) -> None:
+    """Reject the entire bulk op if any task id is outside this workspace."""
+    if not task_ids:
+        return
+    from aexy.models.sprint import SprintTask
+    valid = (
+        await db.execute(
+            select(SprintTask.id).where(
+                SprintTask.id.in_(task_ids),
+                SprintTask.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().all()
+    if len(valid) != len(set(task_ids)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="One or more tasks do not belong to this workspace",
         )
 
     return sprint
@@ -239,7 +264,9 @@ async def bulk_assign_tasks(
     db: AsyncSession = Depends(get_db),
 ):
     """Bulk assign multiple tasks."""
-    await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+    sprint = await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+    task_ids = [a.get("task_id") for a in data.assignments if a.get("task_id")]
+    await _filter_task_ids_to_workspace(db, task_ids, str(sprint.workspace_id))
 
     task_service = SprintTaskService(db)
     tasks = await task_service.bulk_assign_tasks(data.assignments)
@@ -256,7 +283,8 @@ async def bulk_update_status(
     db: AsyncSession = Depends(get_db),
 ):
     """Bulk update status for multiple tasks."""
-    await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+    sprint = await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+    await _filter_task_ids_to_workspace(db, data.task_ids, str(sprint.workspace_id))
 
     task_service = SprintTaskService(db)
     tasks = await task_service.bulk_update_status(
@@ -275,7 +303,18 @@ async def bulk_move_tasks(
     db: AsyncSession = Depends(get_db),
 ):
     """Bulk move tasks to another sprint."""
-    await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+    sprint = await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+    await _filter_task_ids_to_workspace(db, data.task_ids, str(sprint.workspace_id))
+    # Target sprint must also be in the same workspace.
+    from aexy.models.sprint import Sprint
+    target_check = await db.execute(
+        select(Sprint.id).where(
+            Sprint.id == data.target_sprint_id,
+            Sprint.workspace_id == sprint.workspace_id,
+        )
+    )
+    if target_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Target sprint not found")
 
     task_service = SprintTaskService(db)
     tasks = await task_service.bulk_move_to_sprint(
@@ -662,6 +701,7 @@ async def search_pull_requests_for_task_linking(
 
     conditions = [
         TeamRepository.team_id == sprint.team_id,
+        WorkspaceRepository.workspace_id == sprint.workspace_id,
         WorkspaceRepository.is_active == True,  # noqa: E712
     ]
     if query:

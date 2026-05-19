@@ -71,6 +71,21 @@ async def create_policy(
 ):
     """Create a new agent policy."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id), "admin")
+
+    # Verify target agent belongs to this workspace so policies can't be
+    # attached to cross-workspace agents.
+    if data.agent_id:
+        from sqlalchemy import select
+        from aexy.models.agent import CRMAgent
+        check = await db.execute(
+            select(CRMAgent.id).where(
+                CRMAgent.id == data.agent_id,
+                CRMAgent.workspace_id == workspace_id,
+            )
+        )
+        if check.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
     engine = AgentPolicyEngine(db)
     policy = await engine.create_policy(
         workspace_id=workspace_id,

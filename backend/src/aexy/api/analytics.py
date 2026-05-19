@@ -1,10 +1,12 @@
 """Analytics dashboard API endpoints."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.api.developers import get_current_developer_id
 from aexy.core.database import get_db
+from aexy.models.workspace import WorkspaceMember
 from aexy.schemas.analytics import (
     SkillHeatmapRequest,
     SkillHeatmapData,
@@ -22,11 +24,52 @@ from aexy.services.analytics_dashboard import AnalyticsDashboardService
 router = APIRouter(prefix="/analytics")
 
 
+async def _require_developers_visible(
+    db: AsyncSession,
+    caller_id: str,
+    developer_ids: list[str],
+) -> None:
+    """Every developer in `developer_ids` must share an active workspace with
+    the caller. Reject (403) the entire request if any target is invisible —
+    silent filtering would change result shape without surfacing the leak."""
+    if not developer_ids:
+        return
+    caller_workspaces = (
+        await db.execute(
+            select(WorkspaceMember.workspace_id).where(
+                WorkspaceMember.developer_id == caller_id,
+                WorkspaceMember.status == "active",
+            )
+        )
+    ).scalars().all()
+    if not caller_workspaces:
+        raise HTTPException(status_code=403, detail="No active workspace membership")
+
+    visible = set(
+        (
+            await db.execute(
+                select(WorkspaceMember.developer_id).where(
+                    WorkspaceMember.workspace_id.in_(caller_workspaces),
+                    WorkspaceMember.developer_id.in_(developer_ids),
+                    WorkspaceMember.status == "active",
+                )
+            )
+        ).scalars().all()
+    )
+    missing = {str(d) for d in developer_ids} - {str(v) for v in visible}
+    missing.discard(str(caller_id))
+    if missing:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot read developers outside your workspaces",
+        )
+
+
 @router.post("/heatmap/skills", response_model=SkillHeatmapData)
 async def get_skill_heatmap(
     request: SkillHeatmapRequest,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_developer_id),
+    current_user_id: str = Depends(get_current_developer_id),
 ) -> SkillHeatmapData:
     """Generate a team skill heatmap.
 
@@ -37,6 +80,7 @@ async def get_skill_heatmap(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one developer ID is required",
         )
+    await _require_developers_visible(db, current_user_id, request.developer_ids)
 
     service = AnalyticsDashboardService()
     return await service.generate_skill_heatmap(
@@ -52,7 +96,7 @@ async def get_activity_heatmap(
     developer_id: str,
     days: int = 365,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_developer_id),
+    current_user_id: str = Depends(get_current_developer_id),
 ) -> ActivityHeatmapData:
     """Generate an activity heatmap for a developer.
 
@@ -63,6 +107,7 @@ async def get_activity_heatmap(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Days must be between 1 and 365",
         )
+    await _require_developers_visible(db, current_user_id, [developer_id])
 
     service = AnalyticsDashboardService()
     return await service.generate_activity_heatmap(
@@ -76,7 +121,7 @@ async def get_activity_heatmap(
 async def get_productivity_trends(
     request: ProductivityRequest,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_developer_id),
+    current_user_id: str = Depends(get_current_developer_id),
 ) -> ProductivityTrends:
     """Get productivity trends for developers.
 
@@ -87,6 +132,7 @@ async def get_productivity_trends(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one developer ID is required",
         )
+    await _require_developers_visible(db, current_user_id, request.developer_ids)
 
     service = AnalyticsDashboardService()
     return await service.get_productivity_trends(
@@ -101,7 +147,7 @@ async def get_productivity_trends(
 async def get_workload_distribution(
     request: WorkloadRequest,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_developer_id),
+    current_user_id: str = Depends(get_current_developer_id),
 ) -> WorkloadDistribution:
     """Get workload distribution across developers.
 
@@ -112,6 +158,7 @@ async def get_workload_distribution(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one developer ID is required",
         )
+    await _require_developers_visible(db, current_user_id, request.developer_ids)
 
     service = AnalyticsDashboardService()
     return await service.get_workload_distribution(
@@ -125,7 +172,7 @@ async def get_workload_distribution(
 async def get_collaboration_network(
     request: CollaborationRequest,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_developer_id),
+    current_user_id: str = Depends(get_current_developer_id),
 ) -> CollaborationGraph:
     """Get collaboration network for developers.
 
@@ -136,6 +183,7 @@ async def get_collaboration_network(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one developer ID is required",
         )
+    await _require_developers_visible(db, current_user_id, request.developer_ids)
 
     service = AnalyticsDashboardService()
     return await service.get_collaboration_network(

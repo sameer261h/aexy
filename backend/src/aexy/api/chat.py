@@ -488,7 +488,9 @@ async def edit_message(
 ):
     await _check_workspace(db, workspace_id, str(current_user.id))
     service = ChatService(db)
-    msg = await service.update_message(message_id, str(current_user.id), data.content)
+    msg = await service.update_message(
+        message_id, str(current_user.id), data.content, workspace_id=workspace_id
+    )
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found or not owned by you")
     await db.commit()
@@ -507,7 +509,9 @@ async def delete_message(
 ):
     await _check_workspace(db, workspace_id, str(current_user.id))
     service = ChatService(db)
-    ok = await service.delete_message(message_id, str(current_user.id))
+    ok = await service.delete_message(
+        message_id, str(current_user.id), workspace_id=workspace_id
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="Message not found or not owned by you")
     await db.commit()

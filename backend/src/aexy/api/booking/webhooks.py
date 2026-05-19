@@ -18,11 +18,26 @@ from aexy.schemas.booking import (
     BookingWebhookListResponse,
 )
 from aexy.schemas.booking.webhook import WebhookTestResponse, WEBHOOK_EVENTS
+from aexy.services.workspace_service import WorkspaceService
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/booking/webhooks",
     tags=["Booking - Webhooks (Enterprise)"],
 )
+
+
+async def _require_workspace_admin(
+    db: AsyncSession, workspace_id: str, developer_id: str
+) -> None:
+    """WS-062: every booking webhook route was relying solely on
+    `get_current_developer`; an authenticated user from workspace A could
+    list, create, or read HMAC secrets for any workspace's webhooks. All
+    routes now require admin role in the actual `workspace_id`."""
+    if not await WorkspaceService(db).check_permission(workspace_id, developer_id, "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Workspace admin role required",
+        )
 
 
 def webhook_to_response(webhook: BookingWebhook) -> BookingWebhookResponse:
@@ -59,6 +74,7 @@ async def list_webhooks(
     db: AsyncSession = Depends(get_db),
 ):
     """List booking webhooks for workspace."""
+    await _require_workspace_admin(db, workspace_id, str(current_user.id))
     # TODO: Add enterprise tier check
 
     stmt = (
@@ -83,6 +99,7 @@ async def create_webhook(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a booking webhook."""
+    await _require_workspace_admin(db, workspace_id, str(current_user.id))
     # TODO: Add enterprise tier check
 
     # Validate events
@@ -120,6 +137,7 @@ async def get_webhook(
     db: AsyncSession = Depends(get_db),
 ):
     """Get a specific webhook."""
+    await _require_workspace_admin(db, workspace_id, str(current_user.id))
     stmt = select(BookingWebhook).where(BookingWebhook.id == webhook_id)
     result = await db.execute(stmt)
     webhook = result.scalar_one_or_none()
@@ -141,6 +159,7 @@ async def get_webhook_secret(
     db: AsyncSession = Depends(get_db),
 ):
     """Get webhook secret (for signature verification)."""
+    await _require_workspace_admin(db, workspace_id, str(current_user.id))
     stmt = select(BookingWebhook).where(BookingWebhook.id == webhook_id)
     result = await db.execute(stmt)
     webhook = result.scalar_one_or_none()
@@ -163,6 +182,7 @@ async def update_webhook(
     db: AsyncSession = Depends(get_db),
 ):
     """Update a webhook."""
+    await _require_workspace_admin(db, workspace_id, str(current_user.id))
     stmt = select(BookingWebhook).where(BookingWebhook.id == webhook_id)
     result = await db.execute(stmt)
     webhook = result.scalar_one_or_none()
@@ -204,6 +224,7 @@ async def delete_webhook(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a webhook."""
+    await _require_workspace_admin(db, workspace_id, str(current_user.id))
     stmt = select(BookingWebhook).where(BookingWebhook.id == webhook_id)
     result = await db.execute(stmt)
     webhook = result.scalar_one_or_none()
@@ -234,6 +255,7 @@ async def test_webhook(
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
+    await _require_workspace_admin(db, workspace_id, str(current_user.id))
     stmt = select(BookingWebhook).where(BookingWebhook.id == webhook_id)
     result = await db.execute(stmt)
     webhook = result.scalar_one_or_none()

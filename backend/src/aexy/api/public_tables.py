@@ -11,13 +11,31 @@ from aexy.services.data_table_service import DataTableService
 router = APIRouter(prefix="/public/tables")
 
 
+def _origin_matches(allowed: list[str] | None, request_origin: str | None) -> bool:
+    """Compare request Origin against the link's allowlist.
+
+    Empty / NULL allowlist → no restriction (legacy behaviour). Otherwise
+    `Origin` must exactly match one of the allowed scheme+host[:port] strings.
+    Missing `Origin` header → reject only when the link is restricted; a
+    same-origin browser fetch may omit it.
+    """
+    if not allowed:
+        return True
+    if not request_origin:
+        return False
+    request_origin = request_origin.rstrip("/").lower()
+    return any(a.rstrip("/").lower() == request_origin for a in allowed)
+
+
 async def _verify_share_link(
     token: str,
     password: str | None,
     db: AsyncSession,
     require_edit: bool = False,
+    request: Request | None = None,
 ) -> TableShareLink:
-    """Common share link verification: token lookup, expiry, password, permission."""
+    """Common share link verification: token lookup, expiry, password,
+    permission, and (WS-066/WS-074) per-link Origin allowlist."""
     share_svc = TableShareService(db)
     link = await share_svc.get_by_token(token)
     if not link:
@@ -30,6 +48,11 @@ async def _verify_share_link(
     if require_edit and link.permission != "edit":
         raise HTTPException(403, "This share link is view-only")
 
+    if request is not None:
+        request_origin = request.headers.get("Origin") or request.headers.get("origin")
+        if not _origin_matches(getattr(link, "allowed_origins", None), request_origin):
+            raise HTTPException(403, "Origin not allowed for this share link")
+
     return link
 
 
@@ -41,7 +64,7 @@ async def get_shared_table(
 ):
     """Get a shared table's schema and records via share link."""
     password = request.headers.get("X-Share-Password")
-    link = await _verify_share_link(token, password, db)
+    link = await _verify_share_link(token, password, db, request=request)
 
     share_svc = TableShareService(db)
     await share_svc.increment_usage(link.id)
@@ -86,7 +109,7 @@ async def get_shared_records(
 ):
     """Get paginated records from a shared table."""
     password = request.headers.get("X-Share-Password")
-    link = await _verify_share_link(token, password, db)
+    link = await _verify_share_link(token, password, db, request=request)
 
     dts = DataTableService(db)
     table = await dts.get_table(link.table_id)
@@ -122,7 +145,7 @@ async def create_shared_record(
 ):
     """Create a record via edit-enabled share link."""
     password = request.headers.get("X-Share-Password")
-    link = await _verify_share_link(token, password, db, require_edit=True)
+    link = await _verify_share_link(token, password, db, require_edit=True, request=request)
 
     body = await request.json()
     values = body.get("values", {})

@@ -571,10 +571,19 @@ class ChatService:
             },
         }
 
-    async def update_message(self, message_id: str, sender_id: str, content: str) -> dict | None:
-        result = await self.db.execute(
-            select(ChatMessage).where(ChatMessage.id == message_id)
-        )
+    async def update_message(
+        self, message_id: str, sender_id: str, content: str,
+        workspace_id: str | None = None,
+    ) -> dict | None:
+        stmt = select(ChatMessage).where(ChatMessage.id == message_id)
+        if workspace_id is not None:
+            # Confine to the caller's workspace via the channel join so a
+            # sender who happens to be in two workspaces can't edit a
+            # message in workspace B by hitting workspace A's route.
+            stmt = stmt.join(ChatChannel, ChatChannel.id == ChatMessage.channel_id).where(
+                ChatChannel.workspace_id == workspace_id
+            )
+        result = await self.db.execute(stmt)
         message = result.scalar_one_or_none()
         if not message or message.sender_id != sender_id:
             return None
@@ -610,10 +619,16 @@ class ChatService:
             } if sender else None,
         }
 
-    async def delete_message(self, message_id: str, sender_id: str) -> bool:
-        result = await self.db.execute(
-            select(ChatMessage).where(ChatMessage.id == message_id)
-        )
+    async def delete_message(
+        self, message_id: str, sender_id: str,
+        workspace_id: str | None = None,
+    ) -> bool:
+        stmt = select(ChatMessage).where(ChatMessage.id == message_id)
+        if workspace_id is not None:
+            stmt = stmt.join(ChatChannel, ChatChannel.id == ChatMessage.channel_id).where(
+                ChatChannel.workspace_id == workspace_id
+            )
+        result = await self.db.execute(stmt)
         message = result.scalar_one_or_none()
         if not message or message.sender_id != sender_id:
             return False

@@ -1970,6 +1970,9 @@ export interface WorkspaceRepositoryItem {
   sync_status: string;
   last_sync_at: string | null;
   sync_error: string | null;
+  commits_synced: number;
+  prs_synced: number;
+  reviews_synced: number;
   created_at: string;
   updated_at: string;
 }

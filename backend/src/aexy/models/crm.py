@@ -1577,6 +1577,12 @@ class TableShareLink(Base):
     max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)
     use_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
+    # WS-066/WS-074: optional per-link origin pinning so an embed token
+    # leaked once can't be reused indefinitely on third-party pages.
+    # Stored as a JSONB list of scheme://host strings ("https://acme.com").
+    # NULL or empty means "no origin restriction" (legacy behaviour).
+    allowed_origins: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
     # What to show
     view_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),

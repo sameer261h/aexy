@@ -657,6 +657,17 @@ async def link_project(
     if not goal or str(goal.workspace_id) != workspace_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
 
+    # Verify the project belongs to the same workspace.
+    from aexy.models.project import Project
+    project_check = await db.execute(
+        select(Project.id).where(
+            Project.id == data.project_id,
+            Project.workspace_id == workspace_id,
+        )
+    )
+    if project_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
     # Check if already linked
     existing = await db.execute(
         select(GoalProject).where(GoalProject.goal_id == goal_id, GoalProject.project_id == data.project_id)
@@ -691,6 +702,17 @@ async def link_epic(
 
     if not goal or str(goal.workspace_id) != workspace_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+
+    # Verify the epic belongs to the same workspace.
+    from aexy.models.epic import Epic
+    epic_check = await db.execute(
+        select(Epic.id).where(
+            Epic.id == data.epic_id,
+            Epic.workspace_id == workspace_id,
+        )
+    )
+    if epic_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Epic not found")
 
     # Check if already linked
     existing = await db.execute(

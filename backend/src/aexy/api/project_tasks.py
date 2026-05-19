@@ -524,12 +524,17 @@ async def search_project_pull_requests(
         WorkspaceRepository,
     )
 
-    await get_team_and_check_permission(team_id, current_user, db, "viewer")
+    # Capture the team so we can scope the PR query by workspace_id —
+    # `TeamRepository → WorkspaceRepository` could in theory cross
+    # workspace boundaries via a malformed row; the explicit filter
+    # makes the safety check visible.
+    team = await get_team_and_check_permission(team_id, current_user, db, "viewer")
     limit = min(max(limit, 1), 100)
     offset = max(offset, 0)
 
     conditions = [
         TeamRepository.team_id == team_id,
+        WorkspaceRepository.workspace_id == team.workspace_id,
         WorkspaceRepository.is_active == True,  # noqa: E712
     ]
     if query:

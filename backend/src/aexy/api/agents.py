@@ -63,6 +63,24 @@ async def check_workspace_permission(
         )
 
 
+async def _assert_agent_in_workspace(
+    db: AsyncSession, workspace_id: str, agent_id: str
+) -> None:
+    """Verify a CRMAgent belongs to this workspace before exposing its
+    inbox/messages/routing rules. Stops cross-workspace probes via the
+    `agent_id` path parameter."""
+    from sqlalchemy import select
+    from aexy.models.agent import CRMAgent
+    result = await db.execute(
+        select(CRMAgent.id).where(
+            CRMAgent.id == agent_id,
+            CRMAgent.workspace_id == workspace_id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+
 # =============================================================================
 # AGENT CRUD
 # =============================================================================
@@ -928,6 +946,7 @@ async def get_inbox_message(
 ):
     """Get a specific inbox message with full details."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
 
     email_service = AgentEmailService(db)
     message = await email_service.get_inbox_message(message_id)
@@ -949,6 +968,7 @@ async def reply_to_inbox_message(
 ):
     """Send a reply to an inbox message (manual or AI-suggested)."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
 
     email_service = AgentEmailService(db)
     message = await email_service.get_inbox_message(message_id)
@@ -985,6 +1005,7 @@ async def escalate_inbox_message(
 ):
     """Escalate a message to a team member."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
 
     email_service = AgentEmailService(db)
     message = await email_service.get_inbox_message(message_id)
@@ -1016,6 +1037,7 @@ async def archive_inbox_message(
 ):
     """Archive an inbox message."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
 
     email_service = AgentEmailService(db)
     message = await email_service.get_inbox_message(message_id)
@@ -1043,6 +1065,7 @@ async def process_inbox_message(
 ):
     """Process an inbox message with AI (classify, summarize, suggest response)."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
 
     email_service = AgentEmailService(db)
     message = await email_service.get_inbox_message(message_id)
@@ -1124,6 +1147,20 @@ async def delete_routing_rule(
 ):
     """Delete an email routing rule."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id), "admin")
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
+
+    # Verify the rule belongs to this agent in this workspace.
+    from sqlalchemy import select
+    from aexy.models.agent_inbox import AgentEmailRoutingRule
+    rule_check = await db.execute(
+        select(AgentEmailRoutingRule.id).where(
+            AgentEmailRoutingRule.id == rule_id,
+            AgentEmailRoutingRule.agent_id == agent_id,
+            AgentEmailRoutingRule.workspace_id == workspace_id,
+        )
+    )
+    if rule_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Routing rule not found")
 
     email_service = AgentEmailService(db)
     success = await email_service.delete_routing_rule(rule_id)

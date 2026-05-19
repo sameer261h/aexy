@@ -51,10 +51,129 @@ from aexy.services.review_service import ReviewService
 from aexy.services.goal_service import GoalService
 from aexy.services.contribution_service import ContributionService
 from aexy.services.activity_logger import log_activity
-from aexy.models.review import IndividualReview, ReviewCycle
+from aexy.services.workspace_service import WorkspaceService
+from aexy.models.review import IndividualReview, ReviewCycle, ReviewRequest, WorkGoal
+from aexy.models.workspace import WorkspaceMember
 from sqlalchemy import select
 
 router = APIRouter(prefix="/reviews")
+
+
+# ============ Authorization Helpers ============
+
+async def _require_workspace_role(
+    db: AsyncSession,
+    workspace_id: str,
+    developer_id: str,
+    role: str = "member",
+) -> None:
+    """403 unless caller has at least `role` (active membership) in workspace_id."""
+    if not await WorkspaceService(db).check_permission(workspace_id, developer_id, role):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Workspace permission required",
+        )
+
+
+async def _load_cycle_or_404(db: AsyncSession, cycle_id: str) -> ReviewCycle:
+    cycle = await db.get(ReviewCycle, cycle_id)
+    if not cycle:
+        raise HTTPException(status_code=404, detail="Review cycle not found")
+    return cycle
+
+
+async def _load_review_or_404(db: AsyncSession, review_id: str) -> IndividualReview:
+    review = await db.get(IndividualReview, review_id)
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found")
+    return review
+
+
+async def _review_workspace_id(db: AsyncSession, review_id: str) -> str | None:
+    """Resolve a review's workspace via its cycle, or None if the review is gone."""
+    result = await db.execute(
+        select(ReviewCycle.workspace_id)
+        .join(IndividualReview, IndividualReview.review_cycle_id == ReviewCycle.id)
+        .where(IndividualReview.id == review_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _is_review_peer_reviewer(
+    db: AsyncSession, review_id: str, developer_id: str
+) -> bool:
+    result = await db.execute(
+        select(ReviewRequest.id).where(
+            ReviewRequest.individual_review_id == review_id,
+            ReviewRequest.reviewer_id == developer_id,
+        ).limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def _require_review_party_or_admin(
+    db: AsyncSession,
+    review_id: str,
+    current_user: Developer,
+) -> IndividualReview:
+    """Caller must be the reviewee, the manager, a peer reviewer, or workspace admin."""
+    review = await _load_review_or_404(db, review_id)
+    caller_id = str(current_user.id)
+    if caller_id in {str(review.developer_id), str(review.manager_id or "")}:
+        return review
+    if await _is_review_peer_reviewer(db, review_id, caller_id):
+        return review
+    ws_id = await _review_workspace_id(db, review_id)
+    if ws_id and await WorkspaceService(db).check_permission(str(ws_id), caller_id, "admin"):
+        return review
+    # 404 (not 403) avoids confirming the review exists to unauthorized callers.
+    raise HTTPException(status_code=404, detail="Review not found")
+
+
+async def _require_goal_owner_or_admin(
+    db: AsyncSession,
+    goal_id: str,
+    current_user: Developer,
+) -> WorkGoal:
+    goal = await db.get(WorkGoal, goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    caller_id = str(current_user.id)
+    if caller_id == str(goal.developer_id):
+        return goal
+    if await WorkspaceService(db).check_permission(
+        str(goal.workspace_id), caller_id, "admin"
+    ):
+        return goal
+    raise HTTPException(status_code=404, detail="Goal not found")
+
+
+async def _require_shared_workspace_or_self(
+    db: AsyncSession,
+    target_developer_id: str,
+    current_user: Developer,
+    required_role: str = "admin",
+) -> None:
+    """Self is always allowed; otherwise caller must hold required_role in some
+    workspace the target is an active member of. 403 otherwise."""
+    caller_id = str(current_user.id)
+    if caller_id == str(target_developer_id):
+        return
+    # Find any active membership the target has where the caller meets required_role.
+    target_workspaces = await db.execute(
+        select(WorkspaceMember.workspace_id).where(
+            WorkspaceMember.developer_id == target_developer_id,
+            WorkspaceMember.status == "active",
+        )
+    )
+    workspace_ids = [str(w) for w in target_workspaces.scalars().all() if w]
+    if not workspace_ids:
+        raise HTTPException(status_code=404, detail="Developer not found")
+    workspace_service = WorkspaceService(db)
+    for ws_id in workspace_ids:
+        if await workspace_service.check_permission(ws_id, caller_id, required_role):
+            return
+    raise HTTPException(status_code=403, detail="Insufficient permissions")
 
 
 # ============ Review Cycle Endpoints ============
@@ -67,6 +186,7 @@ async def create_review_cycle(
     current_user: Developer = Depends(get_current_developer),
 ):
     """Create a new review cycle for a workspace."""
+    await _require_workspace_role(db, workspace_id, str(current_user.id), "admin")
     service = ReviewService(db)
     cycle = await service.create_review_cycle(
         workspace_id=workspace_id,
@@ -96,8 +216,10 @@ async def list_review_cycles(
     workspace_id: str,
     status: str | None = None,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
     """List review cycles for a workspace."""
+    await _require_workspace_role(db, workspace_id, str(current_user.id), "viewer")
     service = ReviewService(db)
     cycles = await service.list_review_cycles(workspace_id, status)
     return [ReviewCycleResponse.model_validate(c) for c in cycles]
@@ -107,12 +229,14 @@ async def list_review_cycles(
 async def get_review_cycle(
     cycle_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
     """Get a review cycle with progress statistics."""
     service = ReviewService(db)
     cycle = await service.get_review_cycle(cycle_id)
     if not cycle:
         raise HTTPException(status_code=404, detail="Review cycle not found")
+    await _require_workspace_role(db, str(cycle.workspace_id), str(current_user.id), "viewer")
 
     progress = await service.get_cycle_progress(cycle_id)
 
@@ -134,6 +258,8 @@ async def update_review_cycle(
     current_user: Developer = Depends(get_current_developer),
 ):
     """Update a review cycle."""
+    existing = await _load_cycle_or_404(db, cycle_id)
+    await _require_workspace_role(db, str(existing.workspace_id), str(current_user.id), "admin")
     service = ReviewService(db)
     updates = data.model_dump(exclude_unset=True)
 
@@ -166,6 +292,8 @@ async def activate_review_cycle(
     current_user: Developer = Depends(get_current_developer),
 ):
     """Activate a review cycle and create individual reviews."""
+    existing = await _load_cycle_or_404(db, cycle_id)
+    await _require_workspace_role(db, str(existing.workspace_id), str(current_user.id), "admin")
     service = ReviewService(db)
     cycle = await service.activate_review_cycle(cycle_id)
     if not cycle:
@@ -189,8 +317,11 @@ async def activate_review_cycle(
 async def advance_review_phase(
     cycle_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
     """Advance the review cycle to the next phase."""
+    existing = await _load_cycle_or_404(db, cycle_id)
+    await _require_workspace_role(db, str(existing.workspace_id), str(current_user.id), "admin")
     service = ReviewService(db)
     new_status = await service.advance_cycle_phase(cycle_id)
     if not new_status:
@@ -403,24 +534,24 @@ async def resend_cycle_notifications(
 
 @router.get("/my-reviews", response_model=list[IndividualReviewResponse])
 async def get_my_reviews(
-    developer_id: str,
     status: str | None = None,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get reviews where the developer is the reviewee."""
+    """Get reviews where the current user is the reviewee."""
     service = ReviewService(db)
-    reviews = await service.get_developer_reviews(developer_id, status)
+    reviews = await service.get_developer_reviews(str(current_user.id), status)
     return [IndividualReviewResponse.model_validate(r) for r in reviews]
 
 
 @router.get("/manager-reviews", response_model=list[IndividualReviewResponse])
 async def get_manager_reviews(
-    manager_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get reviews where the developer is the manager."""
+    """Get reviews where the current user is the manager."""
     service = ReviewService(db)
-    reviews = await service.get_manager_reviews(manager_id)
+    reviews = await service.get_manager_reviews(str(current_user.id))
     return [IndividualReviewResponse.model_validate(r) for r in reviews]
 
 
@@ -429,15 +560,16 @@ async def get_manager_reviews(
 
 @router.post("/goals", response_model=WorkGoalResponse)
 async def create_goal(
-    developer_id: str,
     workspace_id: str,
     data: WorkGoalCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Create a new SMART goal."""
+    """Create a new SMART goal for the current user."""
+    await _require_workspace_role(db, workspace_id, str(current_user.id), "viewer")
     service = GoalService(db)
     goal = await service.create_goal(
-        developer_id=developer_id,
+        developer_id=str(current_user.id),
         workspace_id=workspace_id,
         title=data.title,
         description=data.description,
@@ -459,17 +591,23 @@ async def create_goal(
 
 @router.get("/goals", response_model=list[WorkGoalResponse])
 async def list_goals(
-    developer_id: str,
     workspace_id: str | None = None,
     status: str | None = None,
     goal_type: str | None = None,
     review_cycle_id: str | None = None,
+    developer_id: str | None = None,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """List goals for a developer."""
+    """List goals. Without `developer_id` returns the caller's goals. With
+    `developer_id`, requires the caller to be an admin in a workspace the
+    target is a member of (e.g. manager view)."""
+    target_id = developer_id or str(current_user.id)
+    if target_id != str(current_user.id):
+        await _require_shared_workspace_or_self(db, target_id, current_user, "admin")
     service = GoalService(db)
     goals = await service.list_goals(
-        developer_id=developer_id,
+        developer_id=target_id,
         workspace_id=workspace_id,
         status=status,
         goal_type=goal_type,
@@ -480,12 +618,12 @@ async def list_goals(
 
 @router.get("/goals/suggestions", response_model=list[GoalSuggestion])
 async def get_goal_suggestions(
-    developer_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get goal suggestions from active learning path."""
+    """Get goal suggestions for the current user from their learning path."""
     service = GoalService(db)
-    suggestions = await service.suggest_goals_from_learning_path(developer_id)
+    suggestions = await service.suggest_goals_from_learning_path(str(current_user.id))
     return [
         GoalSuggestion(
             title=s.title,
@@ -503,8 +641,10 @@ async def get_goal_suggestions(
 async def get_goal(
     goal_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
     """Get goal details with linked contributions."""
+    await _require_goal_owner_or_admin(db, goal_id, current_user)
     service = GoalService(db)
     goal = await service.get_goal(goal_id)
     if not goal:
@@ -531,8 +671,14 @@ async def update_goal(
     goal_id: str,
     data: WorkGoalUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Update a goal."""
+    """Update a goal. Owner only — admins read but don't edit goals."""
+    goal = await db.get(WorkGoal, goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    if str(goal.developer_id) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Goal not found")
     service = GoalService(db)
     updates = data.model_dump(exclude_unset=True)
 
@@ -555,8 +701,12 @@ async def update_goal_progress(
     goal_id: str,
     data: GoalProgressUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Update goal progress and key results."""
+    """Update goal progress and key results. Owner only."""
+    existing = await db.get(WorkGoal, goal_id)
+    if not existing or str(existing.developer_id) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Goal not found")
     service = GoalService(db)
     goal = await service.update_progress(
         goal_id=goal_id,
@@ -572,8 +722,12 @@ async def update_goal_progress(
 async def auto_link_contributions(
     goal_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Auto-link GitHub activity to goal based on tracking keywords."""
+    """Auto-link GitHub activity to goal based on tracking keywords. Owner only."""
+    existing = await db.get(WorkGoal, goal_id)
+    if not existing or str(existing.developer_id) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Goal not found")
     service = GoalService(db)
     result = await service.auto_link_contributions(goal_id)
     return {
@@ -588,8 +742,10 @@ async def auto_link_contributions(
 async def get_linked_contributions(
     goal_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get linked contributions for a goal."""
+    """Get linked contributions for a goal. Owner or workspace admin."""
+    await _require_goal_owner_or_admin(db, goal_id, current_user)
     service = GoalService(db)
     goal = await service.get_goal(goal_id)
     if not goal:
@@ -620,8 +776,12 @@ async def complete_goal(
     goal_id: str,
     data: GoalCompletionData | None = None,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Mark a goal as completed."""
+    """Mark a goal as completed. Owner only."""
+    existing = await db.get(WorkGoal, goal_id)
+    if not existing or str(existing.developer_id) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Goal not found")
     service = GoalService(db)
     goal = await service.complete_goal(
         goal_id=goal_id,
@@ -638,8 +798,10 @@ async def complete_goal(
 async def get_individual_review(
     review_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
     """Get detailed individual review with submissions."""
+    await _require_review_party_or_admin(db, review_id, current_user)
     service = ReviewService(db)
     review = await service.get_individual_review(review_id, include_submissions=True)
     if not review:
@@ -681,8 +843,10 @@ async def get_individual_review(
 async def get_review_contributions(
     review_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
     """Get contribution summary for a review."""
+    await _require_review_party_or_admin(db, review_id, current_user)
     service = ReviewService(db)
     llm = get_llm_gateway()
     contribution_service = ContributionService(db, llm)
@@ -814,8 +978,13 @@ async def finalize_review(
 async def acknowledge_review(
     review_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Employee acknowledges their completed review."""
+    """Employee acknowledges their completed review. Reviewee only."""
+    existing = await _load_review_or_404(db, review_id)
+    if str(existing.developer_id) != str(current_user.id):
+        # 404 (not 403) — avoid confirming the review exists to a non-reviewee.
+        raise HTTPException(status_code=404, detail="Review not found")
     service = ReviewService(db)
     review = await service.acknowledge_review(review_id)
     if not review:
@@ -829,14 +998,17 @@ async def acknowledge_review(
 async def request_peer_review(
     review_id: str,
     data: PeerReviewRequest,
-    requester_id: str = Query(...),
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Request peer feedback from a team member."""
+    """Self-nominate a peer reviewer. Caller must be the reviewee."""
+    review = await _load_review_or_404(db, review_id)
+    if str(review.developer_id) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Review not found")
     service = ReviewService(db)
     request = await service.request_peer_review(
         review_id=review_id,
-        requester_id=requester_id,
+        requester_id=str(current_user.id),
         reviewer_id=data.reviewer_id,
         message=data.message,
     )
@@ -847,15 +1019,24 @@ async def request_peer_review(
 async def assign_peer_reviewers(
     review_id: str,
     data: PeerReviewerAssignment,
-    manager_id: str = Query(...),
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Manager assigns peer reviewers."""
+    """Manager or workspace admin assigns peer reviewers."""
+    review = await _load_review_or_404(db, review_id)
+    caller_id = str(current_user.id)
+    is_manager = caller_id == str(review.manager_id or "")
+    if not is_manager:
+        ws_id = await _review_workspace_id(db, review_id)
+        if not ws_id or not await WorkspaceService(db).check_permission(
+            str(ws_id), caller_id, "admin"
+        ):
+            raise HTTPException(status_code=404, detail="Review not found")
     service = ReviewService(db)
     try:
         requests = await service.assign_peer_reviewers(
             review_id=review_id,
-            manager_id=manager_id,
+            manager_id=caller_id,
             reviewer_ids=data.reviewer_ids,
             message=data.message,
         )
@@ -935,12 +1116,12 @@ async def list_peer_requests_for_review(
 
 @router.get("/peer-requests/pending", response_model=list[ReviewRequestResponse])
 async def get_pending_peer_requests(
-    reviewer_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get pending peer review requests for a reviewer."""
+    """Get pending peer review requests for the current user."""
     service = ReviewService(db)
-    requests = await service.get_pending_peer_requests(reviewer_id)
+    requests = await service.get_pending_peer_requests(str(current_user.id))
     # Hydrate the optional requester/reviewer names from the loaded
     # relationships so the UI doesn't render "Unknown" for everyone.
     out: list[ReviewRequestResponse] = []
@@ -1051,8 +1232,12 @@ async def respond_to_peer_request(
     request_id: str,
     data: PeerRequestResponse,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Respond to a peer review request (accept/decline)."""
+    """Respond to a peer review request (accept/decline). Reviewer only."""
+    existing = await db.get(ReviewRequest, request_id)
+    if not existing or str(existing.reviewer_id) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Request not found")
     service = ReviewService(db)
     request = await service.respond_to_peer_request(
         request_id=request_id,
@@ -1068,28 +1253,26 @@ async def respond_to_peer_request(
 async def submit_peer_review(
     request_id: str,
     data: PeerReviewSubmission,
-    reviewer_id: str = Query(...),
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Submit a peer review for an accepted request."""
-    # Get the request to find the review
+    """Submit a peer review for an accepted request. Reviewer only."""
     service = ReviewService(db)
-    request = await service.db.get(
-        __import__("aexy.models.review", fromlist=["ReviewRequest"]).ReviewRequest,
-        request_id
-    )
+    request = await service.db.get(ReviewRequest, request_id)
     if not request:
+        raise HTTPException(status_code=404, detail="Request not found")
+    caller_id = str(current_user.id)
+    if str(request.reviewer_id) != caller_id:
         raise HTTPException(status_code=404, detail="Request not found")
 
     submission = await service.submit_peer_review(
         review_id=request.individual_review_id,
-        reviewer_id=reviewer_id,
+        reviewer_id=caller_id,
         responses=data.responses.model_dump(),
         is_anonymous=data.is_anonymous,
         linked_goals=data.linked_goals,
         linked_contributions=data.linked_contributions,
     )
-    # Get review to find workspace_id
     review = await service.get_individual_review(request.individual_review_id)
     if review:
         cycle = await service.get_review_cycle(review.review_cycle_id)
@@ -1100,7 +1283,7 @@ async def submit_peer_review(
                 entity_type="review",
                 entity_id=str(request.individual_review_id),
                 activity_type="submitted",
-                actor_id=reviewer_id,
+                actor_id=caller_id,
                 title="Submitted peer review",
             )
     return ReviewSubmissionResponse.model_validate(submission)
@@ -1110,18 +1293,23 @@ async def submit_peer_review(
 
 @router.get("/contributions/summary", response_model=ContributionSummaryResponse)
 async def get_contribution_summary(
-    developer_id: str,
     period_start: date | None = None,
     period_end: date | None = None,
     period_type: str = "annual",
+    developer_id: str | None = None,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get or generate contribution summary for a developer."""
+    """Get or generate contribution summary. Self by default; admins in a shared
+    workspace may pass `developer_id` for another developer."""
+    target_id = developer_id or str(current_user.id)
+    if target_id != str(current_user.id):
+        await _require_shared_workspace_or_self(db, target_id, current_user, "admin")
     llm = get_llm_gateway()
     service = ContributionService(db, llm)
 
     summary = await service.get_contribution_summary(
-        developer_id=developer_id,
+        developer_id=target_id,
         period_start=period_start,
         period_end=period_end,
         period_type=period_type,
@@ -1135,11 +1323,15 @@ async def get_contribution_summary(
 
 @router.post("/contributions/generate", response_model=ContributionSummaryResponse)
 async def generate_contribution_summary(
-    developer_id: str,
     data: ContributionSummaryRequest,
+    developer_id: str | None = None,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Force generate a new contribution summary."""
+    """Force generate a new contribution summary. Self or shared-workspace admin."""
+    target_id = developer_id or str(current_user.id)
+    if target_id != str(current_user.id):
+        await _require_shared_workspace_or_self(db, target_id, current_user, "admin")
     llm = get_llm_gateway()
     service = ContributionService(db, llm)
 
@@ -1147,7 +1339,7 @@ async def generate_contribution_summary(
     period_end = data.period_end or date.today()
 
     summary = await service.generate_contribution_summary(
-        developer_id=developer_id,
+        developer_id=target_id,
         period_start=period_start,
         period_end=period_end,
         period_type=data.period_type.value,
@@ -1158,16 +1350,20 @@ async def generate_contribution_summary(
 
 @router.get("/contributions/highlights", response_model=list[ContributionHighlight])
 async def get_contribution_highlights(
-    developer_id: str,
     period_start: date,
     period_end: date,
     limit: int = 10,
+    developer_id: str | None = None,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get notable contributions for a period."""
+    """Get notable contributions for a period. Self or shared-workspace admin."""
+    target_id = developer_id or str(current_user.id)
+    if target_id != str(current_user.id):
+        await _require_shared_workspace_or_self(db, target_id, current_user, "admin")
     service = ContributionService(db)
     highlights = await service.get_contribution_highlights(
-        developer_id=developer_id,
+        developer_id=target_id,
         period_start=period_start,
         period_end=period_end,
         limit=limit,

@@ -25,10 +25,10 @@ from aexy.core.database import get_db
 from aexy.models.developer import Developer
 from aexy.models.developer_insights import PeriodType
 from aexy.models.workspace import WorkspaceMember
-from aexy.models.team import TeamMember
-from aexy.models.project import ProjectMember
+from aexy.models.team import Team, TeamMember
+from aexy.models.project import Project, ProjectMember
 from aexy.models.developer_insights import InsightSettings, DeveloperWorkingSchedule, InsightAlertRule, InsightAlertHistory
-from aexy.models.repository import Repository, DeveloperRepository
+from aexy.models.repository import Repository, DeveloperRepository, WorkspaceRepository
 from aexy.schemas.developer_insights import (
     DeveloperInsightsResponse,
     DeveloperSnapshotResponse,
@@ -116,10 +116,18 @@ async def verify_workspace_membership(
     db: Annotated[AsyncSession, Depends(get_db)],
     developer_id: Annotated[str, Depends(get_current_developer_id)],
 ) -> str:
-    """Verify the caller is a member of the workspace. Returns developer_id."""
+    """Verify the caller is an active member of the workspace.
+
+    "Active" is required because `removed` / `suspended` rows are kept
+    around for historical attribution — a former employee's
+    WorkspaceMember row stays, status flipped, so old commits still
+    show under their name. That should not, on its own, keep granting
+    access to workspace-scoped analytics endpoints.
+    """
     stmt = select(WorkspaceMember.developer_id).where(
         WorkspaceMember.workspace_id == workspace_id,
         WorkspaceMember.developer_id == developer_id,
+        WorkspaceMember.status == "active",
     )
     result = await db.execute(stmt)
     if not result.scalar_one_or_none():
@@ -138,10 +146,18 @@ async def _get_workspace_developer_ids(
 
 
 async def _get_team_developer_ids(
-    db: AsyncSession, team_id: str
+    db: AsyncSession, workspace_id: str, team_id: str
 ) -> list[str]:
-    stmt = select(TeamMember.developer_id).where(
-        TeamMember.team_id == team_id
+    stmt = (
+        select(TeamMember.developer_id)
+        .join(Team, Team.id == TeamMember.team_id)
+        .where(
+            and_(
+                TeamMember.team_id == team_id,
+                Team.workspace_id == workspace_id,
+                Team.is_active == True,
+            )
+        )
     )
     result = await db.execute(stmt)
     return [row[0] for row in result.all()]
@@ -152,6 +168,7 @@ async def _get_all_contributor_ids(
     workspace_member_ids: list[str],
     start: datetime,
     end: datetime,
+    workspace_id: str | None = None,
 ) -> list[str]:
     """Return workspace member IDs + any external developer IDs with activity
     in the same repositories during the given period."""
@@ -160,15 +177,35 @@ async def _get_all_contributor_ids(
     if not workspace_member_ids:
         return []
 
-    # 1. Find repos that workspace members touched
-    repo_stmt = select(distinct(Commit.repository)).where(
-        and_(
-            Commit.developer_id.in_(workspace_member_ids),
-            Commit.committed_at >= start,
-            Commit.committed_at <= end,
-            Commit.repository.isnot(None),
+    adopted_repos: set[str] | None = None
+    if workspace_id:
+        adopted_stmt = (
+            select(Repository.full_name)
+            .join(WorkspaceRepository, WorkspaceRepository.repository_id == Repository.id)
+            .where(
+                and_(
+                    WorkspaceRepository.workspace_id == workspace_id,
+                    WorkspaceRepository.is_active == True,
+                    Repository.full_name.isnot(None),
+                )
+            )
         )
-    )
+        adopted_result = await db.execute(adopted_stmt)
+        adopted_repos = {row[0] for row in adopted_result.all() if row[0]}
+        if not adopted_repos:
+            return list(workspace_member_ids)
+
+    # 1. Find repos that workspace members touched
+    repo_conditions = [
+        Commit.developer_id.in_(workspace_member_ids),
+        Commit.committed_at >= start,
+        Commit.committed_at <= end,
+        Commit.repository.isnot(None),
+    ]
+    if adopted_repos is not None:
+        repo_conditions.append(Commit.repository.in_(adopted_repos))
+
+    repo_stmt = select(distinct(Commit.repository)).where(and_(*repo_conditions))
     repo_result = await db.execute(repo_stmt)
     repos = [row[0] for row in repo_result.all()]
     if not repos:
@@ -211,12 +248,17 @@ async def _get_all_contributor_ids(
 
 
 async def _get_project_developer_ids(
-    db: AsyncSession, project_id: str
+    db: AsyncSession, workspace_id: str, project_id: str
 ) -> list[str]:
-    stmt = select(ProjectMember.developer_id).where(
-        and_(
-            ProjectMember.project_id == project_id,
-            ProjectMember.status == "active",
+    stmt = (
+        select(ProjectMember.developer_id)
+        .join(Project, Project.id == ProjectMember.project_id)
+        .where(
+            and_(
+                ProjectMember.project_id == project_id,
+                Project.workspace_id == workspace_id,
+                ProjectMember.status == "active",
+            )
         )
     )
     result = await db.execute(stmt)
@@ -599,7 +641,7 @@ async def get_developer_percentile(
     _validate_date_range(start_date, end_date)
 
     if team_id:
-        peer_ids = await _get_team_developer_ids(db, team_id)
+        peer_ids = await _get_team_developer_ids(db, workspace_id, team_id)
     else:
         peer_ids = await _get_workspace_developer_ids(db, workspace_id)
 
@@ -721,7 +763,7 @@ async def get_team_insights(
             return cached
 
     if team_id:
-        dev_ids = await _get_team_developer_ids(db, team_id)
+        dev_ids = await _get_team_developer_ids(db, workspace_id, team_id)
     else:
         dev_ids = await _get_workspace_developer_ids(db, workspace_id)
 
@@ -729,7 +771,9 @@ async def get_team_insights(
         raise HTTPException(status_code=404, detail="No team members found")
 
     # Include external contributors (ghost developers) who have activity
-    dev_ids = await _get_all_contributor_ids(db, dev_ids, start_date, end_date)
+    dev_ids = await _get_all_contributor_ids(
+        db, dev_ids, start_date, end_date, workspace_id=workspace_id
+    )
 
     service = DeveloperInsightsService(db)
     # Pass workspace_id so the service can populate membership_status on
@@ -934,7 +978,7 @@ async def get_leaderboard(
             return cached
 
     if team_id:
-        dev_ids = await _get_team_developer_ids(db, team_id)
+        dev_ids = await _get_team_developer_ids(db, workspace_id, team_id)
     else:
         dev_ids = await _get_workspace_developer_ids(db, workspace_id)
 
@@ -942,7 +986,9 @@ async def get_leaderboard(
         raise HTTPException(status_code=404, detail="No team members found")
 
     # Include external contributors (ghost developers) who have activity
-    dev_ids = await _get_all_contributor_ids(db, dev_ids, start_date, end_date)
+    dev_ids = await _get_all_contributor_ids(
+        db, dev_ids, start_date, end_date, workspace_id=workspace_id
+    )
 
     service = DeveloperInsightsService(db)
     distribution = await service.compute_team_distribution(dev_ids, start_date, end_date)
@@ -1011,7 +1057,7 @@ async def generate_snapshots(
     if request.developer_ids:
         dev_ids = request.developer_ids
     elif request.team_id:
-        dev_ids = await _get_team_developer_ids(db, request.team_id)
+        dev_ids = await _get_team_developer_ids(db, workspace_id, request.team_id)
     else:
         dev_ids = await _get_workspace_developer_ids(db, workspace_id)
 
@@ -1070,7 +1116,7 @@ async def get_rotation_impact(
     _validate_date_range(start_date, end_date)
 
     if team_id:
-        dev_ids = await _get_team_developer_ids(db, team_id)
+        dev_ids = await _get_team_developer_ids(db, workspace_id, team_id)
     else:
         dev_ids = await _get_workspace_developer_ids(db, workspace_id)
 
@@ -1143,7 +1189,7 @@ async def get_sprint_capacity(
             return cached
 
     if team_id:
-        dev_ids = await _get_team_developer_ids(db, team_id)
+        dev_ids = await _get_team_developer_ids(db, workspace_id, team_id)
     else:
         dev_ids = await _get_workspace_developer_ids(db, workspace_id)
 
@@ -1202,7 +1248,9 @@ async def get_executive_summary(
 
     # Include external contributors (ghost developers) who have activity
     member_ids = await _get_workspace_developer_ids(db, workspace_id)
-    all_dev_ids = await _get_all_contributor_ids(db, member_ids, start_date, end_date)
+    all_dev_ids = await _get_all_contributor_ids(
+        db, member_ids, start_date, end_date, workspace_id=workspace_id
+    )
 
     service = DeveloperInsightsService(db)
     result = await service.compute_executive_summary(
@@ -1246,7 +1294,7 @@ async def get_bus_factor(
     _validate_date_range(start_date, end_date)
 
     if team_id:
-        dev_ids = await _get_team_developer_ids(db, team_id)
+        dev_ids = await _get_team_developer_ids(db, workspace_id, team_id)
     else:
         dev_ids = await _get_workspace_developer_ids(db, workspace_id)
 
@@ -1287,7 +1335,7 @@ async def get_project_insights(
         start_date, end_date = _default_range(period_type)
     _validate_date_range(start_date, end_date)
 
-    dev_ids = await _get_project_developer_ids(db, project_id)
+    dev_ids = await _get_project_developer_ids(db, workspace_id, project_id)
     if not dev_ids:
         raise HTTPException(status_code=404, detail="No project members found")
 
@@ -1345,7 +1393,7 @@ async def get_project_leaderboard(
         start_date, end_date = _default_range(period_type)
     _validate_date_range(start_date, end_date)
 
-    dev_ids = await _get_project_developer_ids(db, project_id)
+    dev_ids = await _get_project_developer_ids(db, workspace_id, project_id)
     if not dev_ids:
         raise HTTPException(status_code=404, detail="No project members found")
 
@@ -1772,7 +1820,7 @@ async def get_team_narrative(
     _validate_date_range(start_date, end_date)
 
     if team_id:
-        dev_ids = await _get_team_developer_ids(db, team_id)
+        dev_ids = await _get_team_developer_ids(db, workspace_id, team_id)
     else:
         dev_ids = await _get_workspace_developer_ids(db, workspace_id)
 
@@ -1780,7 +1828,9 @@ async def get_team_narrative(
         raise HTTPException(status_code=404, detail="No team members found")
 
     # Include external contributors (ghost developers)
-    dev_ids = await _get_all_contributor_ids(db, dev_ids, start_date, end_date)
+    dev_ids = await _get_all_contributor_ids(
+        db, dev_ids, start_date, end_date, workspace_id=workspace_id
+    )
 
     ai_service = InsightsAIService(db)
     result = await ai_service.generate_team_narrative(workspace_id, dev_ids, start_date, end_date)
@@ -1871,7 +1921,7 @@ async def get_root_cause_analysis(
     _validate_date_range(start_date, end_date)
 
     if team_id:
-        dev_ids = await _get_team_developer_ids(db, team_id)
+        dev_ids = await _get_team_developer_ids(db, workspace_id, team_id)
     else:
         dev_ids = await _get_workspace_developer_ids(db, workspace_id)
 
@@ -1879,7 +1929,9 @@ async def get_root_cause_analysis(
         raise HTTPException(status_code=404, detail="No team members found")
 
     # Include external contributors (ghost developers)
-    dev_ids = await _get_all_contributor_ids(db, dev_ids, start_date, end_date)
+    dev_ids = await _get_all_contributor_ids(
+        db, dev_ids, start_date, end_date, workspace_id=workspace_id
+    )
 
     ai_service = InsightsAIService(db)
     result = await ai_service.analyze_root_causes(workspace_id, dev_ids, start_date, end_date)
@@ -1940,7 +1992,7 @@ async def get_sprint_retro(
     _validate_date_range(start_date, end_date)
 
     if team_id:
-        dev_ids = await _get_team_developer_ids(db, team_id)
+        dev_ids = await _get_team_developer_ids(db, workspace_id, team_id)
     else:
         dev_ids = await _get_workspace_developer_ids(db, workspace_id)
 
@@ -1948,7 +2000,9 @@ async def get_sprint_retro(
         raise HTTPException(status_code=404, detail="No team members found")
 
     # Include external contributors (ghost developers)
-    dev_ids = await _get_all_contributor_ids(db, dev_ids, start_date, end_date)
+    dev_ids = await _get_all_contributor_ids(
+        db, dev_ids, start_date, end_date, workspace_id=workspace_id
+    )
 
     ai_service = InsightsAIService(db)
     result = await ai_service.generate_sprint_retro(workspace_id, dev_ids, start_date, end_date)
@@ -1980,7 +2034,7 @@ async def get_team_trajectory(
     _validate_date_range(start_date, end_date)
 
     if team_id:
-        dev_ids = await _get_team_developer_ids(db, team_id)
+        dev_ids = await _get_team_developer_ids(db, workspace_id, team_id)
     else:
         dev_ids = await _get_workspace_developer_ids(db, workspace_id)
 
@@ -1988,7 +2042,9 @@ async def get_team_trajectory(
         raise HTTPException(status_code=404, detail="No team members found")
 
     # Include external contributors (ghost developers)
-    dev_ids = await _get_all_contributor_ids(db, dev_ids, start_date, end_date)
+    dev_ids = await _get_all_contributor_ids(
+        db, dev_ids, start_date, end_date, workspace_id=workspace_id
+    )
 
     ai_service = InsightsAIService(db)
     result = await ai_service.generate_team_trajectory(workspace_id, dev_ids, start_date, end_date)
@@ -2020,7 +2076,7 @@ async def get_composition_recommendations(
     _validate_date_range(start_date, end_date)
 
     if team_id:
-        dev_ids = await _get_team_developer_ids(db, team_id)
+        dev_ids = await _get_team_developer_ids(db, workspace_id, team_id)
     else:
         dev_ids = await _get_workspace_developer_ids(db, workspace_id)
 
@@ -2028,7 +2084,9 @@ async def get_composition_recommendations(
         raise HTTPException(status_code=404, detail="No team members found")
 
     # Include external contributors (ghost developers)
-    dev_ids = await _get_all_contributor_ids(db, dev_ids, start_date, end_date)
+    dev_ids = await _get_all_contributor_ids(
+        db, dev_ids, start_date, end_date, workspace_id=workspace_id
+    )
 
     ai_service = InsightsAIService(db)
     result = await ai_service.recommend_team_composition(workspace_id, dev_ids, start_date, end_date)
@@ -2060,7 +2118,7 @@ async def get_hiring_forecast(
     _validate_date_range(start_date, end_date)
 
     if team_id:
-        dev_ids = await _get_team_developer_ids(db, team_id)
+        dev_ids = await _get_team_developer_ids(db, workspace_id, team_id)
     else:
         dev_ids = await _get_workspace_developer_ids(db, workspace_id)
 
@@ -2068,7 +2126,9 @@ async def get_hiring_forecast(
         raise HTTPException(status_code=404, detail="No team members found")
 
     # Include external contributors (ghost developers)
-    dev_ids = await _get_all_contributor_ids(db, dev_ids, start_date, end_date)
+    dev_ids = await _get_all_contributor_ids(
+        db, dev_ids, start_date, end_date, workspace_id=workspace_id
+    )
 
     ai_service = InsightsAIService(db)
     result = await ai_service.estimate_hiring_timeline(workspace_id, dev_ids, start_date, end_date)
@@ -2115,7 +2175,11 @@ async def get_repository_insights(
     member_id_set = set(dev_ids)
     service = DeveloperInsightsService(db)
     raw_repos = await service.compute_repository_insights(
-        dev_ids, start_date, end_date, include_external=True
+        dev_ids,
+        start_date,
+        end_date,
+        include_external=True,
+        workspace_id=workspace_id,
     )
 
     # Enrich with repository metadata (language, is_private)
@@ -2206,7 +2270,11 @@ async def get_repository_detail(
 
     # Get aggregate for this repo (with external contributors)
     all_repos = await service.compute_repository_insights(
-        dev_ids, start_date, end_date, include_external=True
+        dev_ids,
+        start_date,
+        end_date,
+        include_external=True,
+        workspace_id=workspace_id,
     )
     repo_aggregate = None
     for r in all_repos:

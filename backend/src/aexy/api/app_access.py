@@ -381,6 +381,25 @@ async def update_member_access(
             detail="Admin permission required",
         )
 
+    # WS-053: target developer must be an active member of THIS workspace
+    # before we write app-access overrides for them. Without this, an
+    # admin of workspace A can create access-config rows pointing at a
+    # developer who only exists in workspace B.
+    from aexy.core.workspace_auth import assert_active_member
+    await assert_active_member(db, workspace_id, developer_id)
+
+    # When applying a template, it must also belong to this workspace
+    # (or be a system template — workspace_id is None).
+    if data.applied_template_id:
+        from sqlalchemy import select
+        from aexy.models.app_access import AppAccessTemplate as _Tpl
+        tpl_check = await db.execute(
+            select(_Tpl).where(_Tpl.id == data.applied_template_id)
+        )
+        tpl = tpl_check.scalar_one_or_none()
+        if not tpl or (tpl.workspace_id and str(tpl.workspace_id) != workspace_id):
+            raise HTTPException(status_code=404, detail="Template not found")
+
     service = AppAccessService(db)
     try:
         member = await service.update_member_access(
@@ -415,6 +434,17 @@ async def apply_template_to_member(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin permission required",
         )
+
+    # WS-053: same active-member + template-workspace guards as
+    # update_member_access.
+    from sqlalchemy import select
+    from aexy.core.workspace_auth import assert_active_member
+    from aexy.models.app_access import AppAccessTemplate as _Tpl
+    await assert_active_member(db, workspace_id, developer_id)
+    tpl_check = await db.execute(select(_Tpl).where(_Tpl.id == data.template_id))
+    tpl = tpl_check.scalar_one_or_none()
+    if not tpl or (tpl.workspace_id and str(tpl.workspace_id) != workspace_id):
+        raise HTTPException(status_code=404, detail="Template not found")
 
     service = AppAccessService(db)
     try:

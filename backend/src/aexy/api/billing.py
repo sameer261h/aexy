@@ -614,7 +614,13 @@ async def get_limits_usage(
                 WorkspaceMember,
                 WorkspaceMember.workspace_id == Workspace.id,
             )
-            .where(WorkspaceMember.developer_id == developer_id)
+            .where(
+                WorkspaceMember.developer_id == developer_id,
+                # Skip workspaces the user has been removed from —
+                # otherwise their token allocation could still get
+                # billed to a stale workspace they no longer belong to.
+                WorkspaceMember.status == "active",
+            )
             .order_by(
                 # Owners first, then by recency so we pick the most
                 # active workspace the user is likely paying for.

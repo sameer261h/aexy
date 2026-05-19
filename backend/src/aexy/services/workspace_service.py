@@ -465,9 +465,19 @@ class WorkspaceService:
         return member_level >= required_level
 
     async def is_owner(self, workspace_id: str, developer_id: str) -> bool:
-        """Check if a developer is the workspace owner."""
+        """Check if a developer is the *active* workspace owner.
+
+        Defense-in-depth: `remove_member` already refuses to flip an
+        owner row to `removed`, but a future bug or direct DB edit
+        could break that invariant. Require active membership here so
+        the check matches `check_permission`'s behavior.
+        """
         member = await self.get_member(workspace_id, developer_id)
-        return member is not None and member.role == "owner"
+        return (
+            member is not None
+            and member.role == "owner"
+            and member.status == "active"
+        )
 
     # Pending Invites
     async def create_pending_invite(

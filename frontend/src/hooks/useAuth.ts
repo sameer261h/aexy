@@ -4,6 +4,23 @@ import { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { developerApi, repositoriesApi, Developer } from "@/lib/api";
+import { consumePostLoginRedirect } from "@/lib/oauth";
+
+// Cookie used solely as a *presence* signal for the Next.js middleware so
+// it can avoid rendering the authenticated shell to logged-out users.
+// Not httpOnly (must be readable by JS to keep in sync with localStorage)
+// and not load-bearing for actual auth — the JWT in localStorage is.
+const AUTH_PRESENCE_COOKIE = "aexy_authed";
+
+function setAuthPresenceCookie(): void {
+  if (typeof document === "undefined") return;
+  document.cookie = `${AUTH_PRESENCE_COOKIE}=1; path=/; SameSite=Lax`;
+}
+
+function clearAuthPresenceCookie(): void {
+  if (typeof document === "undefined") return;
+  document.cookie = `${AUTH_PRESENCE_COOKIE}=; path=/; SameSite=Lax; max-age=0`;
+}
 
 export function useAuth() {
   const router = useRouter();
@@ -16,6 +33,15 @@ export function useAuth() {
   useEffect(() => setMounted(true), []);
 
   const hasToken = mounted && !!localStorage.getItem("token");
+
+  // Keep the middleware-visible presence cookie in sync with localStorage on
+  // every render. Handles the case where localStorage and cookie diverge
+  // (e.g. localStorage cleared in dev tools).
+  useEffect(() => {
+    if (!mounted) return;
+    if (hasToken) setAuthPresenceCookie();
+    else clearAuthPresenceCookie();
+  }, [mounted, hasToken]);
 
   const {
     data: user,
@@ -31,6 +57,7 @@ export function useAuth() {
 
   const logout = () => {
     localStorage.removeItem("token");
+    clearAuthPresenceCookie();
     queryClient.clear();
     router.push("/");
   };
@@ -57,6 +84,7 @@ export function useSetToken() {
 
   return async (token: string) => {
     localStorage.setItem("token", token);
+    setAuthPresenceCookie();
     queryClient.invalidateQueries({ queryKey: ["currentUser"] });
 
     try {
@@ -68,10 +96,15 @@ export function useSetToken() {
         return;
       }
 
+      // Honour a stashed `?next=` from the middleware redirect, but only
+      // when onboarding is already complete — sending a half-onboarded user
+      // to /sprints would just bounce them right back.
+      const nextPath = consumePostLoginRedirect();
+
       // Check if onboarding is complete
       const status = await repositoriesApi.getOnboardingStatus();
       if (status.completed) {
-        router.push("/dashboard");
+        router.push(nextPath ?? "/dashboard");
       } else {
         router.push("/onboarding");
       }

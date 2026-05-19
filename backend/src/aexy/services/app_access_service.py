@@ -638,7 +638,15 @@ class AppAccessService:
     async def _get_workspace_member(
         self, workspace_id: str, developer_id: str
     ) -> WorkspaceMember | None:
-        """Get workspace member record."""
+        """Get an *active* workspace member record.
+
+        Filters on `status == "active"` at the helper level because
+        most callers only check `if not member` and would otherwise
+        configure / apply permissions for removed members. The one
+        callsite that already double-checks status (around line 88)
+        keeps working — it just falls into the `not member` branch
+        sooner.
+        """
         stmt = (
             select(WorkspaceMember)
             .options(selectinload(WorkspaceMember.custom_role))
@@ -646,6 +654,7 @@ class AppAccessService:
                 and_(
                     WorkspaceMember.workspace_id == workspace_id,
                     WorkspaceMember.developer_id == developer_id,
+                    WorkspaceMember.status == "active",
                 )
             )
         )

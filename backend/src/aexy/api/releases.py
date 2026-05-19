@@ -398,6 +398,17 @@ async def add_sprint_to_release(
     if not release or str(release.workspace_id) != workspace_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Release not found")
 
+    # Verify the sprint belongs to this workspace before linking.
+    from aexy.models.sprint import Sprint
+    sprint_check = await db.execute(
+        select(Sprint.id).where(
+            Sprint.id == data.sprint_id,
+            Sprint.workspace_id == workspace_id,
+        )
+    )
+    if sprint_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sprint not found")
+
     # Check if already linked
     existing = await db.execute(
         select(ReleaseSprint).where(
@@ -499,7 +510,12 @@ async def add_stories_to_release(
     already_in_release = 0
 
     for story_id in data.story_ids:
-        story_result = await db.execute(select(UserStory).where(UserStory.id == story_id))
+        story_result = await db.execute(
+            select(UserStory).where(
+                UserStory.id == story_id,
+                UserStory.workspace_id == workspace_id,
+            )
+        )
         story = story_result.scalar_one_or_none()
 
         if story:

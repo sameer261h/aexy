@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useCallback, useState, useMemo } from "react";
+import type React from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { useWorkspace } from "@/hooks/useWorkspace";
@@ -28,6 +29,7 @@ import {
   User,
   Brain,
   FolderGit2,
+  Info,
 } from "lucide-react";
 import {
   useTeamInsights,
@@ -44,6 +46,10 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import {
+  AnalyticsDetailsContext,
+  AnalyticsDetailsModal,
+} from "@/components/insights/AnalyticsDetailsModal";
 
 const PERIOD_OPTIONS: { value: InsightsPeriodType; label: string }[] = [
   { value: "weekly", label: "Weekly" },
@@ -92,6 +98,7 @@ export default function InsightsPage() {
   const { currentWorkspaceId } = useWorkspace();
   const { hasEnabledRepos, hasInstallation, installUrl, isLoading: reposLoading } = useEnabledRepositories();
   const [periodType, setPeriodType] = useState<InsightsPeriodType>("weekly");
+  const [details, setDetails] = useState<AnalyticsDetailsContext | null>(null);
 
   const {
     teamInsights,
@@ -166,6 +173,36 @@ export default function InsightsPage() {
     }
   };
 
+  // Depend on the primitive period boundaries rather than the
+  // teamInsights object — that reference flips on every refetch even
+  // when values are stable, churning every downstream memo.
+  const periodStart = teamInsights?.period_start;
+  const periodEnd = teamInsights?.period_end;
+  const openDetails = useCallback(
+    (
+      context: Omit<
+        AnalyticsDetailsContext,
+        "workspaceId" | "periodType" | "periodStart" | "periodEnd"
+      >,
+    ) => {
+      if (!currentWorkspaceId || !periodStart || !periodEnd) {
+        // Buttons are visually disabled when !detailsReady, but if a
+        // user double-clicks during the loading window, give them a
+        // soft cue instead of an opaque no-op.
+        toast.info("Analytics still loading — try again in a moment.");
+        return;
+      }
+      setDetails({
+        ...context,
+        workspaceId: currentWorkspaceId,
+        periodType,
+        periodStart,
+        periodEnd,
+      });
+    },
+    [currentWorkspaceId, periodType, periodStart, periodEnd],
+  );
+
   const developerColumns: DataTableColumn<MemberSummary>[] = useMemo(
     () => [
       {
@@ -230,17 +267,34 @@ export default function InsightsPage() {
         id: "actions",
         header: "",
         cell: (m) => (
-          <Link
-            href={`/insights/developers/${m.developer_id}`}
-            className="text-xs text-indigo-400 hover:text-indigo-300"
-          >
-            Details →
-          </Link>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                openDetails({
+                  title: `${m.developer_name || m.developer_id.slice(0, 8)} activity`,
+                  metric: "developer_summary",
+                  value: `${m.commits_count} commits, ${m.prs_merged} PRs, ${m.reviews_given} reviews`,
+                  developerId: m.developer_id,
+                  developerName: m.developer_name,
+                })
+              }
+              className="text-xs text-muted-foreground hover:text-foreground"
+            >
+              Sources
+            </button>
+            <Link
+              href={`/insights/developers/${m.developer_id}`}
+              className="text-xs text-indigo-400 hover:text-indigo-300"
+            >
+              Profile →
+            </Link>
+          </div>
         ),
         cellClassName: "text-right",
       },
     ],
-    [dist],
+    [dist, openDetails],
   );
 
   return (
@@ -418,6 +472,13 @@ export default function InsightsPage() {
             value={agg?.total_commits ?? 0}
             sub={`${(agg?.avg_commits_per_member ?? 0).toFixed(1)}/member`}
             color="text-green-400"
+            onDetails={() =>
+              openDetails({
+                title: "Team commits",
+                metric: "total_commits",
+                value: agg?.total_commits ?? 0,
+              })
+            }
           />
           <StatCard
             icon={GitPullRequest}
@@ -425,18 +486,39 @@ export default function InsightsPage() {
             value={agg?.total_prs_merged ?? 0}
             sub={`${(agg?.avg_prs_per_member ?? 0).toFixed(1)}/member`}
             color="text-purple-400"
+            onDetails={() =>
+              openDetails({
+                title: "Team PRs merged",
+                metric: "total_prs_merged",
+                value: agg?.total_prs_merged ?? 0,
+              })
+            }
           />
           <StatCard
             icon={MessageSquare}
             label="Reviews"
             value={agg?.total_reviews ?? 0}
             color="text-amber-400"
+            onDetails={() =>
+              openDetails({
+                title: "Team reviews",
+                metric: "total_reviews",
+                value: agg?.total_reviews ?? 0,
+              })
+            }
           />
           <StatCard
             icon={Code}
             label="Lines Changed"
             value={formatNumber(agg?.total_lines_changed ?? 0)}
             color="text-cyan-400"
+            onDetails={() =>
+              openDetails({
+                title: "Team lines changed",
+                metric: "total_lines_changed",
+                value: formatNumber(agg?.total_lines_changed ?? 0),
+              })
+            }
           />
           <StatCard
             icon={BarChart3}
@@ -613,6 +695,13 @@ export default function InsightsPage() {
           />
         </div>
       )}
+      <AnalyticsDetailsModal
+        context={details}
+        open={!!details}
+        onOpenChange={(open) => {
+          if (!open) setDetails(null);
+        }}
+      />
     </div>
   );
 }
@@ -623,18 +712,32 @@ function StatCard({
   value,
   sub,
   color,
+  onDetails,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value: React.ReactNode;
   sub?: string;
   color: string;
+  onDetails?: () => void;
 }) {
   return (
     <div className="bg-muted rounded-xl p-4 border border-border">
-      <div className="flex items-center gap-2 mb-2">
-        <Icon className={`h-4 w-4 ${color}`} />
-        <span className="text-xs text-muted-foreground">{label}</span>
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <Icon className={`h-4 w-4 ${color}`} />
+          <span className="text-xs text-muted-foreground truncate">{label}</span>
+        </div>
+        {onDetails && (
+          <button
+            type="button"
+            onClick={onDetails}
+            className="text-muted-foreground hover:text-foreground"
+            aria-label={`${label} sources`}
+          >
+            <Info className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
       <div className="text-xl font-bold text-foreground">{value}</div>
       {sub && <div className="text-xs text-muted-foreground mt-1">{sub}</div>}

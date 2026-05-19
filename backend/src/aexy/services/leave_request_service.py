@@ -15,7 +15,7 @@ from aexy.models.leave import (
     Holiday,
 )
 from aexy.models.booking import AvailabilityOverride
-from aexy.models.team import TeamMember
+from aexy.models.team import Team, TeamMember
 from aexy.models.workspace import WorkspaceMember
 
 logger = logging.getLogger(__name__)
@@ -429,9 +429,18 @@ class LeaveRequestService:
         Looks for team lead first, then falls back to workspace manager.
         Uses a single query to find leads across all of the developer's teams.
         """
-        # Get team IDs for this developer
-        team_id_stmt = select(TeamMember.team_id).where(
-            TeamMember.developer_id == developer_id
+        # WS-013: constrain team lookup to the leave request's workspace.
+        # Without this, a developer who belongs to teams in multiple
+        # workspaces could end up with a cross-workspace team lead acting
+        # as their approver — even if that lead has no role in this
+        # workspace.
+        team_id_stmt = (
+            select(TeamMember.team_id)
+            .join(Team, Team.id == TeamMember.team_id)
+            .where(
+                TeamMember.developer_id == developer_id,
+                Team.workspace_id == workspace_id,
+            )
         )
 
         # Find any lead in those teams (single query, no N+1)

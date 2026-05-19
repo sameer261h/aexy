@@ -826,7 +826,10 @@ async def add_tasks_to_story(
 
     for task_id in data.task_ids:
         task_result = await db.execute(
-            select(SprintTask).where(SprintTask.id == task_id)
+            select(SprintTask).where(
+                SprintTask.id == task_id,
+                SprintTask.workspace_id == workspace_id,
+            )
         )
         task = task_result.scalar_one_or_none()
 

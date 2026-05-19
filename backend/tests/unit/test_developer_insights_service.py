@@ -18,6 +18,7 @@ from aexy.models.developer_insights import (
     PeriodType,
     TeamMetricsSnapshot,
 )
+from aexy.models.repository import Repository, WorkspaceRepository
 from aexy.models.workspace import Workspace, WorkspaceMember
 from aexy.services.developer_insights_service import (
     DeveloperInsightsService,
@@ -201,6 +202,184 @@ class TestVelocityMetrics:
 
         assert result.prs_merged == 2
         assert result.pr_throughput > 0
+
+
+class TestRepositoryInsights:
+
+    @pytest.mark.asyncio
+    async def test_repository_insights_scopes_adopted_repos_to_workspace(
+        self, db_session, workspace, dev, dev2
+    ):
+        other_workspace = Workspace(
+            id=str(uuid4()),
+            name="Other Workspace",
+            slug=f"other-{uuid4().hex[:8]}",
+            owner_id=dev2.id,
+        )
+        db_session.add(other_workspace)
+        db_session.add(
+            WorkspaceMember(
+                workspace_id=workspace.id,
+                developer_id=dev.id,
+                role="member",
+                status="active",
+            )
+        )
+
+        in_scope_repo = Repository(
+            id=str(uuid4()),
+            github_id=91001,
+            full_name="org/in-scope",
+            name="in-scope",
+            owner_login="org",
+            owner_type="Organization",
+        )
+        leaked_repo = Repository(
+            id=str(uuid4()),
+            github_id=91002,
+            full_name="personal/leaked",
+            name="leaked",
+            owner_login="personal",
+            owner_type="User",
+        )
+        db_session.add_all([in_scope_repo, leaked_repo])
+        await db_session.flush()
+
+        db_session.add_all(
+            [
+                WorkspaceRepository(
+                    id=str(uuid4()),
+                    workspace_id=workspace.id,
+                    repository_id=in_scope_repo.id,
+                    adopted_by_developer_id=dev.id,
+                    is_active=True,
+                ),
+                WorkspaceRepository(
+                    id=str(uuid4()),
+                    workspace_id=other_workspace.id,
+                    repository_id=leaked_repo.id,
+                    adopted_by_developer_id=dev2.id,
+                    is_active=True,
+                ),
+                Commit(
+                    sha=f"scope-{uuid4().hex}",
+                    developer_id=dev.id,
+                    repository="org/in-scope",
+                    message="in workspace",
+                    additions=10,
+                    deletions=1,
+                    files_changed=1,
+                    committed_at=_utc(2024, 1, 10),
+                ),
+                Commit(
+                    sha=f"leak-{uuid4().hex}",
+                    developer_id=dev2.id,
+                    repository="personal/leaked",
+                    message="other workspace",
+                    additions=20,
+                    deletions=2,
+                    files_changed=1,
+                    committed_at=_utc(2024, 1, 10),
+                ),
+            ]
+        )
+        await db_session.flush()
+
+        service = DeveloperInsightsService(db_session)
+        repos = await service.compute_repository_insights(
+            [dev.id],
+            _utc(2024, 1, 1),
+            _utc(2024, 1, 31),
+            include_external=True,
+            workspace_id=workspace.id,
+        )
+
+        assert [r["repository"] for r in repos] == ["org/in-scope"]
+
+    @pytest.mark.asyncio
+    async def test_member_activity_in_non_adopted_repo_is_excluded(
+        self, db_session, workspace, dev
+    ):
+        """Regression test: a workspace member's commits/PRs to a repo
+        the workspace has NOT adopted must not appear in repository
+        insights. Earlier behavior leaked these via the Commit/PR
+        repository scan even when WorkspaceRepository was scoped to the
+        right workspace."""
+        db_session.add(
+            WorkspaceMember(
+                workspace_id=workspace.id,
+                developer_id=dev.id,
+                role="member",
+                status="active",
+            )
+        )
+
+        adopted_repo = Repository(
+            id=str(uuid4()),
+            github_id=92001,
+            full_name="org/adopted",
+            name="adopted",
+            owner_login="org",
+            owner_type="Organization",
+        )
+        personal_repo = Repository(
+            id=str(uuid4()),
+            github_id=92002,
+            full_name="dev/personal-side-project",
+            name="personal-side-project",
+            owner_login="dev",
+            owner_type="User",
+        )
+        db_session.add_all([adopted_repo, personal_repo])
+        await db_session.flush()
+
+        db_session.add_all(
+            [
+                WorkspaceRepository(
+                    id=str(uuid4()),
+                    workspace_id=workspace.id,
+                    repository_id=adopted_repo.id,
+                    adopted_by_developer_id=dev.id,
+                    is_active=True,
+                ),
+                # Member commits to BOTH adopted and personal repos.
+                # Only the adopted one should surface.
+                Commit(
+                    sha=f"adopted-{uuid4().hex}",
+                    developer_id=dev.id,
+                    repository="org/adopted",
+                    message="work commit",
+                    additions=5,
+                    deletions=0,
+                    files_changed=1,
+                    committed_at=_utc(2024, 1, 10),
+                ),
+                Commit(
+                    sha=f"personal-{uuid4().hex}",
+                    developer_id=dev.id,
+                    repository="dev/personal-side-project",
+                    message="weekend hack",
+                    additions=50,
+                    deletions=10,
+                    files_changed=3,
+                    committed_at=_utc(2024, 1, 11),
+                ),
+            ]
+        )
+        await db_session.flush()
+
+        service = DeveloperInsightsService(db_session)
+        repos = await service.compute_repository_insights(
+            [dev.id],
+            _utc(2024, 1, 1),
+            _utc(2024, 1, 31),
+            include_external=True,
+            workspace_id=workspace.id,
+        )
+
+        repo_names = [r["repository"] for r in repos]
+        assert "org/adopted" in repo_names
+        assert "dev/personal-side-project" not in repo_names
 
 
 # ---------------------------------------------------------------------------

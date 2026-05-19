@@ -66,6 +66,10 @@ function getLoginUrls() {
   if (currentHash) {
     sessionStorage.setItem("postLoginHash", currentHash);
   }
+  // The document-level OAuthInflightTagger (mounted in providers.tsx) also
+  // sets this on click, but we set it pre-emptively here in case some
+  // future caller bypasses the anchor.
+  sessionStorage.setItem("oauthInflight", "1");
 
   // Use URL without hash for redirect (hash must come after query params)
   const redirectUrl = window.location.origin + window.location.pathname + window.location.search;

@@ -122,6 +122,49 @@ def _to_email_message(req: SendEmailRequest) -> EmailMessage:
     )
 
 
+async def _require_verified_sending_domain(from_email: str) -> None:
+    """Reject sends from a domain that isn't in our verified sending catalog.
+
+    Without this, a caller who reaches /send/email can spoof mail from any
+    address the configured provider will accept — `marketing@yourcustomer.com`,
+    `noreply@example.com`, etc. By restricting `from_address` to domains
+    explicitly added to `mailagent_domains` (with `status='verified'`), we
+    prevent open-relay-as-a-service even from authenticated internal callers.
+    """
+    if "@" not in from_email:
+        raise HTTPException(status_code=400, detail="Invalid from_address")
+    domain_part = from_email.split("@", 1)[1].lower()
+
+    from sqlalchemy import select as _select
+    from mailagent.database import get_db_context
+    from mailagent.models import SendingDomain
+
+    async with get_db_context() as db:
+        result = await db.execute(
+            _select(SendingDomain.id).where(
+                SendingDomain.domain == domain_part,
+                SendingDomain.status == "verified",
+            )
+        )
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Domain '{domain_part}' is not a verified sending domain",
+            )
+
+
+# Header whitelist enforced on every send. Arbitrary headers (X-Auth-* …)
+# could leak credentials or be used for header-injection attacks against
+# downstream relays; we restrict to the safe subset RFC 8058 + threading.
+_ALLOWED_CUSTOM_HEADERS = {"reply-to", "in-reply-to", "references", "list-unsubscribe", "list-unsubscribe-post"}
+
+
+def _filter_custom_headers(headers: dict[str, str] | None) -> dict[str, str]:
+    if not headers:
+        return {}
+    return {k: v for k, v in headers.items() if k.lower() in _ALLOWED_CUSTOM_HEADERS}
+
+
 @router.post("/email", response_model=SendResponse)
 async def send_email(
     request: SendEmailRequest,
@@ -132,6 +175,11 @@ async def send_email(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Either body_html or body_text is required",
         )
+
+    await _require_verified_sending_domain(str(request.from_address.address))
+    # Strip caller-supplied arbitrary headers, keeping only the threading /
+    # unsubscribe ones we know are safe.
+    request.headers = _filter_custom_headers(request.headers)
 
     message = _to_email_message(request)
     service = await get_send_service()

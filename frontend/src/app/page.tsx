@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { safeInternalPath, stashPostLoginRedirect } from "@/lib/oauth";
 import {
   ArrowRight,
   BarChart3,
@@ -123,14 +124,23 @@ export default function Home() {
   const githubLoginUrl = `${API_BASE_URL}/auth/github/login`;
   const microsoftLoginUrl = `${API_BASE_URL}/auth/microsoft/login`;
 
+  const searchParams = useSearchParams();
   useEffect(() => {
+    // Honour ?next= from the middleware auth gate. Two cases:
+    //  1. User is already authed (e.g., they clicked a deep link in a new
+    //     tab while logged in) — redirect them straight to their target.
+    //  2. User is logged out — stash it in sessionStorage so the OAuth
+    //     callback can complete the redirect after token exchange.
+    const rawNext = searchParams?.get("next") ?? null;
+    const nextPath = safeInternalPath(rawNext);
     const token = localStorage.getItem("token");
     if (token) {
-      router.replace("/dashboard");
+      router.replace(nextPath ?? "/dashboard");
     } else {
+      if (nextPath) stashPostLoginRedirect(nextPath);
       setIsChecking(false);
     }
-  }, [router]);
+  }, [router, searchParams]);
 
   if (isChecking) {
     return (

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, Suspense } from "react";
 import { NextIntlClientProvider } from "next-intl";
 import { NavigationProgress } from "@/components/ui/navigation-progress";
+import { OAuthInflightTagger } from "@/components/OAuthInflightTagger";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { useLocaleStore } from "@/stores/localeStore";
 
@@ -35,6 +36,7 @@ export function Providers({
           <Suspense fallback={null}>
             <NavigationProgress />
           </Suspense>
+          <OAuthInflightTagger />
           {children}
         </ThemeProvider>
       </QueryClientProvider>
