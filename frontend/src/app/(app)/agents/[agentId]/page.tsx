@@ -643,8 +643,11 @@ export default function AgentDetailPage() {
                     }}
                   />
                   {isRunning ? (
+                    // motion-safe: gate the always-on ping so users with
+                    // prefers-reduced-motion don't get a heartbeat per
+                    // active execution. UX-A11Y-005.
                     <span
-                      className="absolute h-2 w-2 rounded-full animate-ping opacity-75"
+                      className="absolute h-2 w-2 rounded-full motion-safe:animate-ping opacity-75"
                       style={{ backgroundColor: haloColor }}
                     />
                   ) : null}

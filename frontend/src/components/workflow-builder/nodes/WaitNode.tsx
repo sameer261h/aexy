@@ -61,7 +61,7 @@ export const WaitNode = memo(({ data, selected }: NodeProps<WaitNodeType>) => {
   };
 
   const getStyles = () => {
-    if (isRunning) return "border-blue-400 shadow-blue-500/30 animate-pulse";
+    if (isRunning) return "border-blue-400 shadow-blue-500/30 motion-safe:animate-pulse";
     if (isSuccess) return "border-violet-400 shadow-violet-500/30";
     if (isFailed) return "border-red-500 shadow-red-500/30";
     if (isSkipped) return "border-muted-foreground shadow-muted-foreground/20 opacity-60";

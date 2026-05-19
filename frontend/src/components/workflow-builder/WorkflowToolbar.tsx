@@ -22,6 +22,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
+
+/** Each row in the validation popover. Toolbar doesn't need the full
+ *  ValidationError shape — just enough to render and to wire a
+ *  "reveal" jump. Defined here so callers don't have to import the
+ *  hook's types into the toolbar. */
+export interface ToolbarValidationItem {
+  nodeId: string;
+  nodeLabel?: string;
+  message: string;
+  severity: "error" | "warning";
+}
 
 interface WorkflowToolbarProps {
   hasChanges: boolean;
@@ -30,6 +42,11 @@ interface WorkflowToolbarProps {
   isTestRunning?: boolean;
   validationErrors?: number;
   validationWarnings?: number;
+  /** When provided, the error/warning chip becomes a popover that
+   *  lists every issue. Each row has a "Reveal" button that calls
+   *  onRevealError to jump the viewport to the offending node. */
+  validationItems?: ToolbarValidationItem[];
+  onRevealNode?: (nodeId: string) => void;
   currentVersion?: number;
   onSave: () => Promise<void>;
   onPublish: () => Promise<void>;
@@ -50,6 +67,8 @@ export function WorkflowToolbar({
   isTestRunning = false,
   validationErrors = 0,
   validationWarnings = 0,
+  validationItems,
+  onRevealNode,
   currentVersion,
   onSave,
   onPublish,
@@ -68,6 +87,7 @@ export function WorkflowToolbar({
   const [isImporting, setIsImporting] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const [showValidationPopover, setShowValidationPopover] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Use external test running state if provided
@@ -275,23 +295,103 @@ export function WorkflowToolbar({
           </>
         )}
 
-        {/* Validation indicator */}
+        {/* Validation indicator — now a clickable pill that opens a
+            popover listing every issue. Clicking a row jumps the
+            viewport to the offending node via onRevealNode. UX-WFL-005. */}
         {(validationErrors > 0 || validationWarnings > 0) && (
           <>
             <div className="w-px h-6 bg-accent" />
-            <div className="flex items-center gap-1.5">
-              {validationErrors > 0 && (
-                <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-500/20 text-red-400">
-                  <AlertCircle className="h-3.5 w-3.5" />
-                  <span className="text-xs font-medium">{validationErrors}</span>
-                </div>
-              )}
-              {validationWarnings > 0 && (
-                <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-500/20 text-amber-400">
-                  <AlertCircle className="h-3.5 w-3.5" />
-                  <span className="text-xs font-medium">{validationWarnings}</span>
-                </div>
-              )}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() =>
+                  validationItems && validationItems.length > 0
+                    ? setShowValidationPopover((v) => !v)
+                    : undefined
+                }
+                aria-haspopup={validationItems ? "dialog" : undefined}
+                aria-expanded={showValidationPopover}
+                className={cn(
+                  "flex items-center gap-1.5 px-2 py-1 rounded-lg transition-colors",
+                  validationItems && validationItems.length > 0
+                    ? "cursor-pointer hover:bg-accent"
+                    : "cursor-default",
+                )}
+              >
+                {validationErrors > 0 && (
+                  <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-500/20 text-red-600 dark:text-red-400">
+                    <AlertCircle className="h-3.5 w-3.5" />
+                    <span className="text-xs font-medium">{validationErrors}</span>
+                  </span>
+                )}
+                {validationWarnings > 0 && (
+                  <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                    <AlertCircle className="h-3.5 w-3.5" />
+                    <span className="text-xs font-medium">{validationWarnings}</span>
+                  </span>
+                )}
+              </button>
+
+              {showValidationPopover && validationItems && validationItems.length > 0 ? (
+                <>
+                  {/* Click-out backdrop */}
+                  <div
+                    className="fixed inset-0 z-30"
+                    onClick={() => setShowValidationPopover(false)}
+                    aria-hidden
+                  />
+                  <div
+                    role="dialog"
+                    aria-label="Validation issues"
+                    className="absolute top-full mt-2 right-0 z-40 w-80 max-h-96 overflow-y-auto bg-popover border border-border rounded-xl shadow-xl"
+                  >
+                    <div className="px-3 py-2 border-b border-border flex items-center justify-between">
+                      <span className="text-xs font-semibold text-foreground">
+                        Issues
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {validationItems.length === 1
+                          ? "1 to fix"
+                          : `${validationItems.length} to fix`}
+                      </span>
+                    </div>
+                    <ul className="divide-y divide-border">
+                      {validationItems.map((item, idx) => (
+                        <li key={`${item.nodeId}-${idx}`}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onRevealNode?.(item.nodeId);
+                              setShowValidationPopover(false);
+                            }}
+                            className="w-full text-left px-3 py-2.5 hover:bg-accent transition-colors flex items-start gap-2.5"
+                          >
+                            <AlertCircle
+                              className={cn(
+                                "h-4 w-4 mt-0.5 shrink-0",
+                                item.severity === "error"
+                                  ? "text-red-500 dark:text-red-400"
+                                  : "text-amber-500 dark:text-amber-400",
+                              )}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs font-medium text-foreground truncate">
+                                {item.nodeLabel || item.nodeId}
+                              </div>
+                              <div className="text-xs text-muted-foreground mt-0.5">
+                                {item.message}
+                              </div>
+                            </div>
+                            <span className="text-[10px] text-muted-foreground/70 shrink-0 mt-0.5">
+                              Reveal
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </>
+              ) : null}
             </div>
           </>
         )}

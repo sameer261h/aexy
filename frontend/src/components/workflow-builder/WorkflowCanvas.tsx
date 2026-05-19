@@ -134,6 +134,37 @@ function WorkflowCanvasInner({
   const [isPaletteCollapsed, setIsPaletteCollapsed] = useState(false);
   const [showMobilePalette, setShowMobilePalette] = useState(false);
 
+  // UX-WFL-006: React Flow's Background takes a raw color string and
+  // applies it as an SVG fill — it can't honor CSS variables or
+  // currentColor. We mirror the project's --muted-foreground / hsl
+  // values into a plain string and re-read on theme toggle so the
+  // dotgrid stays legible across light + dark without overpowering
+  // either. Defaults to a slate mid-tone for first paint.
+  const [backgroundColor, setBackgroundColor] = useState("#94a3b8");
+  useEffect(() => {
+    const readColor = () => {
+      if (typeof window === "undefined") return;
+      const value = getComputedStyle(document.documentElement)
+        .getPropertyValue("--muted-foreground")
+        .trim();
+      if (!value) return;
+      // Tailwind CSS vars are usually `H S% L%` triplets (sometimes
+      // `HSL(...)`, sometimes already `hsl(...)`). Wrap in hsl() if
+      // it's just numbers; otherwise pass through.
+      const formatted = /^\d/.test(value) ? `hsl(${value})` : value;
+      setBackgroundColor(formatted);
+    };
+    readColor();
+    // Theme toggles flip the class on <html>; observe that to refresh
+    // the computed value when the user switches.
+    const observer = new MutationObserver(readColor);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme", "style"],
+    });
+    return () => observer.disconnect();
+  }, []);
+
   // Workflow validation
   const { validationResult, getNodeErrors, hasNodeErrors } = useWorkflowValidation(nodes, edges);
 
@@ -696,7 +727,7 @@ function WorkflowCanvasInner({
           snapGrid={[15, 15]}
           className="bg-background"
         >
-          <Background color="#334155" gap={15} />
+          <Background color={backgroundColor} gap={15} bgColor="transparent" />
           <Controls className="bg-muted border-border" />
           <MiniMap
             pannable
@@ -731,6 +762,37 @@ function WorkflowCanvasInner({
               isTestRunning={isTestRunning}
               validationErrors={validationResult.errors.length}
               validationWarnings={validationResult.warnings.length}
+              // UX-WFL-005: hand the toolbar the full issue list +
+              // a reveal callback so the validation chip becomes a
+              // jump-to-error popover. The label resolves from the
+              // live `nodes` array so renames flow through.
+              validationItems={[
+                ...validationResult.errors,
+                ...validationResult.warnings,
+              ].map((err) => {
+                const node = nodes.find((n) => n.id === err.nodeId);
+                const label =
+                  (node?.data as { label?: string } | undefined)?.label ??
+                  undefined;
+                return {
+                  nodeId: err.nodeId,
+                  nodeLabel: label,
+                  message: err.message,
+                  severity: err.severity,
+                };
+              })}
+              onRevealNode={(nodeId) => {
+                const node = nodes.find((n) => n.id === nodeId);
+                if (!node) return;
+                setSelectedNode(node);
+                // Center on the node and zoom in a touch so it stands
+                // out from a dense canvas.
+                fitView({
+                  nodes: [{ id: nodeId }],
+                  duration: 400,
+                  padding: 0.4,
+                });
+              }}
               onSave={handleSave}
               onPublish={onPublish}
               onUnpublish={onUnpublish}
