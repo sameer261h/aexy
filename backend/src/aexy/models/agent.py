@@ -5,7 +5,9 @@ from enum import Enum
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
+from decimal import Decimal
+
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -323,6 +325,18 @@ class AgentMessage(Base):
     tool_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     tool_output: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     message_index: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Citations + token meter (migrate_agent_message_streaming.sql).
+    # citations: list[{title, url, snippet?}] — sources the agent
+    # surfaced while producing this message.
+    # input/output tokens + cost_usd: per-message usage so the chat UI
+    # can render a "this message cost $0.0023, 1.2k tokens" meter
+    # without recomputing from a rate card.
+    citations: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

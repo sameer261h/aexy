@@ -287,6 +287,16 @@ class ToolCallInfo(BaseModel):
     args: dict
 
 
+class CitationInfo(BaseModel):
+    """One source the agent referenced. Loose by design — the LLM may
+    omit snippet/title; only url is conceptually required, and even
+    that we let through optional so partial citations don't crash."""
+
+    title: str | None = None
+    url: str | None = None
+    snippet: str | None = None
+
+
 class MessageResponse(BaseModel):
     """Schema for a conversation message."""
 
@@ -299,6 +309,10 @@ class MessageResponse(BaseModel):
     tool_name: str | None = None
     tool_output: dict | None = None
     message_index: int
+    citations: list[CitationInfo] | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

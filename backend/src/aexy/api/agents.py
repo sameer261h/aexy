@@ -1,7 +1,13 @@
 """API endpoints for AI Agents."""
 
+import json
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from aexy.core.database import get_db
 from aexy.api.developers import get_current_developer
@@ -598,6 +604,57 @@ async def send_message(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{agent_id}/conversations/{conversation_id}/messages/stream")
+async def stream_message(
+    workspace_id: str,
+    agent_id: str,
+    conversation_id: str,
+    data: MessageCreate,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Send a message and stream the agent response as SSE.
+
+    Event types: user_message, text_delta, tool_use_start, tool_result,
+    usage, done, error. The frontend's chat surface consumes this via
+    fetch + ReadableStream; the legacy non-streaming endpoint above
+    stays in place for non-UI callers (mobile webview, etc).
+    """
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    service = AgentService(db)
+
+    conversation = await service.get_conversation(conversation_id)
+    if not conversation or conversation.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    async def generate():
+        try:
+            async for chunk in service.stream_message(
+                conversation_id=conversation_id,
+                content=data.content,
+                user_id=str(current_developer.id),
+            ):
+                yield chunk
+        except Exception as e:
+            logger.error("Agent stream failed: %s", e, exc_info=True)
+            # service.stream_message already persists + emits its own
+            # error event for non-cancel exceptions; this catch is
+            # belt-and-suspenders for surface-level failures (e.g.
+            # workspace fetch). Mirror the SSE shape so the frontend
+            # parser doesn't choke.
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Server error during agent run'})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.patch("/{agent_id}/conversations/{conversation_id}", response_model=ConversationResponse)

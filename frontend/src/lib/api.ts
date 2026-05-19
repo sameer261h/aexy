@@ -10704,6 +10704,12 @@ export interface ToolCallInfo {
   args: Record<string, unknown>;
 }
 
+export interface AgentMessageCitation {
+  title?: string | null;
+  url?: string | null;
+  snippet?: string | null;
+}
+
 export interface AgentMessage {
   id: string;
   conversation_id: string;
@@ -10714,8 +10720,21 @@ export interface AgentMessage {
   tool_name?: string | null;
   tool_output?: Record<string, unknown> | null;
   message_index: number;
+  citations?: AgentMessageCitation[] | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cost_usd?: number | null;
   created_at: string;
 }
+
+export type ChatStreamEvent =
+  | { type: "user_message"; id: string; content: string; created_at?: string | null }
+  | { type: "text_delta"; text: string }
+  | { type: "tool_use_start"; tool: string; id: string; input?: Record<string, unknown> }
+  | { type: "tool_result"; tool: string; id: string; output?: unknown }
+  | { type: "usage"; input_tokens?: number | null; output_tokens?: number | null; cost_usd?: number | null }
+  | { type: "done"; assistant_message_id: string; execution_id: string; duration_ms: number }
+  | { type: "error"; message: string };
 
 export interface AgentConversationWithMessages extends AgentConversation {
   messages: AgentMessage[];
@@ -11078,6 +11097,50 @@ export const agentsApi = {
       data
     );
     return response.data;
+  },
+
+  /**
+   * Stream a chat message via SSE. Returns a Response so the caller
+   * can consume `response.body` as a ReadableStream and parse the
+   * `data: {...}\n\n` events incrementally.
+   *
+   * Pass an AbortSignal to wire the chat's Stop button — when aborted
+   * the fetch closes the connection mid-stream and the backend
+   * detects the cancellation, marks the execution as `cancelled`,
+   * persists any partial content, then unwinds.
+   *
+   * Event payloads (mirrored from agent_service.stream_message):
+   *   user_message    {type, id, content, created_at}
+   *   text_delta      {type, text}
+   *   tool_use_start  {type, tool, id, input}
+   *   tool_result     {type, tool, id, output}
+   *   usage           {type, input_tokens, output_tokens, cost_usd}
+   *   done            {type, assistant_message_id, execution_id, duration_ms}
+   *   error           {type, message}
+   */
+  streamMessage: async (
+    workspaceId: string,
+    agentId: string,
+    conversationId: string,
+    data: { content: string },
+    signal?: AbortSignal,
+  ): Promise<Response> => {
+    const token = typeof window !== "undefined" ? window.localStorage.getItem("token") : null;
+    const url = `${api.defaults.baseURL ?? ""}/workspaces/${workspaceId}/crm/agents/${agentId}/conversations/${conversationId}/messages/stream`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(data),
+      signal,
+      credentials: "include",
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`Stream failed: ${response.status} ${response.statusText}`);
+    }
+    return response;
   },
 
   updateConversation: async (

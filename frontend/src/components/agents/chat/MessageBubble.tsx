@@ -218,6 +218,11 @@ export function MessageBubble({ message, onResend }: MessageBubbleProps) {
 
   // Assistant message
   if (isAssistant) {
+    const citations = message.citations ?? [];
+    const hasUsage =
+      message.input_tokens != null ||
+      message.output_tokens != null ||
+      message.cost_usd != null;
     return (
       <div className="flex justify-start group">
         <div className="flex items-start gap-3 max-w-3xl">
@@ -245,6 +250,48 @@ export function MessageBubble({ message, onResend }: MessageBubbleProps) {
                   ))}
                 </div>
               )}
+
+              {/* UX-CHAT-008: citations strip — sources the agent
+                  referenced. Real <a> with rel=noopener so middle-
+                  click + cmd-click work and sender-controlled URLs
+                  can't hijack the opener. */}
+              {citations.length > 0 ? (
+                <div className="mt-3 pt-3 border-t border-border/60">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground/80 mb-2">
+                    Sources
+                  </div>
+                  <ol className="space-y-1.5 list-decimal pl-4">
+                    {citations.map((c, i) => {
+                      const href = c.url ?? "";
+                      let host = "";
+                      try {
+                        host = href ? new URL(href).hostname.replace(/^www\./, "") : "";
+                      } catch {
+                        host = "";
+                      }
+                      return (
+                        <li key={`${i}-${href}`} className="text-xs">
+                          {href ? (
+                            <a
+                              href={href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-indigo-600 dark:text-indigo-400 hover:underline break-all"
+                            >
+                              {c.title || host || href}
+                            </a>
+                          ) : (
+                            <span>{c.title || "Untitled source"}</span>
+                          )}
+                          {host && c.title ? (
+                            <span className="ml-1.5 text-muted-foreground">· {host}</span>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </div>
+              ) : null}
             </div>
             <div className="flex items-center gap-1 mt-1">
               {message.content ? (
@@ -253,6 +300,25 @@ export function MessageBubble({ message, onResend }: MessageBubbleProps) {
               <span className="text-xs text-muted-foreground">
                 {formatTime(message.created_at, locale)}
               </span>
+              {/* UX-CHAT-009: post-stream token + cost meter. Lives
+                  in the message footer (the live meter above the
+                  input handles the streaming phase). title= carries
+                  the breakdown so power users can audit. */}
+              {hasUsage ? (
+                <span
+                  className="ml-1 text-[10px] tabular-nums text-muted-foreground/70"
+                  title={[
+                    message.input_tokens != null ? `${message.input_tokens} in` : null,
+                    message.output_tokens != null ? `${message.output_tokens} out` : null,
+                    message.cost_usd != null ? `$${message.cost_usd.toFixed(4)}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                >
+                  {message.output_tokens != null ? `${message.output_tokens}t` : ""}
+                  {message.cost_usd != null ? ` · $${message.cost_usd.toFixed(4)}` : ""}
+                </span>
+              ) : null}
             </div>
           </div>
         </div>

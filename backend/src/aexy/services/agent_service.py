@@ -1,9 +1,10 @@
 """Agent service for managing and executing AI agents."""
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, AsyncIterator
 from uuid import uuid4
 
 from sqlalchemy import select, func
@@ -613,6 +614,321 @@ class AgentService:
         conversation.ended_at = datetime.now(timezone.utc)
         await self.db.flush()
         return True
+
+    @staticmethod
+    def _sse(data: dict) -> str:
+        """Format a dict payload as an SSE 'data:' line."""
+        return f"data: {json.dumps(data)}\n\n"
+
+    @staticmethod
+    def _estimate_cost_usd(
+        provider: str | None,
+        model: str | None,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> float:
+        """Best-effort per-message cost in USD.
+
+        Rate cards here are static defaults so the chat UI can render a
+        cost meter today without a billing service. They're intentionally
+        rounded up — accuracy at the per-message level matters less than
+        signaling order-of-magnitude.
+        Values are USD per 1M tokens. Unknown models fall back to a
+        conservative mid-range so the meter never reads $0.
+        """
+        rates = {
+            ("anthropic", "claude-3-5-sonnet"): (3.0, 15.0),
+            ("anthropic", "claude-3-opus"): (15.0, 75.0),
+            ("anthropic", "claude-3-haiku"): (0.25, 1.25),
+            ("gemini", "gemini-1.5-pro"): (1.25, 5.0),
+            ("gemini", "gemini-1.5-flash"): (0.075, 0.3),
+            ("gemini", "gemini-2.0-flash"): (0.10, 0.40),
+            ("openai", "gpt-4o"): (5.0, 15.0),
+            ("openai", "gpt-4o-mini"): (0.15, 0.6),
+        }
+        prov = (provider or "").lower()
+        mdl = (model or "").lower()
+        # Match by prefix so e.g. "claude-3-5-sonnet-20241022" resolves.
+        for (rp, rm), (rin, rout) in rates.items():
+            if prov == rp and mdl.startswith(rm):
+                return round((input_tokens * rin + output_tokens * rout) / 1_000_000, 6)
+        return round((input_tokens * 1.0 + output_tokens * 3.0) / 1_000_000, 6)
+
+    async def stream_message(
+        self,
+        conversation_id: str,
+        content: str,
+        user_id: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Send a user message and stream the agent response as SSE.
+
+        Yields SSE-formatted lines. Event types:
+            user_message:    confirms the user message was persisted
+                             (so the frontend optimistic insert can swap
+                             in the real id without dedupe races)
+            text_delta:      token chunks for the assistant message
+            tool_use_start:  tool call begins
+            tool_result:     tool call returns
+            usage:           per-message input/output tokens + USD cost
+            done:            stream finished cleanly
+            error:           fatal error; stream ends
+        """
+        conversation = await self.get_conversation(conversation_id)
+        if not conversation:
+            yield self._sse({"type": "error", "message": "Conversation not found"})
+            return
+        if conversation.status != "active":
+            yield self._sse({"type": "error", "message": "Conversation is not active"})
+            return
+
+        agent = await self.get_agent(conversation.agent_id)
+        if not agent:
+            yield self._sse({"type": "error", "message": "Agent not found"})
+            return
+        if not agent.is_active:
+            yield self._sse({"type": "error", "message": f"Agent {agent.name} is paused"})
+            return
+
+        # Persist the user message + record the execution shell up front
+        # so the frontend can swap its optimistic placeholder for the
+        # real id immediately. Token counts + cost fill in at the end.
+        stmt = select(func.count()).select_from(AgentMessage).where(
+            AgentMessage.conversation_id == conversation_id
+        )
+        result = await self.db.execute(stmt)
+        message_count = result.scalar() or 0
+
+        user_message = AgentMessage(
+            id=str(uuid4()),
+            conversation_id=conversation_id,
+            role="user",
+            content=content,
+            message_index=message_count,
+        )
+        self.db.add(user_message)
+        await self.db.flush()
+        await self.db.commit()  # Commit user msg + start streaming
+        yield self._sse({
+            "type": "user_message",
+            "id": user_message.id,
+            "content": content,
+            "created_at": user_message.created_at.isoformat() if user_message.created_at else None,
+        })
+
+        execution = CRMAgentExecution(
+            id=str(uuid4()),
+            agent_id=agent.id,
+            conversation_id=conversation.id,
+            triggered_by="chat",
+            input_context={"message": content},
+            status="running",
+            started_at=datetime.now(timezone.utc),
+        )
+        self.db.add(execution)
+        await self.db.flush()
+        await self.db.commit()
+
+        # Rebuild conversation history for the LLM
+        from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+        messages = await self.get_conversation_messages(conversation_id)
+        conversation_history = []
+        for msg in messages:
+            if msg.role == "user":
+                conversation_history.append(HumanMessage(content=msg.content))
+            elif msg.role == "assistant":
+                conversation_history.append(AIMessage(content=msg.content))
+            elif msg.role == "tool":
+                tool_call_id = msg.tool_output.get("tool_call_id", "") if msg.tool_output else ""
+                conversation_history.append(
+                    ToolMessage(content=msg.content, tool_call_id=tool_call_id)
+                )
+
+        builder = AgentBuilder(
+            workspace_id=agent.workspace_id,
+            user_id=user_id,
+            db=self.db,
+        )
+        agent_instance = builder.build_from_config(
+            name=agent.name,
+            agent_type=agent.agent_type,
+            goal=agent.goal,
+            system_prompt=agent.system_prompt,
+            tools=agent.tools,
+            model=agent.model,
+            llm_provider=agent.llm_provider,
+            max_iterations=agent.max_iterations,
+            timeout_seconds=agent.timeout_seconds,
+        )
+
+        start = datetime.now(timezone.utc)
+        final_assistant_content = ""
+        final_tool_calls: list = []
+        final_usage: dict | None = None
+        tool_steps: list[dict] = []
+
+        try:
+            async for event in agent_instance.astream(
+                record_id=conversation.record_id,
+                context={"conversation_id": conversation.id},
+                conversation_history=conversation_history,
+            ):
+                event_type = event.get("type")
+                if event_type == "text_delta":
+                    # Token-level streaming. Accumulate so we can
+                    # persist the full content at end-of-stream.
+                    final_assistant_content += event.get("text", "")
+                    yield self._sse(event)
+                elif event_type == "tool_use_start":
+                    tool_steps.append({
+                        "type": "tool_call",
+                        "id": event.get("id"),
+                        "tool": event.get("tool"),
+                        "input": event.get("input"),
+                    })
+                    yield self._sse(event)
+                elif event_type == "tool_result":
+                    # Match back to the step we appended earlier so the
+                    # output lands on the right entry.
+                    for step in reversed(tool_steps):
+                        if step.get("id") == event.get("id") and "output" not in step:
+                            step["output"] = event.get("output")
+                            break
+                    yield self._sse(event)
+                elif event_type == "assistant_end":
+                    final_assistant_content = event.get("content", final_assistant_content)
+                    final_tool_calls = event.get("tool_calls", []) or []
+                    final_usage = event.get("usage_metadata")
+                elif event_type == "error":
+                    raise RuntimeError(event.get("message", "agent error"))
+
+            # Persist the assistant message + tool messages now that
+            # the stream completed cleanly.
+            assistant_message = AgentMessage(
+                id=str(uuid4()),
+                conversation_id=conversation.id,
+                execution_id=execution.id,
+                role="assistant",
+                content=final_assistant_content,
+                tool_calls=final_tool_calls if final_tool_calls else None,
+                message_index=message_count + 1,
+            )
+            if final_usage:
+                # usage_metadata shape: {input_tokens, output_tokens, total_tokens}
+                assistant_message.input_tokens = final_usage.get("input_tokens")
+                assistant_message.output_tokens = final_usage.get("output_tokens")
+                if assistant_message.input_tokens is not None and assistant_message.output_tokens is not None:
+                    assistant_message.cost_usd = self._estimate_cost_usd(
+                        agent.llm_provider,
+                        agent.model,
+                        assistant_message.input_tokens,
+                        assistant_message.output_tokens,
+                    )
+            self.db.add(assistant_message)
+
+            # Tool messages — append in stream order so message_index
+            # matches the order the user saw them appear.
+            for i, step in enumerate(tool_steps):
+                tool_message = AgentMessage(
+                    id=str(uuid4()),
+                    conversation_id=conversation.id,
+                    execution_id=execution.id,
+                    role="tool",
+                    content=str(step.get("output", "")),
+                    tool_name=step.get("tool"),
+                    tool_output={
+                        "input": step.get("input", {}),
+                        "output": step.get("output"),
+                        "tool_call_id": step.get("id", ""),
+                    },
+                    message_index=message_count + 2 + i,
+                )
+                self.db.add(tool_message)
+
+            # Finalize execution
+            execution.status = "completed"
+            execution.output_result = {
+                "content": final_assistant_content,
+                "tool_calls": final_tool_calls,
+            }
+            execution.steps = tool_steps
+            execution.completed_at = datetime.now(timezone.utc)
+            execution.duration_ms = int(
+                (execution.completed_at - start).total_seconds() * 1000
+            )
+
+            # Agent stats
+            agent.total_executions += 1
+            agent.successful_executions += 1
+
+            await self.db.flush()
+            await self.db.commit()
+
+            if final_usage:
+                yield self._sse({
+                    "type": "usage",
+                    "input_tokens": final_usage.get("input_tokens"),
+                    "output_tokens": final_usage.get("output_tokens"),
+                    "cost_usd": float(assistant_message.cost_usd) if assistant_message.cost_usd else None,
+                })
+
+            yield self._sse({
+                "type": "done",
+                "assistant_message_id": assistant_message.id,
+                "execution_id": execution.id,
+                "duration_ms": execution.duration_ms,
+            })
+        except asyncio.CancelledError:
+            # Client disconnected mid-stream (Stop button). Persist
+            # whatever we collected so far + mark the execution as
+            # cancelled so it's distinguishable in the runs list.
+            execution.status = "cancelled"
+            execution.completed_at = datetime.now(timezone.utc)
+            execution.duration_ms = int(
+                (execution.completed_at - start).total_seconds() * 1000
+            )
+            execution.error_message = "cancelled by client"
+
+            if final_assistant_content:
+                partial = AgentMessage(
+                    id=str(uuid4()),
+                    conversation_id=conversation.id,
+                    execution_id=execution.id,
+                    role="assistant",
+                    content=final_assistant_content + " [cancelled]",
+                    message_index=message_count + 1,
+                )
+                self.db.add(partial)
+
+            agent.total_executions += 1
+            agent.failed_executions += 1
+            await self.db.flush()
+            await self.db.commit()
+            raise
+        except Exception as e:
+            logger.exception("Streaming agent execution failed: %s", e)
+            execution.status = "failed"
+            execution.error_message = str(e)
+            execution.completed_at = datetime.now(timezone.utc)
+            execution.duration_ms = int(
+                (execution.completed_at - start).total_seconds() * 1000
+            )
+
+            error_message = AgentMessage(
+                id=str(uuid4()),
+                conversation_id=conversation.id,
+                execution_id=execution.id,
+                role="assistant",
+                content=f"I encountered an error: {e}",
+                message_index=message_count + 1,
+            )
+            self.db.add(error_message)
+
+            agent.total_executions += 1
+            agent.failed_executions += 1
+            await self.db.flush()
+            await self.db.commit()
+
+            yield self._sse({"type": "error", "message": str(e)})
 
     async def send_message(
         self,
