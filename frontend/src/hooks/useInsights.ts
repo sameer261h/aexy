@@ -65,6 +65,12 @@ export function useTeamInsights(
     period_type?: InsightsPeriodType;
     start_date?: string;
     end_date?: string;
+    /**
+     * Show members with zero contribution in the window too. Server
+     * default is false (hide them), so the active contributors aren't
+     * buried in a long roster of inactive accounts.
+     */
+    include_inactive?: boolean;
   }
 ) {
   const {

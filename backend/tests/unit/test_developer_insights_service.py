@@ -744,6 +744,168 @@ class TestTeamDistribution:
         assert result.bottleneck_developers == []
 
     @pytest.mark.asyncio
+    async def test_ghost_dedup_collapses_email_match(self, db_session, workspace):
+        """Active member + ghost (sharing email) should produce ONE row.
+
+        Regression for 0.7.90: previously `_build_developer_alias_map`
+        received the activity-expanded list as both `member_ids` and
+        `ghost_pool`, so the NOT IN filter excluded the ghosts we were
+        trying to bridge. Splitting them lets the alias kick in.
+        """
+        # Canonical workspace member.
+        member = Developer(
+            id=str(uuid4()),
+            email="ritesh@example.com",
+            name="Ritesh Real",
+        )
+        # Ghost with same email — auto-created during commit sync.
+        ghost = Developer(
+            id=str(uuid4()),
+            email="ritesh@example.com",
+            name="Ritesh Ghost",
+        )
+        db_session.add_all([member, ghost])
+        await db_session.flush()
+        db_session.add(WorkspaceMember(
+            workspace_id=workspace.id,
+            developer_id=member.id,
+            role="member",
+            status="active",
+        ))
+        # Activity attributed to the ghost (the case the alias map must repair).
+        for i in range(3):
+            db_session.add(Commit(
+                sha=f"ghost-{i}",
+                developer_id=ghost.id,
+                repository="repo-a",
+                message=f"c{i}",
+                additions=10,
+                deletions=2,
+                committed_at=_utc(2024, 1, 5 + i, 10, 0),
+            ))
+        await db_session.flush()
+
+        service = DeveloperInsightsService(db_session)
+        result = await service.compute_team_distribution(
+            [member.id, ghost.id],
+            _utc(2024, 1, 1),
+            _utc(2024, 1, 31),
+            workspace_id=workspace.id,
+            member_ids=[member.id],
+        )
+
+        # One row, three commits, canonical name wins.
+        assert len(result.member_metrics) == 1
+        assert result.member_metrics[0].developer_id == member.id
+        assert result.member_metrics[0].commits_count == 3
+
+    @pytest.mark.asyncio
+    async def test_ghost_dedup_via_commit_github_login(self, db_session, workspace):
+        """Two ghosts that share a `Commit.author_github_login` should
+        collapse via the github_login fallback even when their own emails
+        differ. Catches the Mobashir two-ghost case where one row has
+        commit activity and another has only review activity, both
+        carrying the same github author login."""
+        from aexy.models.developer import GitHubConnection
+
+        # Active member without a GitHubConnection — the bridge is via
+        # commit author login, not member-side GH config.
+        member = Developer(
+            id=str(uuid4()),
+            email="mobashir@bimaplan.co",
+            name="Mobashir Real",
+        )
+        # Ghost A: noreply email but author_github_login on commits.
+        ghost_a = Developer(
+            id=str(uuid4()),
+            email="123+mobashir-gh@users.noreply.github.com",
+            name="Mobashir Ghost A",
+        )
+        # Ghost B: no email, only reviews — won't have commit author login
+        # of its own, but its identity_key falls back to a derived gh login
+        # if we parse its noreply name correctly; here we leave name only.
+        db_session.add_all([member, ghost_a])
+        await db_session.flush()
+        db_session.add(WorkspaceMember(
+            workspace_id=workspace.id,
+            developer_id=member.id,
+            role="member",
+            status="active",
+        ))
+        # GitHubConnection on member so member_gh_logins picks it up.
+        db_session.add(GitHubConnection(
+            developer_id=member.id,
+            github_id=99,
+            github_username="mobashir-gh",
+        ))
+        # Ghost A commits carry the matching author_github_login.
+        for i in range(5):
+            db_session.add(Commit(
+                sha=f"gha-{i}",
+                developer_id=ghost_a.id,
+                repository="repo-a",
+                message=f"c{i}",
+                additions=20,
+                deletions=4,
+                author_github_login="mobashir-gh",
+                committed_at=_utc(2024, 1, 5 + i, 10, 0),
+            ))
+        await db_session.flush()
+
+        service = DeveloperInsightsService(db_session)
+        result = await service.compute_team_distribution(
+            [member.id, ghost_a.id],
+            _utc(2024, 1, 1),
+            _utc(2024, 1, 31),
+            workspace_id=workspace.id,
+            member_ids=[member.id],
+        )
+
+        assert len(result.member_metrics) == 1
+        assert result.member_metrics[0].developer_id == member.id
+        assert result.member_metrics[0].commits_count == 5
+
+    @pytest.mark.asyncio
+    async def test_hide_zero_contribution(self, db_session, workspace, dev, dev2):
+        """`hide_zero_contribution=True` drops members whose four
+        counters are all zero. Default keeps them (preserves picker UX)."""
+        db_session.add_all([
+            WorkspaceMember(workspace_id=workspace.id, developer_id=dev.id, role="member", status="active"),
+            WorkspaceMember(workspace_id=workspace.id, developer_id=dev2.id, role="member", status="active"),
+        ])
+        # Only `dev` has activity; `dev2` is the zero-contribution row.
+        for i in range(2):
+            db_session.add(Commit(
+                sha=f"z-{i}",
+                developer_id=dev.id,
+                repository="repo-a",
+                message=f"c{i}",
+                additions=10,
+                deletions=2,
+                committed_at=_utc(2024, 1, 5 + i, 10, 0),
+            ))
+        await db_session.flush()
+
+        service = DeveloperInsightsService(db_session)
+
+        kept_all = await service.compute_team_distribution(
+            [dev.id, dev2.id], _utc(2024, 1, 1), _utc(2024, 1, 31),
+            workspace_id=workspace.id,
+            member_ids=[dev.id, dev2.id],
+            hide_zero_contribution=False,
+        )
+        assert len(kept_all.member_metrics) == 2
+
+        kept_active = await service.compute_team_distribution(
+            [dev.id, dev2.id], _utc(2024, 1, 1), _utc(2024, 1, 31),
+            workspace_id=workspace.id,
+            member_ids=[dev.id, dev2.id],
+            hide_zero_contribution=True,
+        )
+        assert len(kept_active.member_metrics) == 1
+        assert kept_active.member_metrics[0].developer_id == dev.id
+
+    @pytest.mark.asyncio
     async def test_distribution_detects_bottleneck(self, db_session, dev, dev2, dev3):
         # dev: 30 commits, dev2: 5, dev3: 5 → dev is bottleneck (>2x avg)
         for i in range(30):

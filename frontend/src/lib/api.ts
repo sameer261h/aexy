@@ -17429,6 +17429,7 @@ export const insightsApi = {
       period_type?: InsightsPeriodType;
       start_date?: string;
       end_date?: string;
+      include_inactive?: boolean;
     }
   ): Promise<TeamInsightsResponse> => {
     const response = await api.get(`/workspaces/${workspaceId}/insights/team`, {

@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.90] - 2026-05-19
+
+Fix duplicate developer rows in team insights, plus auto-hide
+zero-contribution members.
+
+### Fixed
+
+- **Ghost dedup**: `compute_team_distribution` now takes a `member_ids`
+  list distinct from the activity-expanded `developer_ids`, so
+  `_build_developer_alias_map` can actually map ghost ids onto their
+  canonical workspace-member rows. The prior code passed the same
+  list as both args, which made the `NOT IN` filter exclude the
+  ghosts we wanted to bridge — producing two rows for "Ritesh
+  Biswas" (active vs ghost-with-personal-email) on the team insights
+  endpoint.
+- **`identity_key` fallbacks** when a developer has no
+  `GitHubConnection`:
+  1. Pull `Commit.author_github_login` (most-frequent value per
+     developer) and use it as the github login key.
+  2. Parse `<id>+<login>@users.noreply.github.com` out of the
+     developer's email. Together these collapse the two Mobashir
+     ghost rows that shared the same GitHub login but were never
+     linked to a Connection row.
+- Aliased ghost ids are now removed from the display set so
+  `_rollup_by_identity` never sees a ghost+canonical pair — fewer
+  reliances on the identity_key tie-breaker.
+
+### Added
+
+- `compute_team_distribution(..., hide_zero_contribution=False)`
+  optionally filters out members whose four counters (commits, PRs
+  merged, lines changed, reviews given) are all zero in the window.
+- `GET /workspaces/{id}/insights/team?include_inactive=false`
+  (default) — applies the filter. `?include_inactive=true` restores
+  the full roster.
+- Frontend toggle "Show inactive" on the Team Insights page
+  (`insights/page.tsx`) wired through `useTeamInsights` and the
+  generated `getTeamInsights` client.
+- Regression tests for: ghost-via-email collapse, ghost-via-commit-
+  author-github-login collapse, and zero-contribution filter.
+
+### Known limitation
+
+- An active workspace member with neither a `GitHubConnection` nor
+  any name/email overlap with their ghost rows cannot be linked
+  automatically. The three "Mobashir" rows in the original example
+  collapse from 3 → 2 (two ghosts merge), but the active member
+  `mobashir.r@bimaplan.co` stays separate until either an admin
+  links their GitHub login, or a manual "merge identities" action
+  is added.
+
 ## [0.7.89] - 2026-05-19
 
 Post-review hardening for the 0.7.82-0.7.88 workspace-scope leak audit.
