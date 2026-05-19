@@ -92,8 +92,14 @@ export function useRouteGuard({
       if (!href || href.startsWith("#")) return;
       // External links go through the normal browser flow + the
       // beforeunload guard above. We only care about same-origin
-      // navigations the framework handles.
-      const url = new URL(anchor.href, window.location.href);
+      // navigations the framework handles. A malformed href would
+      // throw in the URL parser — let the browser handle it.
+      let url: URL;
+      try {
+        url = new URL(anchor.href, window.location.href);
+      } catch {
+        return;
+      }
       if (url.origin !== window.location.origin) return;
       const target_attr = anchor.getAttribute("target");
       if (target_attr && target_attr !== "_self") return;

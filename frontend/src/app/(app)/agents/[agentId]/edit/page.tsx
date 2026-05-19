@@ -153,6 +153,11 @@ export default function EditAgentPage() {
     setEmailEnabled(agent.email_enabled || false);
     setAutoReplyEnabled(agent.auto_reply_enabled ?? true);
     setEmailSignature(agent.email_signature || "");
+    // `hasChanges` and `name` are read inside on purpose: the dirty-guard
+    // above must use the freshest values at re-render time, but they
+    // MUST NOT trigger this effect — adding them to deps would re-sync
+    // the form mid-edit and clobber typing. The `[agent]` trigger is the
+    // intended single source of "new data arrived from the server".
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent]);
 

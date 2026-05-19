@@ -74,6 +74,28 @@ def template_to_list_response(template) -> AppAccessTemplateListResponse:
     )
 
 
+async def _load_template_for_workspace(
+    db: AsyncSession,
+    template_id,
+    workspace_id: str,
+):
+    """Load a template and 404 unless it belongs to this workspace.
+
+    System templates (workspace_id IS NULL) are accepted from any workspace.
+    Returns the loaded row so callers can use it without re-fetching.
+    """
+    from sqlalchemy import select
+    from aexy.models.app_access import AppAccessTemplate
+
+    result = await db.execute(
+        select(AppAccessTemplate).where(AppAccessTemplate.id == template_id)
+    )
+    tpl = result.scalar_one_or_none()
+    if not tpl or (tpl.workspace_id and str(tpl.workspace_id) != workspace_id):
+        raise HTTPException(status_code=404, detail="Template not found")
+    return tpl
+
+
 # Reference Data Endpoints
 @router.get("/catalog", response_model=AppCatalogResponse)
 async def get_app_catalog(
@@ -391,14 +413,7 @@ async def update_member_access(
     # When applying a template, it must also belong to this workspace
     # (or be a system template — workspace_id is None).
     if data.applied_template_id:
-        from sqlalchemy import select
-        from aexy.models.app_access import AppAccessTemplate as _Tpl
-        tpl_check = await db.execute(
-            select(_Tpl).where(_Tpl.id == data.applied_template_id)
-        )
-        tpl = tpl_check.scalar_one_or_none()
-        if not tpl or (tpl.workspace_id and str(tpl.workspace_id) != workspace_id):
-            raise HTTPException(status_code=404, detail="Template not found")
+        await _load_template_for_workspace(db, data.applied_template_id, workspace_id)
 
     service = AppAccessService(db)
     try:
@@ -437,14 +452,9 @@ async def apply_template_to_member(
 
     # WS-053: same active-member + template-workspace guards as
     # update_member_access.
-    from sqlalchemy import select
     from aexy.core.workspace_auth import assert_active_member
-    from aexy.models.app_access import AppAccessTemplate as _Tpl
     await assert_active_member(db, workspace_id, developer_id)
-    tpl_check = await db.execute(select(_Tpl).where(_Tpl.id == data.template_id))
-    tpl = tpl_check.scalar_one_or_none()
-    if not tpl or (tpl.workspace_id and str(tpl.workspace_id) != workspace_id):
-        raise HTTPException(status_code=404, detail="Template not found")
+    await _load_template_for_workspace(db, data.template_id, workspace_id)
 
     service = AppAccessService(db)
     try:
