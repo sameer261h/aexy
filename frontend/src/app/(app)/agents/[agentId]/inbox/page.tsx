@@ -1213,10 +1213,10 @@ export default function AgentInboxPage() {
             </div>
           )
         ) : (
-          {/* 200px ≈ AppShell sidebar header (16px mobile bar +
-              breadcrumb + page header + filter row + outer padding).
-              Pin the message grid to the available viewport so the
-              list scrolls within its column rather than the page. */}
+          // 200px ≈ AppShell sidebar header (16px mobile bar +
+          // breadcrumb + page header + filter row + outer padding).
+          // Pin the message grid to the available viewport so the
+          // list scrolls within its column rather than the page.
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-200px)]">
             {/* Message List — on mobile, hidden when a message is open
                 so the detail view gets the full viewport. The "Back to
