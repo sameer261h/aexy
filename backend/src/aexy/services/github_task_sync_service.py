@@ -98,41 +98,146 @@ class GitHubTaskSyncService:
     ) -> list[TaskGitHubLink]:
         """Process a PR and link it to any referenced tasks, updating status.
 
-        Args:
-            pull_request: The PullRequest record from the database
-            repository: Repository full name (owner/repo)
-            action: PR action (opened, closed, synchronize, etc.)
-
-        Returns:
-            List of created TaskGitHubLink records
+        On `edited`/`synchronize`, also prunes auto-links whose mention is
+        no longer in the PR body so removing a `[slug:key]` cleans up cleanly.
         """
-        # Parse PR title and description for task references
         text_to_parse = f"{pull_request.title or ''}\n{pull_request.description or ''}"
         references = self.parser.parse(text_to_parse)
 
-        if not references:
-            return []
+        links: list[TaskGitHubLink] = []
+        current_task_ids: set[str] = set()
 
-        logger.info(
-            f"Found {len(references)} task references in PR #{pull_request.number}"
-        )
-
-        links = []
         for ref in references:
             task = await self._find_task_for_reference(ref, repository)
             if not task:
                 continue
+            current_task_ids.add(str(task.id))
 
-            # Create link if it doesn't exist
             link = await self._create_pr_link(task, pull_request, ref)
             if link:
                 links.append(link)
 
-            # Update task status based on PR state
             await self._update_task_status(task, pull_request, ref, action)
 
+        if action in ("edited", "synchronize"):
+            await self._prune_stale_pr_auto_links(
+                str(pull_request.id), current_task_ids
+            )
+
+        # Always flush — `_update_task_status` may have mutated task rows
+        # even when no new links were created (existing link, status moved).
         await self.db.flush()
+        if links:
+            logger.info(
+                f"Linked {len(links)} task(s) from PR #{pull_request.number}"
+            )
         return links
+
+    async def process_issue(
+        self,
+        issue: dict[str, Any],
+        repository: str,
+        action: str | None = None,
+    ) -> list[TaskGitHubLink]:
+        """Process a GitHub issue webhook payload and auto-link mentioned tasks.
+
+        Parses title+body for `[workspace-slug:task_key]` mentions. Each
+        matched reference upserts a TaskGitHubLink with is_auto_linked=True.
+        On `edited`, prunes stale auto-links whose mention is gone.
+        """
+        if not issue:
+            return []
+
+        number = issue.get("number")
+        if not number:
+            return []
+
+        title = issue.get("title") or ""
+        body = issue.get("body") or ""
+        text_to_parse = f"{title}\n{body}"
+        references = self.parser.parse(text_to_parse)
+
+        aexy_refs = [
+            r for r in references if r.source == TaskReferenceSource.AEXY
+        ]
+
+        links: list[TaskGitHubLink] = []
+        current_task_ids: set[str] = set()
+
+        for ref in aexy_refs:
+            task = await self._find_aexy_task(ref.project_key, ref.identifier)
+            if not task:
+                continue
+            current_task_ids.add(str(task.id))
+            link = await self.link_issue_manually(
+                str(task.id),
+                repository,
+                int(number),
+                title=title or None,
+                state=issue.get("state"),
+                url=issue.get("html_url"),
+                reference_text=ref.matched_text,
+                reference_pattern=ref.reference_type.value,
+                is_auto_linked=True,
+            )
+            if link:
+                links.append(link)
+
+        if action == "edited":
+            await self._prune_stale_issue_auto_links(
+                repository, int(number), current_task_ids
+            )
+
+        await self.db.flush()
+        if links:
+            logger.info(
+                f"Linked {len(links)} task(s) from issue {repository}#{number}"
+            )
+        return links
+
+    async def _prune_stale_pr_auto_links(
+        self,
+        pull_request_id: str,
+        keep_task_ids: set[str],
+    ) -> int:
+        """Delete is_auto_linked rows for this PR whose task is no longer mentioned."""
+        stmt = select(TaskGitHubLink).where(
+            and_(
+                TaskGitHubLink.link_type == "pull_request",
+                TaskGitHubLink.pull_request_id == pull_request_id,
+                TaskGitHubLink.is_auto_linked.is_(True),
+            )
+        )
+        result = await self.db.execute(stmt)
+        removed = 0
+        for link in result.scalars().all():
+            if str(link.task_id) not in keep_task_ids:
+                await self.db.delete(link)
+                removed += 1
+        return removed
+
+    async def _prune_stale_issue_auto_links(
+        self,
+        repository: str,
+        issue_number: int,
+        keep_task_ids: set[str],
+    ) -> int:
+        """Delete is_auto_linked rows for this issue whose task is no longer mentioned."""
+        stmt = select(TaskGitHubLink).where(
+            and_(
+                TaskGitHubLink.link_type == "github_issue",
+                TaskGitHubLink.github_issue_repository == repository,
+                TaskGitHubLink.github_issue_number == issue_number,
+                TaskGitHubLink.is_auto_linked.is_(True),
+            )
+        )
+        result = await self.db.execute(stmt)
+        removed = 0
+        for link in result.scalars().all():
+            if str(link.task_id) not in keep_task_ids:
+                await self.db.delete(link)
+                removed += 1
+        return removed
 
     async def _find_task_for_reference(
         self,
@@ -415,8 +520,21 @@ class GitHubTaskSyncService:
             )
         )
         result = await self.db.execute(stmt)
-        if result.scalar_one_or_none():
-            return None
+        existing = result.scalar_one_or_none()
+        if existing:
+            # Upsert: refresh cached metadata when fresher values arrive
+            # (issue title/state changed on GitHub, mention keyword changed).
+            if display_title and existing.github_issue_title != display_title:
+                existing.github_issue_title = display_title
+            if display_state and existing.github_issue_state != display_state:
+                existing.github_issue_state = display_state
+            if display_url and existing.github_issue_url != display_url:
+                existing.github_issue_url = display_url
+            if reference_text and existing.reference_text != reference_text:
+                existing.reference_text = reference_text
+            if reference_pattern and existing.reference_pattern != reference_pattern:
+                existing.reference_pattern = reference_pattern
+            return existing
 
         link = TaskGitHubLink(
             task_id=task_id,

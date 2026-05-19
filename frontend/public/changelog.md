@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.91] - 2026-05-19
+
+Replace manual GitHub issue/PR linking with mention-based auto-linking
+via `[workspace-slug:task-key]` in PR or issue title/body.
+
+### Added
+
+- **Issue webhook now auto-links tasks**. `api/webhooks.py` routes
+  `issues` events (opened/reopened/edited/closed) through
+  `GitHubTaskSyncService.process_issue`, which parses the issue title +
+  body for `[slug:key]` mentions and upserts a `TaskGitHubLink` row per
+  match with `is_auto_linked=True`. Works from any repo — the slug
+  resolves against `Workspace.slug`, the number against the
+  workspace-wide `task_key`.
+- **Edit re-sync**. On `pull_request.edited`/`synchronize` and
+  `issues.edited`, auto-links whose mention is no longer present in the
+  fresh body are deleted. Manual edits to the GitHub source are now the
+  way to add or remove links.
+- **`link_issue_manually` is now upsert**. If a row already exists for
+  `(task_id, repo, number)`, its cached `github_issue_title`/`state`/`url`
+  refresh when fresher values arrive (issue renamed on GitHub →
+  link metadata updates).
+- **Copy-mention chip** in the task modal showing `[slug:task_key]`
+  inline help so users know what to paste into a PR/issue body.
+
+### Removed
+
+- **Manual link POST endpoints** in both `api/sprint_tasks.py` and
+  `api/project_tasks.py`:
+  `POST /github-links/pull-requests` and `POST /github-links/issues`.
+- **Orphan search endpoints** that only powered the manual dropdowns:
+  `GET /github/pull-requests`, `GET /github/issues`,
+  `GET /{task_id}/github-links/issue-repositories` (both scopes).
+- **Manual linking UI** in `board/page.tsx` — the PR + issue
+  search dropdowns, the manual `owner/repo#123` entry, and ~300 lines
+  of supporting state/queries/mutations.
+- **Client functions** `linkPullRequest`, `linkGitHubIssue`,
+  `searchPullRequests`, `searchGitHubIssues`, and
+  `getGitHubIssueRepositoryContext` from `lib/api.ts` (sprint and team
+  scopes). `getTaskGitHubLinks` and `unlinkGitHubLink` retained.
+
+### Tests
+
+- `tests/unit/test_github_issue_auto_link.py` — process_issue creates
+  one auto-linked row per mention, case-insensitive slug match,
+  hyphens in slug, edit-then-remove drops the stale row, edit refreshes
+  cached title/state, `closed`/`reopened` refresh state without
+  pruning (only `edited` is allowed to remove mentions).
+
 ## [0.7.90] - 2026-05-19
 
 Fix duplicate developer rows in team insights, plus auto-hide

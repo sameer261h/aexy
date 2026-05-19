@@ -216,6 +216,18 @@ async def handle_github_webhook(
                         # 30-min poll will catch up.
                         result["realtime_ai_dispatched"] = False
 
+    elif event.event_type == "issues" and event.issue:
+        # Auto-link tasks mentioned via [slug:key] in the issue body/title.
+        # No internal record of the GH issue is needed — the link rows hold
+        # the issue's repo/number/title/state as cached display metadata.
+        links = await task_sync_service.process_issue(
+            issue=event.issue,
+            repository=event.repository,
+            action=event.action,
+        )
+        if links:
+            result["task_links_created"] = len(links)
+
     # Trigger profile sync for affected developer(s)
     if event.sender:
         sender_id = event.sender.get("id")
