@@ -33,6 +33,7 @@ import { useAgent } from "@/hooks/useAgents";
 import { useAgentInbox, useAgentInboxMessage } from "@/hooks/useAgentInbox";
 import { AgentInboxMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { formatRelative } from "@/lib/datetime";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import {
   Dialog,
@@ -83,27 +84,10 @@ const priorityConfig = {
   urgent: { label: "Urgent", color: "text-red-600 dark:text-red-400", bgColor: "bg-red-500/20" },
 };
 
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  const now = new Date();
-  const diff = now.getTime() - date.getTime();
-  const hours = diff / (1000 * 60 * 60);
-
-  if (hours < 1) {
-    const minutes = Math.floor(diff / (1000 * 60));
-    return `${minutes}m ago`;
-  }
-  if (hours < 24) {
-    return `${Math.floor(hours)}h ago`;
-  }
-  if (hours < 48) {
-    return "Yesterday";
-  }
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
-}
+// formatDate moved to lib/datetime.ts (UX-CPY-001). The shared
+// formatRelative is locale-aware and matches operations + automations
+// so "3h ago" reads identically across surfaces.
+const formatDate = formatRelative;
 
 function MessageCard({
   message,
@@ -1087,8 +1071,35 @@ export default function AgentInboxPage() {
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {agentLoading || inboxLoading ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+          // UX-LE-003: list-shaped skeleton matching the post-load grid
+          // so the layout doesn't reflow when data lands. Six skeleton
+          // rows fill the list pane; the detail pane shows a centered
+          // ghost matching the "Select a message" empty state.
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-200px)] animate-pulse">
+            <div className="lg:col-span-1 bg-muted border border-border rounded-xl overflow-hidden flex flex-col">
+              <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border">
+                <div className="h-4 w-4 rounded bg-accent" />
+                <div className="h-3 w-20 rounded bg-accent" />
+              </div>
+              <div className="flex-1 divide-y divide-border">
+                {[0, 1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="p-4 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="h-1.5 w-1.5 rounded-full bg-accent shrink-0" />
+                      <div className="h-3 w-32 rounded bg-accent" />
+                    </div>
+                    <div className="h-3 w-3/4 rounded bg-accent" />
+                    <div className="h-2.5 w-full rounded bg-accent" />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="hidden lg:flex lg:col-span-2 bg-muted border border-border rounded-xl items-center justify-center">
+              <div className="text-center text-muted-foreground/60">
+                <MessageSquare className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <div className="h-3 w-32 rounded bg-accent mx-auto" />
+              </div>
+            </div>
           </div>
         ) : !agent?.email_enabled ? (
           <div className="text-center py-12">

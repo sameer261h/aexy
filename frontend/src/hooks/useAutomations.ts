@@ -132,15 +132,40 @@ export function useAutomations(
     },
   });
 
+  // UX-AGT-LST-002: optimistic toggle for automations. The query key
+  // includes filter `options`, so we walk every matching cache entry
+  // (any options shape for this workspace) and flip the row in each.
   const toggleMutation = useMutation({
     mutationFn: (automationId: string) => automationsApi.toggle(workspaceId!, automationId),
+    onMutate: async (automationId: string) => {
+      await queryClient.cancelQueries({
+        predicate: (q) => q.queryKey[0] === "automations" && q.queryKey[1] === workspaceId,
+      });
+      // Snapshot every "automations" cache entry for rollback.
+      const snapshots = queryClient.getQueriesData<Automation[]>({
+        predicate: (q) => q.queryKey[0] === "automations" && q.queryKey[1] === workspaceId,
+      });
+      snapshots.forEach(([key, list]) => {
+        if (!list) return;
+        queryClient.setQueryData<Automation[]>(
+          key,
+          list.map((a) =>
+            a.id === automationId ? { ...a, is_active: !a.is_active } : a,
+          ),
+        );
+      });
+      return { snapshots };
+    },
+    onError: (error, _id, context) => {
+      context?.snapshots.forEach(([key, list]) => {
+        if (list) queryClient.setQueryData(key, list);
+      });
+      toast.error(error instanceof Error ? error.message : "Failed to toggle automation");
+    },
     onSuccess: (updatedAutomation) => {
       const isActive = updatedAutomation?.is_active;
       toast.success(isActive ? "Automation enabled" : "Automation disabled");
       queryClient.invalidateQueries({ queryKey: ["automations", workspaceId] });
-    },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Failed to toggle automation");
     },
   });
 

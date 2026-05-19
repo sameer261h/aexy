@@ -15,6 +15,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { formatAbsolute, formatRelative } from "@/lib/datetime";
 import { toast } from "sonner";
 import {
   Sheet,
@@ -191,26 +192,12 @@ export function VersionHistory({
     }
   }, [compareMode, compareVersionA, compareVersionB, loadDiff]);
 
-  const formatDate = (dateString: string | null) => {
-    if (!dateString) return "Unknown";
-    const date = new Date(dateString);
-    return date.toLocaleString();
-  };
-
-  const formatTimeAgo = (dateString: string | null) => {
-    if (!dateString) return "";
-    const date = new Date(dateString);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
-
-    if (days > 0) return `${days}d ago`;
-    if (hours > 0) return `${hours}h ago`;
-    if (minutes > 0) return `${minutes}m ago`;
-    return "Just now";
-  };
+  // formatDate / formatTimeAgo lifted to lib/datetime.ts (UX-CPY-001).
+  // formatRelative returns "" for null, so wrap with the "Unknown" /
+  // "" fallbacks the prior implementation provided.
+  const formatDate = (dateString: string | null) =>
+    formatAbsolute(dateString) || "Unknown";
+  const formatTimeAgo = formatRelative;
 
   return (
     <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()}>
