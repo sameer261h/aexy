@@ -367,18 +367,31 @@ class ReportBuilderService:
         include_public: bool = True,
         include_templates: bool = False,
     ) -> list[CustomReport]:
-        """List reports with filters."""
+        """List reports with filters.
+
+        WS-049: `is_public=True` reports were previously surfaced in *every*
+        caller's listing across tenants. Cross-tenant public sharing now
+        requires an explicit `organization_id` filter that matches the
+        report's owning org; without it only the caller's own reports
+        appear in the default listing.
+        """
         conditions = []
 
         if creator_id:
-            if include_public:
+            if include_public and organization_id:
+                # Public reports are visible only within the same org.
                 conditions.append(
-                    (CustomReport.creator_id == creator_id) | (CustomReport.is_public == True)
+                    (CustomReport.creator_id == creator_id)
+                    | (
+                        (CustomReport.is_public == True)
+                        & (CustomReport.organization_id == organization_id)
+                    )
                 )
             else:
+                # Default: own reports only. include_public without
+                # organization_id no longer leaks across tenants.
                 conditions.append(CustomReport.creator_id == creator_id)
-
-        if organization_id:
+        elif organization_id:
             conditions.append(CustomReport.organization_id == organization_id)
 
         if not include_templates:

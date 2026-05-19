@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.88] - 2026-05-19
+
+Closes the last 9 `suspect` rows in the workspace-scope leak tracker.
+Five close as fixed with concrete patches; four close as verified-`ok`
+or covered by prior fixes. Tracker is now zero open across every
+severity.
+
+### Security
+
+- **App access** (WS-053) — `update_member_access` and
+  `apply_template_to_member` (`api/app_access.py`) now verify the
+  target `developer_id` is an active `WorkspaceMember` of the route's
+  workspace, and that the `applied_template_id` belongs to that
+  workspace (or is a system template with `workspace_id` NULL).
+- **Manager learning** (WS-055) — `create_learning_goal`
+  (`api/manager_learning.py`) verifies `data.developer_id` is an
+  active `WorkspaceMember` of `current_workspace_id` before stamping
+  a goal. Approval/budget routes follow the existing-goal chain so
+  they inherit the same scope.
+- **Custom reports** (WS-049) — `ReportBuilderService.list_reports`
+  no longer surfaces `is_public=True` reports cross-tenant in the
+  default listing. Public reports now require an explicit matching
+  `organization_id` filter to appear. The reports route doesn't
+  pass `organization_id` today, so the default listing returns the
+  caller's own reports only.
+- **Tracking helper** (WS-020) — `get_developer_team`
+  (`api/tracking.py`) now accepts an optional `workspace_id` and
+  constrains the team join via `Team.workspace_id`. Existing call
+  sites keep historical "first team found" semantics; workspace-
+  prefixed routes can opt in.
+
+### Documentation
+
+- Tracker rows WS-015 (exports), WS-016 (code insights), WS-017
+  (sprint analytics), WS-018 (public renderers), WS-019 (learning
+  services) closed as verified-`ok` or covered by prior fixes
+  (WS-009, WS-039, WS-041, WS-051, WS-055, WS-060, WS-061, WS-066,
+  WS-067, WS-068, WS-074). Each row now records the evidence used to
+  close it.
+
 ## [0.7.87] - 2026-05-19
 
 Closes the seven `Medium`/`Low` confirmed rows in the workspace-scope

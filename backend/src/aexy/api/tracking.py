@@ -81,12 +81,27 @@ router = APIRouter(prefix="/tracking", tags=["tracking"])
 
 
 async def get_developer_team(
-    developer_id: str, db: AsyncSession
+    developer_id: str,
+    db: AsyncSession,
+    workspace_id: str | None = None,
 ) -> tuple[Team | None, str | None]:
-    """Get the primary team and workspace for a developer."""
-    result = await db.execute(
-        select(TeamMember).where(TeamMember.developer_id == developer_id).limit(1)
+    """Get the primary team and workspace for a developer.
+
+    WS-020: when `workspace_id` is supplied, the search is constrained to
+    teams in that workspace — otherwise a developer who belongs to teams
+    in multiple workspaces could non-deterministically be assigned to a
+    team in the wrong one. Existing call sites that don't pass
+    workspace_id retain the historical "first team found" semantics.
+    """
+    stmt = (
+        select(TeamMember)
+        .join(Team, Team.id == TeamMember.team_id)
+        .where(TeamMember.developer_id == developer_id)
     )
+    if workspace_id is not None:
+        stmt = stmt.where(Team.workspace_id == workspace_id)
+    stmt = stmt.limit(1)
+    result = await db.execute(stmt)
     member = result.scalar_one_or_none()
     if not member:
         return None, None
