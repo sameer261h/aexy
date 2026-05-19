@@ -50,6 +50,7 @@ function AutomationCard({
   onDelete: () => void;
   onEdit: () => void;
 }) {
+  const t = useTranslations("automations");
   return (
     <div
       onClick={onEdit}
@@ -107,7 +108,7 @@ function AutomationCard({
         <div className="flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">Actions:</span>
           <span className="text-foreground">
-            {automation.actions.length} action{automation.actions.length !== 1 ? "s" : ""}
+            {t("card.actions", { count: automation.actions.length })}
           </span>
         </div>
       </div>
@@ -115,7 +116,7 @@ function AutomationCard({
       <div className="flex items-center gap-4 text-xs text-muted-foreground">
         <span className="flex items-center gap-1">
           <Play className="h-3 w-3" />
-          {automation.total_runs} runs
+          {t("card.runs", { count: automation.total_runs })}
         </span>
         {automation.last_run_at && (
           <span className="flex items-center gap-1">
@@ -154,14 +155,20 @@ export default function AutomationsPage() {
 
   const handleModuleChange = (module: AutomationModule | null) => {
     setSelectedModule(module);
-    // Update URL without navigation
-    const url = new URL(window.location.href);
+    // Sync the filter through Next router so the back-button restores
+    // the prior filter. The earlier window.history.replaceState path
+    // worked visually but bypassed Next's navigation state, so going
+    // back from a deeper route landed on the unfiltered list.
+    const params = new URLSearchParams(searchParams.toString());
     if (module) {
-      url.searchParams.set("module", module);
+      params.set("module", module);
     } else {
-      url.searchParams.delete("module");
+      params.delete("module");
     }
-    window.history.replaceState({}, "", url.toString());
+    const qs = params.toString();
+    router.replace(qs ? `/automations?${qs}` : "/automations", {
+      scroll: false,
+    });
   };
 
   const handleDeleteAutomation = (id: string) => {

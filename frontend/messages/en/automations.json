@@ -47,6 +47,8 @@
 
     "card": {
       "executions": "{count, plural, =0 {No runs} =1 {1 run} other {# runs}}",
+      "actions": "{count, plural, =0 {No actions} =1 {1 action} other {# actions}}",
+      "runs": "{count, plural, =0 {0 runs} =1 {1 run} other {# runs}}",
       "lastRun": "Last run {when}",
       "neverRun": "Never run",
       "successRate": "{rate}% success"
