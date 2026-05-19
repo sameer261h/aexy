@@ -2708,13 +2708,21 @@ export function NodeConfigPanel({
 
   return (
     <>
-      {/* Mobile backdrop */}
+      {/* UX-AUT-003: NodeConfigPanel used to swap between fixed-overlay
+          (mobile) and flex-sibling (desktop) at the md breakpoint, so
+          a window resize mid-edit triggered a layout "jump". Now
+          consistently a fixed right-drawer at every viewport — matches
+          the other right-drawers (TestResultsPanel, ExecutionHistory,
+          VersionHistory, AgentTriggerConfig) so the workflow surface
+          reads as one cohesive pattern. Desktop kept slightly wider
+          (`md:w-[420px]`) for the dense config fields. */}
+      {/* Backdrop — clickable to dismiss; full opacity on mobile,
+          translucent on desktop so the canvas still shows through. */}
       <div
-        className="fixed inset-0 bg-black/50 z-40 md:hidden"
+        className="fixed inset-0 bg-black/50 md:bg-black/20 z-40"
         onClick={onClose}
       />
-      {/* Config panel - responsive */}
-      <div className="fixed inset-y-0 right-0 w-full sm:w-96 md:w-80 md:relative md:inset-auto bg-muted md:bg-muted/50 border-l border-border overflow-y-auto z-50 md:z-auto">
+      <div className="fixed inset-y-0 right-0 w-full sm:w-96 md:w-[420px] bg-muted border-l border-border overflow-y-auto z-50">
         <div className="p-4 border-b border-border flex items-center justify-between">
           <h3 className="text-foreground font-semibold">Configure Node</h3>
           <button
