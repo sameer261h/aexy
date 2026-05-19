@@ -184,6 +184,21 @@ ACTIVITY_CONFIG: dict[str, dict[str, Any]] = {
 
     # Platform signup
     "handle_new_signup": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=5)},
+
+    # Tracking automation (scheduled detection activities that loop over workspaces)
+    "check_missed_standups": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_time_entry_thresholds": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_stale_blockers": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "detect_blocker_patterns": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_time_anomalies": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_standup_participation": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+
+    # Compliance automation (scheduled detection activities)
+    "check_approaching_due_assignments": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_overdue_assignments": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_expiring_certifications": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_expired_certifications": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_bulk_compliance_rates": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
 }
 
 DEFAULT_CONFIG = {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=5)}

@@ -5,6 +5,99 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-05-19
+
+Code review cleanup of work that originated on the long-running
+`agent-upgrade` branch (compliance/tracking/automation/assessment
+modules). Three reviewers audited the code as it currently sits on
+`main`; this release fixes the verified Critical and High findings.
+
+### Security (workspace-scope authz)
+
+- **`api/tracking.py` — Slack channel-config endpoints**. `GET /channels`,
+  `POST /channels`, `PATCH /channels/{config_id}`, `DELETE /channels/{config_id}`
+  now verify the caller is a member of the target workspace (`viewer` for
+  read, `member` for write). Without it, an authenticated user in
+  workspace A could enumerate, create, edit, or delete channel configs
+  in workspace B.
+- **`api/tracking.py` — team/sprint standup reads**.
+  `GET /standups/team/{team_id}` now fetches the team and asserts
+  workspace membership; `GET /standups/summary/{sprint_id}` does the
+  same via the sprint's team. Previously any authed user could read any
+  team or sprint's standup aggregate by guessing IDs.
+- **`api/tracking.py` — task-scoped reads**. `GET /logs/task/{task_id}`
+  and `GET /time/task/{task_id}` now fetch the task and verify the
+  caller is a member of the task's workspace before returning logs or
+  time entries.
+- **`api/tracking.py` — blocker mutations**. `PATCH /blockers/{id}/resolve`
+  and `PATCH /blockers/{id}/escalate` now require workspace
+  membership (`member` role) before allowing state transitions.
+  Previously any authed user could resolve or escalate any blocker by
+  guessing its UUID.
+- **`api/tracking.py` — `GET /blockers/active`**. Without an explicit
+  `team_id`, the endpoint was returning blockers across all
+  workspaces. It now scopes the query to workspaces the caller is a
+  member of (`WorkspaceService.list_user_workspaces`); if `team_id`
+  is supplied, it verifies workspace membership for that team first.
+- **`api/assessments.py` — workspace-scope authz across all authed
+  endpoints**. Added two helpers:
+  - `_assert_workspace_access(db, organization_id, developer_id, role)`
+    for endpoints that take an `organization_id` directly
+    (`POST /`, `GET /`, `GET /organization/{id}/metrics`).
+  - `_assert_assessment_access(db, assessment_id, developer_id, role)`
+    that fetches the assessment and asserts workspace membership,
+    returning the loaded `Assessment`.
+  Applied to: `create_assessment`, `list_assessments`, `get_assessment`,
+  `update_assessment`, `delete_assessment`, `clone_assessment`,
+  `get_wizard_status`, all five `step/N` endpoints, `list_topics`,
+  `suggest_topics`, `list_questions`, `create_question`, `update_question`,
+  `delete_question`, `generate_questions`, `list_candidates`,
+  `add_candidate`, `import_candidates`, `remove_candidate`,
+  `resend_candidate_invite`, `get_email_template`, `update_email_template`,
+  `pre_publish_check`, `publish_assessment`, `get_assessment_metrics`,
+  `get_organization_metrics`, `reevaluate_candidate`,
+  `get_candidate_details`. Public-token endpoints
+  (`/public/{public_token}/*`) are out of scope (intentionally
+  unauthenticated). Previously any authed developer could read or mutate
+  assessments in any organization by guessing UUIDs.
+
+### Fixed
+
+- **N+1 query in `get_team_tracking_dashboard`**
+  (`backend/src/aexy/api/tracking.py`). The per-member developer fetch
+  loop was issuing one `SELECT Developer WHERE id = ?` per team member;
+  it now batch-loads all developers in a single `IN` query and indexes
+  by id.
+- **11 automation activities silently using the 5-minute default
+  timeout**. `temporal/dispatch.py` `ACTIVITY_CONFIG` now declares:
+  `check_missed_standups`, `check_time_entry_thresholds`,
+  `check_stale_blockers`, `detect_blocker_patterns`,
+  `check_time_anomalies`, `check_standup_participation`,
+  `check_approaching_due_assignments`, `check_overdue_assignments`,
+  `check_expiring_certifications`, `check_expired_certifications`,
+  `check_bulk_compliance_rates` — each with `STANDARD_RETRY` and a
+  10-minute timeout to accommodate scheduled detection activities that
+  loop over active workspaces.
+
+### Removed
+
+- Unused imports in `backend/src/aexy/api/tracking.py`:
+  `from typing import Any` and
+  `from aexy.services.automation_service import dispatch_automation_event`
+  (dispatch is routed through `services/tracking_events.py` helpers).
+  `WorkspaceService` is now imported at module scope.
+
+### Not in scope (filed as follow-up work)
+
+- Stub trigger handler implementations for `standup.streak` and
+  `training.bulk_overdue` — need product/design input on thresholds
+  before implementing.
+- i18n migration for `NodePalette.tsx` and the reminder/tracking
+  pages — separate, larger effort that needs translator coordination.
+- Test coverage for `tracking_events.py`,
+  `tracking_compliance_config.py`, `compliance_service.py`,
+  `hiring_intelligence.py`, `assessment_service.py`.
+
 ## [0.7.91] - 2026-05-19
 
 Replace manual GitHub issue/PR linking with mention-based auto-linking

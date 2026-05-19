@@ -49,6 +49,7 @@ from aexy.schemas.assessment import (
 )
 from aexy.services.assessment_service import AssessmentService
 from aexy.services.r2_upload_service import get_r2_upload_service
+from aexy.services.workspace_service import WorkspaceService
 from aexy.models.assessment import Assessment
 from sqlalchemy import inspect
 
@@ -79,6 +80,49 @@ async def get_current_developer_id(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
         ) from e
+
+
+async def _assert_workspace_access(
+    db: AsyncSession,
+    organization_id: str,
+    developer_id: str,
+    role: str = "viewer",
+) -> None:
+    """Guard endpoints that take an organization_id directly. Raises 403 if
+    the caller is not a member of that workspace at the required role."""
+    if not await WorkspaceService(db).check_permission(organization_id, developer_id, role):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a member of this workspace",
+        )
+
+
+async def _assert_assessment_access(
+    db: AsyncSession,
+    assessment_id: str,
+    developer_id: str,
+    role: str = "viewer",
+) -> Assessment:
+    """Load the assessment and verify the caller belongs to its workspace.
+
+    Returns the loaded Assessment so callers don't re-fetch. Raises 404 if
+    the assessment doesn't exist; 403 if it does but the caller isn't a
+    workspace member at the required role.
+    """
+    assessment = await db.get(Assessment, assessment_id)
+    if not assessment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assessment not found",
+        )
+    if not await WorkspaceService(db).check_permission(
+        str(assessment.organization_id), developer_id, role
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a member of this workspace",
+        )
+    return assessment
 
 
 def build_assessment_response(assessment: Assessment) -> AssessmentResponse:
@@ -174,6 +218,7 @@ async def create_assessment(
     db: AsyncSession = Depends(get_db),
 ) -> AssessmentResponse:
     """Create a new assessment draft."""
+    await _assert_workspace_access(db, data.organization_id, developer_id, "member")
     service = AssessmentService(db)
     assessment = await service.create_assessment(data, developer_id)
     return build_assessment_response(assessment)
@@ -190,6 +235,7 @@ async def list_assessments(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """List assessments with filters and pagination."""
+    await _assert_workspace_access(db, organization_id, developer_id)
     service = AssessmentService(db)
     assessments, total = await service.list_assessments(
         organization_id=organization_id,
@@ -214,6 +260,7 @@ async def get_assessment(
     db: AsyncSession = Depends(get_db),
 ) -> AssessmentResponse:
     """Get assessment by ID."""
+    await _assert_assessment_access(db, assessment_id, developer_id)
     service = AssessmentService(db)
     assessment = await service.get_assessment(assessment_id, organization_id)
     if not assessment:
@@ -233,6 +280,7 @@ async def update_assessment(
     db: AsyncSession = Depends(get_db),
 ) -> AssessmentResponse:
     """Update assessment."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     assessment = await service.update_assessment(assessment_id, data, organization_id)
     if not assessment:
@@ -251,6 +299,7 @@ async def delete_assessment(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete assessment (drafts only)."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     try:
         deleted = await service.delete_assessment(assessment_id, organization_id)
@@ -275,6 +324,7 @@ async def clone_assessment(
     db: AsyncSession = Depends(get_db),
 ) -> AssessmentResponse:
     """Clone an assessment as a new draft."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     assessment = await service.clone_assessment(
         assessment_id,
@@ -303,6 +353,7 @@ async def get_wizard_status(
     db: AsyncSession = Depends(get_db),
 ) -> WizardStatusResponse:
     """Get wizard completion status."""
+    await _assert_assessment_access(db, assessment_id, developer_id)
     service = AssessmentService(db)
     status = await service.get_wizard_status(assessment_id, organization_id)
     if not status:
@@ -322,6 +373,7 @@ async def save_step_1(
     db: AsyncSession = Depends(get_db),
 ) -> AssessmentResponse:
     """Save Step 1: Assessment Details."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     assessment = await service.save_step_1(assessment_id, data, organization_id)
     if not assessment:
@@ -341,6 +393,7 @@ async def save_step_2(
     db: AsyncSession = Depends(get_db),
 ) -> AssessmentResponse:
     """Save Step 2: Topic Distribution."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     assessment = await service.save_step_2(assessment_id, data, organization_id)
     if not assessment:
@@ -360,6 +413,7 @@ async def save_step_3(
     db: AsyncSession = Depends(get_db),
 ) -> AssessmentResponse:
     """Save Step 3: Schedule & Settings."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     assessment = await service.save_step_3(assessment_id, data, organization_id)
     if not assessment:
@@ -379,6 +433,7 @@ async def save_step_4(
     db: AsyncSession = Depends(get_db),
 ) -> AssessmentResponse:
     """Save Step 4: Add Candidates."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     assessment = await service.save_step_4(assessment_id, data, organization_id)
     if not assessment:
@@ -398,6 +453,7 @@ async def save_step_5(
     db: AsyncSession = Depends(get_db),
 ) -> AssessmentResponse:
     """Save Step 5: Review & Confirm."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     assessment = await service.save_step_5(assessment_id, data, organization_id)
     if not assessment:
@@ -420,6 +476,7 @@ async def list_topics(
     db: AsyncSession = Depends(get_db),
 ) -> list[TopicResponse]:
     """Get all topics for an assessment."""
+    await _assert_assessment_access(db, assessment_id, developer_id)
     service = AssessmentService(db)
     topics = await service.get_topics(assessment_id)
     return [TopicResponse.model_validate(t) for t in topics]
@@ -433,6 +490,7 @@ async def suggest_topics(
     db: AsyncSession = Depends(get_db),
 ) -> TopicSuggestionResponse:
     """AI-powered topic suggestions based on skills."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     from aexy.schemas.assessment import TopicConfig, QuestionTypeConfig, DifficultyLevel
     from aexy.llm.gateway import get_llm_gateway
     from aexy.llm.prompts import TOPIC_SUGGESTION_SYSTEM_PROMPT, TOPIC_SUGGESTION_PROMPT
@@ -565,6 +623,7 @@ async def list_questions(
     db: AsyncSession = Depends(get_db),
 ) -> list[QuestionResponse]:
     """Get all questions for an assessment."""
+    await _assert_assessment_access(db, assessment_id, developer_id)
     service = AssessmentService(db)
     questions = await service.get_questions(assessment_id, topic_id)
     return [QuestionResponse.model_validate(q) for q in questions]
@@ -578,6 +637,7 @@ async def create_question(
     db: AsyncSession = Depends(get_db),
 ) -> QuestionResponse:
     """Add a question to assessment."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     question_data = data.model_dump()
     question = await service.add_question(assessment_id, question_data)
@@ -593,6 +653,7 @@ async def update_question(
     db: AsyncSession = Depends(get_db),
 ) -> QuestionResponse:
     """Update a question."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     update_data = data.model_dump(exclude_unset=True)
     question = await service.update_question(question_id, update_data)
@@ -612,6 +673,7 @@ async def delete_question(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete a question."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     deleted = await service.delete_question(question_id)
     if not deleted:
@@ -634,6 +696,7 @@ async def generate_questions(
     question type, difficulty level, and optional context.
     Includes assessment context (job role, skills, experience) for better relevance.
     """
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     from aexy.services.question_generation_service import QuestionGenerationService
     from aexy.services.limits_service import LimitsService
     from aexy.models.assessment import AssessmentTopic
@@ -816,6 +879,7 @@ async def list_candidates(
     db: AsyncSession = Depends(get_db),
 ) -> list[InvitationWithAttempt]:
     """Get all candidates for an assessment."""
+    await _assert_assessment_access(db, assessment_id, developer_id)
     service = AssessmentService(db)
     invitations = await service.get_candidates(assessment_id)
 
@@ -863,6 +927,7 @@ async def add_candidate(
     db: AsyncSession = Depends(get_db),
 ) -> InvitationResponse:
     """Add a candidate to assessment."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     candidate, invitation = await service.add_candidate(assessment_id, organization_id, data)
 
@@ -890,6 +955,7 @@ async def import_candidates(
     db: AsyncSession = Depends(get_db),
 ) -> CandidateImportResponse:
     """Bulk import candidates."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     result = await service.import_candidates(assessment_id, organization_id, data.candidates)
     return CandidateImportResponse(**result)
@@ -903,6 +969,7 @@ async def remove_candidate(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Remove a candidate from assessment."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     try:
         removed = await service.remove_candidate(assessment_id, candidate_id)
@@ -929,6 +996,7 @@ async def resend_candidate_invite(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Resend invitation email to a candidate."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     sent = await service.resend_invitation(assessment_id, invitation_id)
     if not sent:
@@ -952,6 +1020,7 @@ async def get_email_template(
     db: AsyncSession = Depends(get_db),
 ) -> EmailTemplateConfig:
     """Get email template for assessment."""
+    await _assert_assessment_access(db, assessment_id, developer_id)
     service = AssessmentService(db)
     assessment = await service.get_assessment(assessment_id, organization_id)
     if not assessment:
@@ -974,6 +1043,7 @@ async def update_email_template(
     db: AsyncSession = Depends(get_db),
 ) -> EmailTemplateConfig:
     """Update email template for assessment."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     assessment = await service.get_assessment(assessment_id, organization_id)
     if not assessment:
@@ -1000,6 +1070,7 @@ async def pre_publish_check(
     db: AsyncSession = Depends(get_db),
 ) -> PrePublishCheckResponse:
     """Check if assessment is ready to publish."""
+    await _assert_assessment_access(db, assessment_id, developer_id)
     service = AssessmentService(db)
     result = await service.pre_publish_check(assessment_id, organization_id)
     return PrePublishCheckResponse(**result)
@@ -1014,6 +1085,7 @@ async def publish_assessment(
     db: AsyncSession = Depends(get_db),
 ) -> PublishResponse:
     """Publish assessment and send invitations."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     service = AssessmentService(db)
     try:
         assessment = await service.publish_assessment(
@@ -1066,6 +1138,7 @@ async def get_assessment_metrics(
     db: AsyncSession = Depends(get_db),
 ) -> AssessmentMetrics:
     """Get metrics for a specific assessment."""
+    await _assert_assessment_access(db, assessment_id, developer_id)
     service = AssessmentService(db)
     metrics = await service.get_assessment_metrics(assessment_id)
     return AssessmentMetrics(**metrics)
@@ -1078,6 +1151,7 @@ async def get_organization_metrics(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Get aggregate metrics for organization dashboard."""
+    await _assert_workspace_access(db, organization_id, developer_id)
     service = AssessmentService(db)
     metrics = await service.get_organization_metrics(organization_id)
     return metrics
@@ -1222,6 +1296,7 @@ async def reevaluate_candidate(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Re-evaluate all submissions for a candidate's latest attempt."""
+    await _assert_assessment_access(db, assessment_id, developer_id, "member")
     from aexy.models.assessment import (
         AssessmentInvitation,
         AssessmentAttempt,
@@ -1330,6 +1405,7 @@ async def get_candidate_details(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Get detailed candidate information including attempt, submissions, and proctoring data."""
+    await _assert_assessment_access(db, assessment_id, developer_id)
     from aexy.models.assessment import (
         AssessmentInvitation,
         AssessmentAttempt,
