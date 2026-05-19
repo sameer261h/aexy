@@ -1,6 +1,6 @@
 {
   "name": "aexy-frontend",
-  "version": "0.7.91",
+  "version": "0.8.01",
   "private": true,
   "scripts": {
     "dev": "next dev",

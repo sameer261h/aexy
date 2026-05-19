@@ -11,12 +11,17 @@
  */
 export const AUTH_PRESENCE_COOKIE = "aexy_authed";
 
+function secureAttr(): string {
+  if (typeof window === "undefined") return "";
+  return window.location.protocol === "https:" ? "; Secure" : "";
+}
+
 export function setAuthPresenceCookie(): void {
   if (typeof document === "undefined") return;
-  document.cookie = `${AUTH_PRESENCE_COOKIE}=1; path=/; SameSite=Lax`;
+  document.cookie = `${AUTH_PRESENCE_COOKIE}=1; path=/; SameSite=Lax${secureAttr()}`;
 }
 
 export function clearAuthPresenceCookie(): void {
   if (typeof document === "undefined") return;
-  document.cookie = `${AUTH_PRESENCE_COOKIE}=; path=/; SameSite=Lax; max-age=0`;
+  document.cookie = `${AUTH_PRESENCE_COOKIE}=; path=/; SameSite=Lax; max-age=0${secureAttr()}`;
 }

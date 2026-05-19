@@ -23,6 +23,7 @@ from aexy.services.email_webhook_verify import (
     verify_mailgun_signature,
     verify_postmark_basic_auth,
     verify_sendgrid_signature,
+    verify_sns_message_signature,
     workspace_id_from_sender,
 )
 from aexy.services.provider_service import ProviderService
@@ -64,6 +65,12 @@ async def ses_webhook(
         topic_arn = payload.get("TopicArn")
         if not is_allowed_sns_topic(topic_arn):
             raise HTTPException(status_code=401, detail="Unknown SNS topic")
+
+        # WS-082: the TopicArn field is attacker-controlled in the body. The
+        # signature over the canonical message envelope is what actually
+        # proves the message came from AWS SNS for our topic.
+        if not verify_sns_message_signature(payload):
+            raise HTTPException(status_code=401, detail="Invalid SNS signature")
 
         if message_type == "SubscriptionConfirmation":
             subscribe_url = payload.get("SubscribeURL")

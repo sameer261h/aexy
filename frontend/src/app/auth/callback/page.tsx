@@ -15,6 +15,14 @@ function AuthCallbackContent() {
       const token = searchParams.get("token");
       const error = searchParams.get("error");
 
+      // Strip the token + any other query from the URL bar / history *before*
+      // doing anything else with it — otherwise the JWT lingers in the
+      // address bar and Referer header during the next navigation. Matches
+      // the same scrub done by /p/[publicSlug] on token receive.
+      if (typeof window !== "undefined" && window.location.search) {
+        window.history.replaceState({}, "", "/auth/callback");
+      }
+
       if (error) {
         console.error("Auth error:", error);
         window.location.href = `/?error=${encodeURIComponent(error)}`;

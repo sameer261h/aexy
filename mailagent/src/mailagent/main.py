@@ -81,6 +81,15 @@ def create_app() -> FastAPI:
     # through; in that mode the port MUST be bound to the internal network.
     app.add_middleware(InternalAuthMiddleware)
     if not settings.internal_secret:
+        # WS-086: refuse to boot in prod/staging when the shared secret is
+        # missing — silent fail-open here meant any pod-network neighbor
+        # could call non-public mailagent routes without HMAC.
+        if settings.environment.lower() in {"production", "staging"}:
+            raise RuntimeError(
+                "Mailagent internal_secret is empty but environment is "
+                f"{settings.environment!r}. Configure MAILAGENT_INTERNAL_SECRET "
+                "(matching the backend's mailagent_signing_secret) before deploy."
+            )
         logger.warning(
             "Mailagent internal_secret is empty — running without backend HMAC auth. "
             "DO NOT deploy to production with this configuration."

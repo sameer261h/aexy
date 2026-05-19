@@ -6,6 +6,7 @@ import Link from "next/link";
 import { FolderKanban, Loader2, AlertCircle, Globe, ArrowLeft } from "lucide-react";
 import { publicProjectApi, PublicProject } from "@/lib/api";
 import { consumeOAuthInflight } from "@/lib/oauth";
+import { setAuthPresenceCookie } from "@/lib/authCookie";
 import { useAuth } from "@/hooks/useAuth";
 import { AppShell } from "@/components/layout/AppShell";
 import { useQueryClient } from "@tanstack/react-query";
@@ -106,8 +107,11 @@ function PublicProjectContent() {
       return;
     }
 
-    // Save token to localStorage
+    // Save token to localStorage and sync the middleware-visible presence
+    // cookie so a subsequent nav to an auth-required route doesn't bounce
+    // back via the same loop 5895c1da fixed for the landing page.
     localStorage.setItem("token", token);
+    setAuthPresenceCookie();
     // Invalidate the user query to refresh auth state
     queryClient.invalidateQueries({ queryKey: ["currentUser"] });
 

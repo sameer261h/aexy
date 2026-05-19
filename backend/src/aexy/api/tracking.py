@@ -2,7 +2,6 @@
 
 import logging
 from datetime import date
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, func
@@ -24,7 +23,7 @@ from aexy.models.tracking import (
     TrackingSource,
     WorkLog,
 )
-from aexy.services.automation_service import dispatch_automation_event
+from aexy.services.workspace_service import WorkspaceService
 from aexy.schemas.tracking import (
     BlockerCreate,
     BlockerEscalation,
@@ -117,6 +116,82 @@ async def get_active_sprint(team_id: str, db: AsyncSession) -> Sprint | None:
         select(Sprint).where(Sprint.team_id == team_id, Sprint.status == "active")
     )
     return result.scalar_one_or_none()
+
+
+async def _resolve_tracking_workspace(
+    db: AsyncSession,
+    developer_id: str,
+    *,
+    task_id: str | None = None,
+    sprint_id: str | None = None,
+    team_id: str | None = None,
+) -> str:
+    """Pick the workspace a tracking row should be stamped with, then check
+    membership. WS-084: the row's workspace is derived from the supplied
+    task/sprint/team references (in that priority), not from the caller's
+    first team — otherwise a caller with memberships in multiple workspaces
+    could attribute rows to the wrong tenant by supplying ids from another.
+
+    Each supplied id is also verified to belong to the resolved workspace,
+    so a body that mixes refs across workspaces is rejected.
+    """
+    candidate_workspace: str | None = None
+
+    if task_id:
+        task = (
+            await db.execute(select(SprintTask).where(SprintTask.id == task_id))
+        ).scalar_one_or_none()
+        if not task or not task.workspace_id:
+            raise HTTPException(status_code=404, detail="Task not found")
+        candidate_workspace = str(task.workspace_id)
+
+    if sprint_id:
+        sprint = (
+            await db.execute(select(Sprint).where(Sprint.id == sprint_id))
+        ).scalar_one_or_none()
+        if not sprint or not sprint.workspace_id:
+            raise HTTPException(status_code=404, detail="Sprint not found")
+        sprint_ws = str(sprint.workspace_id)
+        if candidate_workspace and sprint_ws != candidate_workspace:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="task_id and sprint_id are in different workspaces",
+            )
+        candidate_workspace = sprint_ws
+
+    if team_id:
+        team = (
+            await db.execute(select(Team).where(Team.id == team_id))
+        ).scalar_one_or_none()
+        if not team or not team.workspace_id:
+            raise HTTPException(status_code=404, detail="Team not found")
+        team_ws = str(team.workspace_id)
+        if candidate_workspace and team_ws != candidate_workspace:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="task/sprint/team references span workspaces",
+            )
+        candidate_workspace = team_ws
+
+    if not candidate_workspace:
+        # No explicit refs — fall back to caller's primary team's workspace.
+        _team, ws = await get_developer_team(developer_id, db)
+        if not ws:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Developer is not assigned to any team",
+            )
+        candidate_workspace = str(ws)
+
+    if not await WorkspaceService(db).check_permission(
+        candidate_workspace, developer_id, "member"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Not a member of the referenced workspace",
+        )
+
+    return candidate_workspace
 
 
 def standup_to_response(standup: DeveloperStandup) -> StandupResponse:
@@ -275,6 +350,16 @@ async def get_team_standups(
     """Get team standups for a date."""
     target_date = standup_date or date.today()
 
+    team_result = await db.execute(select(Team).where(Team.id == team_id))
+    team = team_result.scalar_one_or_none()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    if not await WorkspaceService(db).check_permission(
+        str(team.workspace_id), str(current_developer.id), "viewer"
+    ):
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
+
     result = await db.execute(
         select(DeveloperStandup)
         .where(
@@ -294,11 +379,21 @@ async def submit_standup(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Submit a standup via API."""
-    team, workspace_id = await get_developer_team(current_developer.id, db)
-    if not team:
+    workspace_id = await _resolve_tracking_workspace(
+        db,
+        str(current_developer.id),
+        sprint_id=standup.sprint_id,
+        team_id=standup.team_id,
+    )
+    # Re-derive the caller's team within the resolved workspace (used for
+    # sprint defaulting + streak math below).
+    team, _ = await get_developer_team(
+        str(current_developer.id), db, workspace_id=workspace_id
+    )
+    if not team and not standup.team_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Developer is not assigned to any team",
+            detail="Developer is not assigned to any team in this workspace",
         )
 
     target_date = standup.standup_date or date.today()
@@ -323,12 +418,13 @@ async def submit_standup(
         await _dispatch_standup_events(db, existing_standup)
         return standup_to_response(existing_standup)
 
-    # Get active sprint
-    sprint = await get_active_sprint(team.id, db)
+    # Get active sprint (only if we know which team to look it up against)
+    team_id_for_standup = standup.team_id or (team.id if team else None)
+    sprint = await get_active_sprint(team_id_for_standup, db) if team_id_for_standup else None
 
     new_standup = DeveloperStandup(
         developer_id=current_developer.id,
-        team_id=standup.team_id or team.id,
+        team_id=team_id_for_standup,
         sprint_id=standup.sprint_id or (sprint.id if sprint else None),
         workspace_id=workspace_id,
         standup_date=target_date,
@@ -390,6 +486,13 @@ async def get_sprint_standup_summary(
     sprint = sprint_result.scalar_one_or_none()
     if not sprint:
         raise HTTPException(status_code=404, detail="Sprint not found")
+
+    team_result = await db.execute(select(Team).where(Team.id == sprint.team_id))
+    team = team_result.scalar_one_or_none()
+    if not team or not await WorkspaceService(db).check_permission(
+        str(team.workspace_id), str(current_developer.id), "viewer"
+    ):
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
 
     # Get all summaries for this sprint
     summaries_result = await db.execute(
@@ -481,6 +584,15 @@ async def get_task_logs(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Get work logs for a task."""
+    task_result = await db.execute(select(SprintTask).where(SprintTask.id == task_id))
+    task = task_result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not task.workspace_id or not await WorkspaceService(db).check_permission(
+        str(task.workspace_id), str(current_developer.id), "viewer"
+    ):
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
+
     result = await db.execute(
         select(WorkLog)
         .where(WorkLog.task_id == task_id)
@@ -497,13 +609,18 @@ async def create_work_log(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Create a work log."""
-    team, workspace_id = await get_developer_team(current_developer.id, db)
+    workspace_id = await _resolve_tracking_workspace(
+        db,
+        str(current_developer.id),
+        task_id=log.task_id,
+        sprint_id=log.sprint_id,
+    )
 
     new_log = WorkLog(
         developer_id=current_developer.id,
         task_id=log.task_id,
         sprint_id=log.sprint_id,
-        workspace_id=workspace_id or "",
+        workspace_id=workspace_id,
         notes=log.notes,
         log_type=log.log_type.value,
         source=log.source.value,
@@ -566,13 +683,18 @@ async def log_time(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Log time against a task."""
-    team, workspace_id = await get_developer_team(current_developer.id, db)
+    workspace_id = await _resolve_tracking_workspace(
+        db,
+        str(current_developer.id),
+        task_id=entry.task_id,
+        sprint_id=entry.sprint_id,
+    )
 
     new_entry = TimeEntry(
         developer_id=current_developer.id,
         task_id=entry.task_id,
         sprint_id=entry.sprint_id,
-        workspace_id=workspace_id or "",
+        workspace_id=workspace_id,
         duration_minutes=entry.duration_minutes,
         description=entry.description,
         entry_date=entry.entry_date or date.today(),
@@ -601,6 +723,12 @@ async def get_task_time(
     # Get task
     task_result = await db.execute(select(SprintTask).where(SprintTask.id == task_id))
     task = task_result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not task.workspace_id or not await WorkspaceService(db).check_permission(
+        str(task.workspace_id), str(current_developer.id), "viewer"
+    ):
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
 
     # Get entries
     result = await db.execute(
@@ -642,9 +770,26 @@ async def get_active_blockers(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Get active blockers, optionally filtered by team."""
+    workspace_service = WorkspaceService(db)
     query = select(Blocker).where(Blocker.status == BlockerStatus.ACTIVE.value)
     if team_id:
+        team_result = await db.execute(select(Team).where(Team.id == team_id))
+        team = team_result.scalar_one_or_none()
+        if not team:
+            raise HTTPException(status_code=404, detail="Team not found")
+        if not await workspace_service.check_permission(
+            str(team.workspace_id), str(current_developer.id), "viewer"
+        ):
+            raise HTTPException(status_code=403, detail="Not a member of this workspace")
         query = query.where(Blocker.team_id == team_id)
+    else:
+        # Without an explicit team filter, restrict to workspaces the caller is a member of —
+        # otherwise this is a global blocker enumeration across all workspaces.
+        workspaces = await workspace_service.list_user_workspaces(str(current_developer.id))
+        workspace_ids = [str(w.id) for w in workspaces]
+        if not workspace_ids:
+            return BlockerListResponse(blockers=[], total=0, active=0, escalated=0, resolved=0)
+        query = query.where(Blocker.workspace_id.in_(workspace_ids))
 
     query = query.order_by(Blocker.reported_at.desc())
     result = await db.execute(query)
@@ -673,14 +818,29 @@ async def report_blocker(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Report a new blocker."""
-    team, workspace_id = await get_developer_team(current_developer.id, db)
+    workspace_id = await _resolve_tracking_workspace(
+        db,
+        str(current_developer.id),
+        task_id=blocker.task_id,
+        sprint_id=blocker.sprint_id,
+        team_id=blocker.team_id,
+    )
+    # When no team_id was supplied, fall back to the caller's team in the
+    # resolved workspace (matches prior behavior for self-service reports).
+    fallback_team_id: str = blocker.team_id or ""
+    if not fallback_team_id:
+        caller_team, _ = await get_developer_team(
+            str(current_developer.id), db, workspace_id=workspace_id
+        )
+        if caller_team:
+            fallback_team_id = str(caller_team.id)
 
     new_blocker = Blocker(
         developer_id=current_developer.id,
         task_id=blocker.task_id,
         sprint_id=blocker.sprint_id,
-        team_id=blocker.team_id or (team.id if team else ""),
-        workspace_id=workspace_id or "",
+        team_id=fallback_team_id,
+        workspace_id=workspace_id,
         description=blocker.description,
         severity=blocker.severity.value,
         category=blocker.category.value,
@@ -711,6 +871,11 @@ async def resolve_blocker(
     if not blocker:
         raise HTTPException(status_code=404, detail="Blocker not found")
 
+    if not await WorkspaceService(db).check_permission(
+        str(blocker.workspace_id), str(current_developer.id), "member"
+    ):
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
+
     from datetime import datetime
 
     blocker.status = BlockerStatus.RESOLVED.value
@@ -739,6 +904,11 @@ async def escalate_blocker(
     blocker = result.scalar_one_or_none()
     if not blocker:
         raise HTTPException(status_code=404, detail="Blocker not found")
+
+    if not await WorkspaceService(db).check_permission(
+        str(blocker.workspace_id), str(current_developer.id), "member"
+    ):
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
 
     from datetime import datetime
 
@@ -973,10 +1143,6 @@ async def get_team_tracking_dashboard(
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
 
-    # Workspace membership check — without it, an authenticated user from
-    # workspace A can read workspace B's standups/blockers/time logs via the
-    # team_id path param.
-    from aexy.services.workspace_service import WorkspaceService
     if not await WorkspaceService(db).check_permission(
         str(team.workspace_id), str(current_developer.id), "viewer"
     ):
@@ -997,13 +1163,19 @@ async def get_team_tracking_dashboard(
     )
     today_standups = {str(s.developer_id): s for s in standups_result.scalars().all()}
 
+    # Batch-load developers for all members in one query (avoid N+1).
+    dev_ids = [m.developer_id for m in members]
+    devs_by_id: dict[str, Developer] = {}
+    if dev_ids:
+        devs_result = await db.execute(
+            select(Developer).where(Developer.id.in_(dev_ids))
+        )
+        devs_by_id = {str(d.id): d for d in devs_result.scalars().all()}
+
     # Build standup completion list
     standup_completion: list[TeamMemberStandupStatus] = []
     for member in members:
-        dev_result = await db.execute(
-            select(Developer).where(Developer.id == member.developer_id)
-        )
-        dev = dev_result.scalar_one_or_none()
+        dev = devs_by_id.get(str(member.developer_id))
         standup = today_standups.get(str(member.developer_id))
 
         standup_completion.append(
@@ -1080,6 +1252,11 @@ async def get_channel_configs(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Get all Slack channel configurations for a workspace."""
+    if not await WorkspaceService(db).check_permission(
+        workspace_id, str(current_developer.id), "viewer"
+    ):
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
+
     result = await db.execute(
         select(SlackChannelConfig).where(
             SlackChannelConfig.workspace_id == workspace_id
@@ -1103,6 +1280,11 @@ async def create_channel_config(
     team = team_result.scalar_one_or_none()
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
+
+    if not await WorkspaceService(db).check_permission(
+        str(team.workspace_id), str(current_developer.id), "member"
+    ):
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
 
     new_config = SlackChannelConfig(
         integration_id=config.integration_id,
@@ -1137,6 +1319,11 @@ async def update_channel_config(
     config = result.scalar_one_or_none()
     if not config:
         raise HTTPException(status_code=404, detail="Channel config not found")
+
+    if not await WorkspaceService(db).check_permission(
+        str(config.workspace_id), str(current_developer.id), "member"
+    ):
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
 
     if update.channel_name is not None:
         config.channel_name = update.channel_name
@@ -1173,6 +1360,11 @@ async def delete_channel_config(
     config = result.scalar_one_or_none()
     if not config:
         raise HTTPException(status_code=404, detail="Channel config not found")
+
+    if not await WorkspaceService(db).check_permission(
+        str(config.workspace_id), str(current_developer.id), "member"
+    ):
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
 
     await db.delete(config)
     await db.commit()

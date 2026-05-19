@@ -26,11 +26,30 @@ import hashlib
 import hmac
 import logging
 import re
+from datetime import datetime, timezone
+from typing import Any
 from urllib.parse import urlparse
 
 from aexy.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+# Max allowed clock skew between provider timestamp and now. Anything older
+# is a replay (WS-082). Matches the mailagent internal-auth window.
+_MAX_TIMESTAMP_SKEW_SECONDS = 300
+
+
+def _timestamp_within_skew(ts_str: str | None) -> bool:
+    """Accept only Unix-epoch-seconds timestamps within the replay window."""
+    if not ts_str:
+        return False
+    try:
+        ts = float(ts_str)
+    except (TypeError, ValueError):
+        return False
+    now = datetime.now(timezone.utc).timestamp()
+    return abs(now - ts) <= _MAX_TIMESTAMP_SKEW_SECONDS
 
 
 def _missing_config(provider: str) -> bool:
@@ -97,6 +116,110 @@ def is_allowed_sns_topic(topic_arn: str | None) -> bool:
     return topic_arn in allowed
 
 
+# In-process cache of fetched signing certs. SNS rotates these rarely; the
+# URL itself encodes the cert version, so caching by URL is safe.
+_sns_cert_cache: dict[str, Any] = {}
+
+
+def _is_safe_sns_cert_url(url: str | None) -> bool:
+    """Accept only HTTPS URLs hosted on real AWS SNS endpoints. Reusing the
+    SubscribeURL host check — both URLs come from the same SNS hostname set."""
+    if not url:
+        return False
+    return is_safe_sns_subscribe_url(url)
+
+
+_SNS_FIELDS_BY_TYPE: dict[str, tuple[str, ...]] = {
+    "Notification": ("Message", "MessageId", "Subject", "Timestamp", "TopicArn", "Type"),
+    "SubscriptionConfirmation": (
+        "Message", "MessageId", "SubscribeURL", "Timestamp", "Token", "TopicArn", "Type",
+    ),
+    "UnsubscribeConfirmation": (
+        "Message", "MessageId", "SubscribeURL", "Timestamp", "Token", "TopicArn", "Type",
+    ),
+}
+
+
+def _canonical_sns_string(payload: dict) -> bytes | None:
+    """Build the canonical string-to-sign per AWS SNS message-validation spec."""
+    msg_type = payload.get("Type")
+    fields = _SNS_FIELDS_BY_TYPE.get(msg_type or "")
+    if not fields:
+        return None
+    parts: list[str] = []
+    for field in fields:
+        # "Subject" is optional — skip if absent (per AWS spec).
+        if field == "Subject" and "Subject" not in payload:
+            continue
+        value = payload.get(field)
+        if value is None:
+            return None
+        parts.append(field)
+        parts.append(str(value))
+    return ("\n".join(parts) + "\n").encode("utf-8")
+
+
+def verify_sns_message_signature(payload: dict) -> bool:
+    """Verify the SNS message envelope signature (WS-082).
+
+    Without this, an attacker who knows / guesses an allow-listed `TopicArn`
+    can POST forged Notification bodies to /ses and mutate
+    `CampaignRecipient` / `EmailSubscriber` state. The TopicArn allowlist on
+    its own is not sufficient — the field is attacker-controlled in the body.
+
+    Returns True only when the SNS signature over the canonical message
+    string verifies against the cert at `SigningCertURL`. Returns
+    `_missing_config("SES")` (dev-mode) when no SES topic allowlist is set
+    so signature verification is skipped in tandem with allowlist gating.
+    """
+    # In dev (no allowlist configured), we already short-circuit topic
+    # checking; do the same for signature to keep the modes consistent.
+    if not (get_settings().ses_sns_topic_arn_allowlist or "").strip():
+        return _missing_config("SES")
+
+    sig_url = payload.get("SigningCertURL")
+    if not _is_safe_sns_cert_url(sig_url):
+        logger.warning("Rejected SNS message: unsafe SigningCertURL: %s", sig_url)
+        return False
+
+    signature_b64 = payload.get("Signature")
+    sig_version = str(payload.get("SignatureVersion") or "")
+    if not signature_b64 or sig_version not in ("1", "2"):
+        return False
+
+    canonical = _canonical_sns_string(payload)
+    if canonical is None:
+        return False
+
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+        from cryptography.x509 import load_pem_x509_certificate
+    except ImportError:
+        logger.error("cryptography package missing; cannot verify SNS signature")
+        return False
+
+    cert = _sns_cert_cache.get(sig_url)
+    if cert is None:
+        try:
+            import httpx
+            resp = httpx.get(sig_url, timeout=5.0)
+            resp.raise_for_status()
+            cert = load_pem_x509_certificate(resp.content)
+            _sns_cert_cache[sig_url] = cert
+        except Exception as exc:
+            logger.warning("Failed to fetch SNS signing cert from %s: %s", sig_url, exc)
+            return False
+
+    try:
+        signature = base64.b64decode(signature_b64)
+        algo = hashes.SHA256() if sig_version == "2" else hashes.SHA1()
+        cert.public_key().verify(signature, canonical, padding.PKCS1v15(), algo)
+        return True
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # SendGrid (Twilio Email Event Webhook signature)
 # ---------------------------------------------------------------------------
@@ -116,6 +239,10 @@ def verify_sendgrid_signature(
     if not public_key_b64:
         return _missing_config("SendGrid")
     if not timestamp_header or not signature_header:
+        return False
+    # WS-082: reject stale timestamps to block replay of captured payloads.
+    if not _timestamp_within_skew(timestamp_header.strip()):
+        logger.warning("SendGrid webhook rejected: timestamp outside %ds skew window", _MAX_TIMESTAMP_SKEW_SECONDS)
         return False
     try:
         from cryptography.hazmat.primitives.asymmetric import ec
@@ -152,6 +279,10 @@ def verify_mailgun_signature(timestamp: str | None, token: str | None, signature
     if not signing_key:
         return _missing_config("Mailgun")
     if not timestamp or not token or not signature:
+        return False
+    # WS-082: reject stale timestamps to block replay of captured payloads.
+    if not _timestamp_within_skew(timestamp.strip()):
+        logger.warning("Mailgun webhook rejected: timestamp outside %ds skew window", _MAX_TIMESTAMP_SKEW_SECONDS)
         return False
     expected = hmac.new(
         signing_key.encode("utf-8"),
