@@ -30,7 +30,26 @@
     "list": {
       "empty": "यहाँ कोई संदेश नहीं है।",
       "loading": "संदेश लोड हो रहे हैं…",
-      "unread": "{count} अपठित"
+      "unread": "{count, plural, =0 {कोई अपठित नहीं} =1 {1 अपठित} other {# अपठित}}"
+    },
+
+    "bulk": {
+      "selectAll": "सभी दिख रहे चुनें",
+      "selectedCount": "{count, plural, =1 {1 चयनित} other {# चयनित}}",
+      "process": "प्रक्रिया करें",
+      "archive": "संग्रहित करें",
+      "clear": "चयन साफ़ करें"
+    },
+
+    "shortcuts": {
+      "title": "कीबोर्ड शॉर्टकट",
+      "openLabel": "कीबोर्ड शॉर्टकट दिखाएं",
+      "nextMessage": "अगला संदेश",
+      "prevMessage": "पिछला संदेश",
+      "toggleSelect": "चयन टॉगल करें",
+      "archive": "संग्रह करें",
+      "clearOrClose": "चयन साफ़ करें / बंद करें",
+      "toggleOverlay": "इस ओवरले को टॉगल करें"
     },
 
     "detail": {

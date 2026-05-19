@@ -30,7 +30,26 @@
     "list": {
       "empty": "No messages here.",
       "loading": "Loading messages…",
-      "unread": "{count} unread"
+      "unread": "{count, plural, =0 {No unread} =1 {1 unread} other {# unread}}"
+    },
+
+    "bulk": {
+      "selectAll": "Select all visible",
+      "selectedCount": "{count, plural, =1 {1 selected} other {# selected}}",
+      "process": "Process",
+      "archive": "Archive",
+      "clear": "Clear selection"
+    },
+
+    "shortcuts": {
+      "title": "Keyboard shortcuts",
+      "openLabel": "Show keyboard shortcuts",
+      "nextMessage": "Next message",
+      "prevMessage": "Previous message",
+      "toggleSelect": "Toggle selection",
+      "archive": "Archive",
+      "clearOrClose": "Clear selection / close",
+      "toggleOverlay": "Toggle this overlay"
     },
 
     "detail": {
