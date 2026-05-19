@@ -405,9 +405,10 @@ export default function AgentsListPage() {
                 : "bg-muted border-border text-foreground hover:border-border"
             )}
           >
-            <Filter className="h-4 w-4" />
+            <Filter className="h-4 w-4" aria-hidden />
             {t("actions.filters")}
             <ChevronDown
+              aria-hidden
               className={cn("h-4 w-4 transition-transform", showFilters && "rotate-180")}
             />
           </button>

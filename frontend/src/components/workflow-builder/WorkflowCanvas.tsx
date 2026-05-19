@@ -442,7 +442,12 @@ function WorkflowCanvasInner({
   // Export workflow as JSON file
   const handleExport = useCallback(async () => {
     if (!automationId || automationId === "new") {
-      console.warn("Cannot export workflow for unsaved automation");
+      // UX-AUT-DTL-005: surface the precondition to the user instead of
+      // silently no-op'ing into the console — the Export button stays
+      // clickable in this state, so a click that does nothing visible
+      // reads as "Export is broken." Telling the user "save first"
+      // points them at the only action that unblocks export.
+      toast.error("Save the automation before exporting");
       return;
     }
     try {
@@ -471,7 +476,7 @@ function WorkflowCanvasInner({
   // Import workflow from JSON data
   const handleImport = useCallback(async (data: unknown) => {
     if (!automationId || automationId === "new") {
-      console.warn("Cannot import workflow for unsaved automation");
+      toast.error("Save the automation before importing");
       return;
     }
     try {
@@ -506,7 +511,7 @@ function WorkflowCanvasInner({
   // Handle version restore
   const handleRestoreVersion = useCallback(async () => {
     if (!automationId || automationId === "new") {
-      console.warn("Cannot restore version for unsaved automation");
+      toast.error("Save the automation before restoring a version");
       return;
     }
     // Fetch the updated workflow after restore

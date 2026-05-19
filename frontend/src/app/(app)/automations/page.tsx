@@ -158,7 +158,10 @@ export default function AutomationsPage() {
   const searchParams = useSearchParams();
   const { currentWorkspace } = useWorkspace();
   const workspaceId = currentWorkspace?.id || null;
-  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  // Track the full automation so the confirm dialog can name it
+  // (UX-AUT-LST-007). The prior id-only state lost the name when the
+  // delete-target row scrolled off-screen or filters changed.
+  const [deleteTarget, setDeleteTarget] = useState<Automation | null>(null);
 
   // Get initial module filter from URL
   const initialModule = searchParams.get("module") as AutomationModule | null;
@@ -194,13 +197,13 @@ export default function AutomationsPage() {
     });
   };
 
-  const handleDeleteAutomation = (id: string) => {
-    setDeleteTargetId(id);
+  const handleDeleteAutomation = (automation: Automation) => {
+    setDeleteTarget(automation);
   };
 
   const confirmDeleteAutomation = async () => {
-    if (!deleteTargetId) return;
-    await deleteAutomation(deleteTargetId);
+    if (!deleteTarget) return;
+    await deleteAutomation(deleteTarget.id);
   };
 
   const handleCreateNew = () => {
@@ -276,17 +279,42 @@ export default function AutomationsPage() {
               ))}
             </div>
           ) : filteredAutomations.length === 0 ? (
-            <EmptyState
-              icon={Zap}
-              title={selectedModule ? `No ${moduleLabels[selectedModule]} automations yet` : "No automations yet"}
-              description={selectedModule
-                ? `Create your first ${moduleLabels[selectedModule]} automation to streamline your workflows`
-                : "Create your first automation to streamline your workflows"}
-              actions={[
-                { label: t("createAutomation"), onClick: handleCreateNew },
-              ]}
-              templateHref="/templates?category=automations"
-            />
+            // UX-AUT-LST-009: distinguish three empty cases — search miss
+            // (user knows results exist somewhere, just not matching this
+            // query), module-scoped empty (user knows this module is
+            // empty but other modules may have content), and global
+            // empty. Search miss wins over module filter because clearing
+            // the search is the smaller corrective action.
+            searchQuery ? (
+              <EmptyState
+                icon={Zap}
+                title={t("empty.searchTitle", { query: searchQuery })}
+                description={t("empty.searchDescription")}
+                actions={[
+                  { label: t("search.clear"), onClick: () => setSearchQuery("") },
+                ]}
+              />
+            ) : selectedModule ? (
+              <EmptyState
+                icon={Zap}
+                title={t("empty.moduleTitle", { module: moduleLabels[selectedModule] })}
+                description={t("empty.moduleDescription", { module: moduleLabels[selectedModule] })}
+                actions={[
+                  { label: t("createAutomation"), onClick: handleCreateNew },
+                ]}
+                templateHref="/templates?category=automations"
+              />
+            ) : (
+              <EmptyState
+                icon={Zap}
+                title={t("empty.title")}
+                description={t("empty.description")}
+                actions={[
+                  { label: t("createAutomation"), onClick: handleCreateNew },
+                ]}
+                templateHref="/templates?category=automations"
+              />
+            )
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {filteredAutomations.map((automation) => (
@@ -294,7 +322,7 @@ export default function AutomationsPage() {
                   key={automation.id}
                   automation={automation}
                   onToggle={() => toggleAutomation(automation.id)}
-                  onDelete={() => handleDeleteAutomation(automation.id)}
+                  onDelete={() => handleDeleteAutomation(automation)}
                   editHref={`/automations/${automation.id}`}
                 />
               ))}
@@ -304,10 +332,17 @@ export default function AutomationsPage() {
       </div>
 
       <ConfirmDialog
-        open={!!deleteTargetId}
-        onOpenChange={(open) => !open && setDeleteTargetId(null)}
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
         title={t("delete.title")}
-        description={t("delete.description")}
+        // UX-AUT-LST-007: name the automation in the destructive copy so
+        // users about to delete the wrong row catch it. Falls back to
+        // generic copy if name is empty (untitled / mid-rename).
+        description={
+          deleteTarget?.name
+            ? t("delete.descriptionNamed", { name: deleteTarget.name })
+            : t("delete.description")
+        }
         confirmLabel={t("delete.confirm")}
         onConfirm={confirmDeleteAutomation}
         tone="danger"
