@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { createPortal } from "react-dom";
 import {
   Save,
   Play,
@@ -16,6 +15,13 @@ import {
   Upload,
   GitBranch,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface WorkflowToolbarProps {
   hasChanges: boolean;
@@ -303,134 +309,157 @@ export function WorkflowToolbar({
         </div>
       </div>
 
-      {/* Test Modal - rendered via portal to escape stacking context */}
-      {showTestModal && typeof document !== "undefined" && createPortal(
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]">
-          <div className="bg-muted border border-border rounded-xl p-6 w-full max-w-md shadow-xl">
-            <h3 className="text-lg font-semibold text-foreground mb-4">Test Workflow</h3>
+      {/* Test Modal — Radix Dialog gives us focus trap, Esc-to-close,
+          scroll lock, and proper aria-modal that the prior raw portal
+          implementation lacked. */}
+      <Dialog
+        open={showTestModal}
+        onOpenChange={testInProgress ? undefined : (open) => !open && setShowTestModal(false)}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Test Workflow</DialogTitle>
+          </DialogHeader>
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-muted-foreground mb-1">
-                  Record ID (optional)
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={testRecordId}
-                    onChange={(e) => setTestRecordId(e.target.value)}
-                    placeholder="Enter a record ID to test with..."
-                    className="flex-1 bg-accent border border-border rounded-lg px-3 py-2 text-foreground text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setTestRecordId(crypto.randomUUID())}
-                    className="px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm hover:bg-muted transition-colors whitespace-nowrap"
-                  >
-                    Generate
-                  </button>
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Leave empty for a dry run, or generate a mock ID for testing
+          <div className="space-y-4">
+            <div>
+              <label
+                htmlFor="test-record-id"
+                className="block text-sm text-muted-foreground mb-1"
+              >
+                Record ID (optional)
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="test-record-id"
+                  type="text"
+                  value={testRecordId}
+                  onChange={(e) => setTestRecordId(e.target.value)}
+                  placeholder="Enter a record ID to test with..."
+                  className="flex-1 bg-accent border border-border rounded-lg px-3 py-2 text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setTestRecordId(crypto.randomUUID())}
+                  className="px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm hover:bg-muted transition-colors whitespace-nowrap"
+                >
+                  Generate
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Leave empty for a dry run, or generate a mock ID for testing
+              </p>
+            </div>
+
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="h-4 w-4 text-amber-500 dark:text-amber-400 mt-0.5" />
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  This will execute the workflow in test mode. Actions will be simulated but not actually performed.
                 </p>
               </div>
-
-              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
-                <div className="flex items-start gap-2">
-                  <AlertCircle className="h-4 w-4 text-amber-400 mt-0.5" />
-                  <p className="text-xs text-amber-300">
-                    This will execute the workflow in test mode. Actions will be simulated but not actually performed.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3 mt-6">
-              <button
-                onClick={() => setShowTestModal(false)}
-                className="px-4 py-2 text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleTest}
-                disabled={testInProgress}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50"
-              >
-                {testInProgress ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Play className="h-4 w-4" />
-                )}
-                Run Test
-              </button>
             </div>
           </div>
-        </div>,
-        document.body
-      )}
 
-      {/* Import Modal - rendered via portal to escape stacking context */}
-      {showImportModal && typeof document !== "undefined" && createPortal(
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]">
-          <div className="bg-muted border border-border rounded-xl p-6 w-full max-w-md shadow-xl">
-            <h3 className="text-lg font-semibold text-foreground mb-4">Import Workflow</h3>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-muted-foreground mb-2">
-                  Select a workflow JSON file
-                </label>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".json,application/json"
-                  onChange={handleFileSelect}
-                  className="w-full text-sm text-muted-foreground
-                    file:mr-4 file:py-2 file:px-4
-                    file:rounded-lg file:border-0
-                    file:text-sm file:font-medium
-                    file:bg-blue-500/20 file:text-blue-400
-                    hover:file:bg-blue-500/30
-                    file:cursor-pointer
-                  "
-                />
-              </div>
-
-              {importError && (
-                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-                  <div className="flex items-start gap-2">
-                    <AlertCircle className="h-4 w-4 text-red-400 mt-0.5" />
-                    <p className="text-xs text-red-300">{importError}</p>
-                  </div>
-                </div>
+          <DialogFooter className="gap-2">
+            <button
+              type="button"
+              onClick={() => setShowTestModal(false)}
+              disabled={testInProgress}
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-border text-foreground hover:bg-accent disabled:opacity-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleTest}
+              disabled={testInProgress}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+            >
+              {testInProgress ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4" />
               )}
+              Run Test
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+      {/* Import Modal */}
+      <Dialog
+        open={showImportModal}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShowImportModal(false);
+            setImportError(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Import Workflow</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <label
+                htmlFor="import-workflow-file"
+                className="block text-sm text-muted-foreground mb-2"
+              >
+                Select a workflow JSON file
+              </label>
+              <input
+                id="import-workflow-file"
+                ref={fileInputRef}
+                type="file"
+                accept=".json,application/json"
+                onChange={handleFileSelect}
+                className="w-full text-sm text-muted-foreground
+                  file:mr-4 file:py-2 file:px-4
+                  file:rounded-lg file:border-0
+                  file:text-sm file:font-medium
+                  file:bg-blue-500/20 file:text-blue-600 dark:file:text-blue-400
+                  hover:file:bg-blue-500/30
+                  file:cursor-pointer
+                "
+              />
+            </div>
+
+            {importError && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
                 <div className="flex items-start gap-2">
-                  <AlertCircle className="h-4 w-4 text-amber-400 mt-0.5" />
-                  <p className="text-xs text-amber-300">
-                    Importing will replace the current workflow. This action cannot be undone.
-                  </p>
+                  <AlertCircle className="h-4 w-4 text-red-500 dark:text-red-400 mt-0.5" />
+                  <p className="text-xs text-red-700 dark:text-red-300">{importError}</p>
                 </div>
               </div>
-            </div>
+            )}
 
-            <div className="flex justify-end gap-3 mt-6">
-              <button
-                onClick={() => {
-                  setShowImportModal(false);
-                  setImportError(null);
-                }}
-                className="px-4 py-2 text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Cancel
-              </button>
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="h-4 w-4 text-amber-500 dark:text-amber-400 mt-0.5" />
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  Importing will replace the current workflow. This action cannot be undone.
+                </p>
+              </div>
             </div>
           </div>
-        </div>,
-        document.body
-      )}
+
+          <DialogFooter className="gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setShowImportModal(false);
+                setImportError(null);
+              }}
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-border text-foreground hover:bg-accent transition-colors"
+            >
+              Cancel
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

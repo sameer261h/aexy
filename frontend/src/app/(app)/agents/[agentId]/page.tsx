@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -32,6 +32,14 @@ import { CRMAgentExecution, getAgentTypeConfig } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   AgentTypeBadge,
   AgentStatusBadge,
@@ -76,9 +84,15 @@ function RunAgentDialog({
   agentName: string;
   tools: string[];
 }) {
+  const t = useTranslations("agents");
+  const tc = useTranslations("common");
   const [task, setTask] = useState("");
 
-  if (!isOpen) return null;
+  // Reset the task field when the dialog closes so the next open starts
+  // clean. Without this, a successful run leaves the prior task pre-filled.
+  useEffect(() => {
+    if (!isOpen) setTask("");
+  }, [isOpen]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -86,54 +100,51 @@ function RunAgentDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-muted border border-border rounded-2xl shadow-2xl w-full max-w-lg mx-4">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 border-b border-border">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-purple-500/20 rounded-lg">
-              <Zap className="h-5 w-5 text-purple-400" />
+    <Dialog open={isOpen} onOpenChange={isRunning ? undefined : (open) => !open && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <div className="flex items-start gap-3">
+            <div className="rounded-full p-2 shrink-0 bg-purple-500/15">
+              <Zap className="h-5 w-5 text-purple-500 dark:text-purple-400" />
             </div>
-            <div>
-              <h2 className="text-lg font-semibold text-foreground">Run {agentName}</h2>
-              <p className="text-sm text-muted-foreground">Provide context for the agent</p>
+            <div className="flex-1 min-w-0">
+              <DialogTitle>
+                {t("runDialog.title", { agentName })}
+              </DialogTitle>
+              <DialogDescription className="mt-1.5">
+                {t("runDialog.provideContext")}
+              </DialogDescription>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
+        </DialogHeader>
 
-        {/* Body */}
-        <form onSubmit={handleSubmit} className="p-5 space-y-5">
-          {/* Task Input */}
+        <form onSubmit={handleSubmit} className="space-y-5">
           <div>
-            <label className="block text-sm font-medium text-foreground mb-2">
-              Task Description
+            <label
+              htmlFor="run-agent-task"
+              className="block text-sm font-medium text-foreground mb-2"
+            >
+              {t("runDialog.taskDescription")}
             </label>
             <textarea
+              id="run-agent-task"
               value={task}
               onChange={(e) => setTask(e.target.value)}
-              placeholder="e.g., Search for contacts in the tech industry and draft a personalized email..."
-              className="w-full px-4 py-3 bg-accent border border-border rounded-xl text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-purple-500 resize-none"
+              placeholder={t("runDialog.taskPlaceholder")}
+              className="w-full px-4 py-3 bg-accent border border-border rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-purple-500 resize-none"
               rows={4}
               autoFocus
             />
             <p className="mt-2 text-xs text-muted-foreground">
-              Be specific about what you want the agent to do. The agent will use its available tools to complete the task.
+              {t("runDialog.taskHelp")}
             </p>
           </div>
 
-          {/* Available Tools */}
           {tools.length > 0 && (
             <div>
               <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
                 <Wrench className="h-4 w-4" />
-                <span>Available Tools</span>
+                <span>{t("tools.availableTools")}</span>
               </div>
               <div className="flex flex-wrap gap-2">
                 {tools.map((tool) => (
@@ -148,36 +159,36 @@ function RunAgentDialog({
             </div>
           )}
 
-          {/* Actions */}
-          <div className="flex items-center justify-end gap-3 pt-2">
+          <DialogFooter className="gap-2">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-muted-foreground hover:text-foreground transition-colors"
+              disabled={isRunning}
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-border text-foreground hover:bg-accent disabled:opacity-50 transition-colors"
             >
-              Cancel
+              {tc("cancel")}
             </button>
             <button
               type="submit"
               disabled={isRunning}
-              className="flex items-center gap-2 px-5 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              className="inline-flex items-center justify-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             >
               {isRunning ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Running...
+                  {t("status.running")}
                 </>
               ) : (
                 <>
                   <Zap className="h-4 w-4" />
-                  Run Agent
+                  {t("actions.runAgent")}
                 </>
               )}
             </button>
-          </div>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
