@@ -70,17 +70,12 @@ async def create_learning_goal(
     # WS-055: verify the target developer is actually an active member of
     # the current workspace before stamping a goal at them. The prior code
     # accepted any developer id in the request body.
-    from sqlalchemy import select
-    from aexy.models.workspace import WorkspaceMember as _WM
-    target_check = await db.execute(
-        select(_WM.developer_id).where(
-            _WM.workspace_id == current_user.current_workspace_id,
-            _WM.developer_id == data.developer_id,
-            _WM.status == "active",
-        )
+    from aexy.core.workspace_auth import assert_active_member
+    await assert_active_member(
+        db,
+        str(current_user.current_workspace_id),
+        str(data.developer_id),
     )
-    if target_check.scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="Developer not in this workspace")
 
     service = LearningManagementService(db)
     goal = await service.create_learning_goal(

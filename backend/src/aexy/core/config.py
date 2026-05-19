@@ -357,12 +357,18 @@ class Settings(BaseSettings):
     # Email provider webhook secrets — used to verify inbound bounce/complaint
     # /unsubscribe events. Each provider has its own signature scheme; see
     # api/email_webhooks.py for the per-provider helpers.
-    # When empty, signature verification is skipped (development only); a
-    # warning is emitted at request time.
     sendgrid_webhook_public_key: str = ""        # base64 ECDSA public key
     mailgun_webhook_signing_key: str = ""        # HMAC key
     postmark_webhook_basic_auth: str = ""        # "user:pass" — verified against Authorization header
     ses_sns_topic_arn_allowlist: str = ""        # comma-separated TopicArns we will accept events from
+
+    # When True (default), verify_*_signature helpers return False on missing
+    # config — i.e., the webhook is rejected. Set to False ONLY for local
+    # development where you intentionally want to accept unsigned events;
+    # production deployments must keep this True and configure every provider
+    # they receive webhooks from. (Closes the fail-open hole flagged in 0.7.88
+    # review.)
+    webhooks_require_signing: bool = True
 
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/aexy"

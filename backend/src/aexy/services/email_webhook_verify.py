@@ -12,9 +12,11 @@ WS-058: also validates SES `SubscribeURL` against the AWS hostname so a
 crafted SubscriptionConfirmation can't trigger SSRF into internal
 services.
 
-When the relevant env var is empty (local development), verification is
-skipped with a logger warning. Production deployments MUST configure
-every provider they accept events from.
+By default (`webhooks_require_signing=True`) any provider with missing
+config rejects the request — fail-closed. For local development you can
+set `webhooks_require_signing=False` to fall back to accepting unsigned
+events; the verifier logs a warning each time. Production must keep the
+default.
 """
 
 from __future__ import annotations
@@ -31,13 +33,31 @@ from aexy.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-def _warn_unverified(provider: str) -> None:
+def _missing_config(provider: str) -> bool:
+    """Decide whether to accept (dev) or reject (prod) when keys are unset.
+
+    Returns True when the caller should treat the request as VERIFIED despite
+    missing config (dev mode), False when it should be rejected. In prod this
+    is always False, so a forgotten secret fails closed rather than letting
+    forged events through silently.
+    """
+    require = get_settings().webhooks_require_signing
+    if require:
+        logger.error(
+            "Email webhook from %s rejected: missing settings.%s_webhook_* and "
+            "webhooks_require_signing=True. Configure the provider secret to accept events.",
+            provider,
+            provider.lower(),
+        )
+        return False
     logger.warning(
         "Email webhook from %s accepted without signature verification — "
-        "missing settings.%s_webhook_*. Do not run this configuration in production.",
+        "missing settings.%s_webhook_* and webhooks_require_signing=False. "
+        "Do not run this configuration in production.",
         provider,
         provider.lower(),
     )
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -72,8 +92,7 @@ def is_allowed_sns_topic(topic_arn: str | None) -> bool:
         return False
     allowlist = (get_settings().ses_sns_topic_arn_allowlist or "").strip()
     if not allowlist:
-        _warn_unverified("SES")
-        return True  # Dev fallback
+        return _missing_config("SES")
     allowed = {arn.strip() for arn in allowlist.split(",") if arn.strip()}
     return topic_arn in allowed
 
@@ -95,8 +114,7 @@ def verify_sendgrid_signature(
     """
     public_key_b64 = get_settings().sendgrid_webhook_public_key.strip()
     if not public_key_b64:
-        _warn_unverified("SendGrid")
-        return True
+        return _missing_config("SendGrid")
     if not timestamp_header or not signature_header:
         return False
     try:
@@ -132,8 +150,7 @@ def verify_mailgun_signature(timestamp: str | None, token: str | None, signature
     block. Returns True in dev mode when no signing key is configured."""
     signing_key = get_settings().mailgun_webhook_signing_key
     if not signing_key:
-        _warn_unverified("Mailgun")
-        return True
+        return _missing_config("Mailgun")
     if not timestamp or not token or not signature:
         return False
     expected = hmac.new(
@@ -154,8 +171,7 @@ def verify_postmark_basic_auth(authorization_header: str | None) -> bool:
     `user:pass`."""
     expected = get_settings().postmark_webhook_basic_auth.strip()
     if not expected:
-        _warn_unverified("Postmark")
-        return True
+        return _missing_config("Postmark")
     if not authorization_header or not authorization_header.lower().startswith("basic "):
         return False
     try:

@@ -385,21 +385,13 @@ async def update_member_access(
     # before we write app-access overrides for them. Without this, an
     # admin of workspace A can create access-config rows pointing at a
     # developer who only exists in workspace B.
-    from sqlalchemy import select
-    from aexy.models.workspace import WorkspaceMember as _WM
-    member_check = await db.execute(
-        select(_WM.developer_id).where(
-            _WM.workspace_id == workspace_id,
-            _WM.developer_id == developer_id,
-            _WM.status == "active",
-        )
-    )
-    if member_check.scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="Developer not in this workspace")
+    from aexy.core.workspace_auth import assert_active_member
+    await assert_active_member(db, workspace_id, developer_id)
 
     # When applying a template, it must also belong to this workspace
     # (or be a system template — workspace_id is None).
     if data.applied_template_id:
+        from sqlalchemy import select
         from aexy.models.app_access import AppAccessTemplate as _Tpl
         tpl_check = await db.execute(
             select(_Tpl).where(_Tpl.id == data.applied_template_id)
@@ -446,17 +438,9 @@ async def apply_template_to_member(
     # WS-053: same active-member + template-workspace guards as
     # update_member_access.
     from sqlalchemy import select
-    from aexy.models.workspace import WorkspaceMember as _WM
+    from aexy.core.workspace_auth import assert_active_member
     from aexy.models.app_access import AppAccessTemplate as _Tpl
-    member_check = await db.execute(
-        select(_WM.developer_id).where(
-            _WM.workspace_id == workspace_id,
-            _WM.developer_id == developer_id,
-            _WM.status == "active",
-        )
-    )
-    if member_check.scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="Developer not in this workspace")
+    await assert_active_member(db, workspace_id, developer_id)
     tpl_check = await db.execute(select(_Tpl).where(_Tpl.id == data.template_id))
     tpl = tpl_check.scalar_one_or_none()
     if not tpl or (tpl.workspace_id and str(tpl.workspace_id) != workspace_id):

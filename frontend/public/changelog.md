@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.89] - 2026-05-19
+
+Post-review hardening for the 0.7.82-0.7.88 workspace-scope leak audit.
+The fixes were correct but a code review surfaced residual fail-open
+edges and missing test coverage; this release closes those.
+
+### Security
+
+- **Webhook signature verification is now fail-closed by default**
+  (`services/email_webhook_verify.py`). A new
+  `webhooks_require_signing` setting (default `True`) replaces the
+  prior behavior where each provider returned `True` when its env var
+  was missing. SES, SendGrid, Mailgun, and Postmark all reject events
+  outright when the required key isn't configured. Local development
+  can flip the flag off to fall back to the old accept-with-warning
+  behavior; production must keep the default.
+- **Mailagent path-bypass closed** (`mailagent/middleware.py:44`).
+  `_is_public_path` previously OR'd in `path.startswith(p)` (no
+  trailing slash), so `/healthcheck-evil` could skip HMAC auth on the
+  way to a route named with a public-prefix prefix. Tightened to
+  exact-match OR `startswith(p + "/")`.
+- **OAuth interceptor catches keyboard and programmatic navigation**
+  (`frontend/src/lib/oauth.ts`). The 0.7.85 implementation only
+  listened on `mousedown`, breaking OAuth login for keyboard users
+  (Tab + Enter on a focused login link) and any JS-driven navigation
+  (`window.location.assign("/auth/github/login")`). Now also installs
+  a capture-phase `keydown` listener and patches
+  `window.location.{assign,replace}` + the `href` setter so the
+  inflight marker is set on every navigation vector.
+- **Public booking enumeration rate-limit applied to every GET**
+  (`api/booking/public.py`). The 0.7.86 fix only guarded the workspace
+  lookup endpoint; the teams/team-by-id/event-type/slots endpoints
+  inherit the same throttle now via router-level `Depends`.
+- **Frame-ancestors regex tightened** (`frontend/next.config.js`).
+  Negative-lookahead now anchored to `embed/` so `/embedded-*` paths
+  still receive `X-Frame-Options: DENY` and
+  `frame-ancestors 'none'` instead of falling through both rules.
+
+### Added
+
+- `core/workspace_auth.py` — centralizes the
+  `assert_active_member(db, workspace_id, developer_id)` and
+  `assert_resource_in_workspace(db, model, id, workspace_id)`
+  helpers used across the 0.7.82-0.7.88 fixes. Call sites in
+  `app_access.py` and `manager_learning.py` switched to the helpers;
+  remaining inline copies will migrate opportunistically.
+- Regression tests:
+  - `backend/tests/unit/test_email_webhook_verify.py` — pins the
+    fail-closed default for all four providers and the SubscribeURL
+    SSRF guard.
+  - `backend/tests/unit/test_workspace_auth.py` — pins membership
+    checks (active vs pending/suspended/removed) and the
+    resource-in-workspace mismatch case.
+  - `mailagent/tests/test_internal_auth_middleware.py` — pins the
+    public-path matcher against prefix-bypass paths and the HMAC
+    sign/verify wire-format round-trip between backend and mailagent.
+  - `frontend/src/test/oauth.test.ts` — pins `safeInternalPath`
+    against open-redirect inputs and round-trips
+    `stashPostLoginRedirect`.
+
+### Changed
+
+- Middleware redirect to `/?next=...` is now consumed.
+  `frontend/src/app/page.tsx` stashes the (validated) `next` path in
+  `sessionStorage` for the OAuth flow, and `useSetToken` honours it
+  after onboarding completes. Open-redirect protection enforced by
+  `safeInternalPath`.
+
 ## [0.7.88] - 2026-05-19
 
 Closes the last 9 `suspect` rows in the workspace-scope leak tracker.

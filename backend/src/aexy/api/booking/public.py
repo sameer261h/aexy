@@ -40,13 +40,15 @@ router = APIRouter(
 _WORKSPACE_LOOKUP_PER_IP_PER_MIN = 30
 
 
-async def _rate_limit_public_lookup(request) -> None:
+async def _rate_limit_public_lookup(request: Request) -> None:
     """Per-IP throttle on public-booking discovery endpoints (WS-064).
 
     Workspace slugs are short and human-readable; without a throttle, an
     attacker can iterate the space and build a directory of every
     workspace + its event types in seconds. 30/min/IP is generous for a
-    real user but blocks naive enumeration.
+    real user but blocks naive enumeration. Applied to every public GET
+    that takes a `workspace_slug` (post-0.7.88 review fix — previously
+    only the workspace lookup was throttled).
     """
     try:
         import redis.asyncio as _aioredis
@@ -133,7 +135,10 @@ async def get_workspace_booking_page(
     }
 
 
-@router.get("/{workspace_slug}/teams")
+@router.get(
+    "/{workspace_slug}/teams",
+    dependencies=[Depends(_rate_limit_public_lookup)],
+)
 async def get_workspace_teams(
     workspace_slug: str,
     db: AsyncSession = Depends(get_db),
@@ -189,7 +194,10 @@ async def get_workspace_teams(
     }
 
 
-@router.get("/{workspace_slug}/team/{team_id}")
+@router.get(
+    "/{workspace_slug}/team/{team_id}",
+    dependencies=[Depends(_rate_limit_public_lookup)],
+)
 async def get_team_info(
     workspace_slug: str,
     team_id: str,
@@ -250,7 +258,11 @@ async def get_team_info(
     }
 
 
-@router.get("/{workspace_slug}/{event_slug}", response_model=EventTypePublicResponse)
+@router.get(
+    "/{workspace_slug}/{event_slug}",
+    response_model=EventTypePublicResponse,
+    dependencies=[Depends(_rate_limit_public_lookup)],
+)
 async def get_event_type_public(
     workspace_slug: str,
     event_slug: str,
@@ -307,7 +319,11 @@ async def get_event_type_public(
     )
 
 
-@router.get("/{workspace_slug}/{event_slug}/slots", response_model=AvailableSlotsResponse)
+@router.get(
+    "/{workspace_slug}/{event_slug}/slots",
+    response_model=AvailableSlotsResponse,
+    dependencies=[Depends(_rate_limit_public_lookup)],
+)
 async def get_available_slots(
     workspace_slug: str,
     event_slug: str,

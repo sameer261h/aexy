@@ -45,7 +45,10 @@ const nextConfig = {
     // logged-in shell or the OAuth callback inside a hostile parent and
     // pull off clickjacking or token-bleed attacks.
     const denyFrame = {
-      source: "/((?!embed).*)",
+      // Negative-lookahead is anchored to "embed/" so unrelated paths like
+      // /embedded-* still receive clickjacking headers. Without the slash,
+      // /embedded-foo would match neither rule and ship no frame-ancestors.
+      source: "/((?!embed/).*)",
       headers: [
         { key: "X-Frame-Options", value: "DENY" },
         { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },

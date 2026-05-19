@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { developerApi, repositoriesApi, Developer } from "@/lib/api";
+import { consumePostLoginRedirect } from "@/lib/oauth";
 
 // Cookie used solely as a *presence* signal for the Next.js middleware so
 // it can avoid rendering the authenticated shell to logged-out users.
@@ -95,10 +96,15 @@ export function useSetToken() {
         return;
       }
 
+      // Honour a stashed `?next=` from the middleware redirect, but only
+      // when onboarding is already complete — sending a half-onboarded user
+      // to /sprints would just bounce them right back.
+      const nextPath = consumePostLoginRedirect();
+
       // Check if onboarding is complete
       const status = await repositoriesApi.getOnboardingStatus();
       if (status.completed) {
-        router.push("/dashboard");
+        router.push(nextPath ?? "/dashboard");
       } else {
         router.push("/onboarding");
       }

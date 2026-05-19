@@ -42,7 +42,10 @@ MAX_SKEW_SECONDS = 300
 
 
 def _is_public_path(path: str) -> bool:
-    return any(path == p or path.startswith(p + "/") or path.startswith(p) for p in PUBLIC_PREFIXES)
+    # Match exact path or a child path. NEVER match by raw prefix — without
+    # the trailing "/", "/healthcheck-evil" would slip past as a "/health"
+    # match and skip HMAC auth entirely.
+    return any(path == p or path.startswith(p + "/") for p in PUBLIC_PREFIXES)
 
 
 def _compute_signature(secret: str, timestamp: str, body: bytes) -> str:
