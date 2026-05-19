@@ -25,6 +25,7 @@ import {
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useAgent, useAgentTools } from "@/hooks/useAgents";
 import { useAgentEmail, useEmailDomains } from "@/hooks/useAgentInbox";
+import { useRouteGuard } from "@/hooks/useRouteGuard";
 import { getAgentTypeConfig, AgentType, WorkingHoursConfig } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
@@ -250,19 +251,14 @@ export default function EditAgentPage() {
     setHasChanges(anyDirty);
   }, [dirtyByTab]);
 
-  // Window-level guard: a hard refresh / tab-close with unsaved changes
-  // pops the browser's native warning. Doesn't fight router navigations,
-  // which still need explicit blocking when we add it.
-  useEffect(() => {
-    if (!hasChanges) return;
-    const handler = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      // Some browsers require returnValue to trigger the prompt.
-      e.returnValue = "";
-    };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
-  }, [hasChanges]);
+  // UX-EDT-025 + UX-DLG-004: pop a ConfirmDialog when the user clicks
+  // a link to navigate away (sidebar, breadcrumb, etc.) while edits
+  // are pending. The hook also handles the beforeunload fallback for
+  // hard refresh / tab close, so we no longer need a separate effect
+  // for that.
+  const { pendingHref, confirmPending, cancelPending } = useRouteGuard({
+    enabled: hasChanges,
+  });
 
   const dirtyTabCount = useMemo(
     () => Object.values(dirtyByTab).filter(Boolean).length,
@@ -466,10 +462,11 @@ export default function EditAgentPage() {
               </div>
             )}
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
+              <label htmlFor="agent-name" className="block text-sm font-medium text-foreground mb-1.5">
                 Agent Name
               </label>
               <input
+                id="agent-name"
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -479,10 +476,14 @@ export default function EditAgentPage() {
                   isSystemAgent && "opacity-50 cursor-not-allowed"
                 )}
               />
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Shown on the agent's profile, in @mentions, and as the
+                From-name on outbound email.
+              </p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
+              <label className="block text-sm font-medium text-foreground mb-1.5">
                 Agent Type
               </label>
               <div className="flex sm:flex-row flex-col sm:items-center items-start gap-2">
@@ -491,15 +492,21 @@ export default function EditAgentPage() {
                   (Cannot be changed after creation)
                 </span>
               </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                The type seeds the agent's default tool set, prompt
+                template, and persona. To switch types, create a new
+                agent.
+              </p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
+              <label htmlFor="mention-handle" className="block text-sm font-medium text-foreground mb-1.5">
                 Mention Handle
               </label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">@</span>
                 <input
+                  id="mention-handle"
                   type="text"
                   value={mentionHandle}
                   // UX-EDT-022: strip invalid chars on input so users can't
@@ -518,22 +525,32 @@ export default function EditAgentPage() {
                   )}
                 />
               </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Lowercase letters, numbers, and hyphens. Used to ping the
+                agent from chat with @{mentionHandle || "your-handle"}.
+              </p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
+              <label htmlFor="agent-description" className="block text-sm font-medium text-foreground mb-1.5">
                 Description
               </label>
               <textarea
+                id="agent-description"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 disabled={isSystemAgent}
                 rows={3}
+                placeholder="What does this agent do?"
                 className={cn(
                   "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none",
                   isSystemAgent && "opacity-50 cursor-not-allowed"
                 )}
               />
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                A one-liner shown to teammates browsing your workspace's
+                agents. Not seen by end users.
+              </p>
             </div>
           </div>
         );
@@ -551,30 +568,43 @@ export default function EditAgentPage() {
             />
 
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
-                Temperature
-              </label>
-              <div className="flex items-center gap-4">
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.1}
-                  value={temperature}
-                  onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                  className="flex-1 h-2 bg-accent rounded-lg appearance-none cursor-pointer"
-                />
-                <span className="w-12 text-right text-foreground font-medium">
-                  {temperature.toFixed(1)}
+              <div className="flex items-center justify-between mb-1.5">
+                <label htmlFor="temperature" className="block text-sm font-medium text-foreground">
+                  Temperature
+                </label>
+                <span className="text-sm text-foreground font-medium tabular-nums">
+                  {temperature.toFixed(2)}
                 </span>
               </div>
+              <input
+                id="temperature"
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={temperature}
+                onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                className="w-full h-2 bg-accent rounded-lg appearance-none cursor-pointer"
+              />
+              <div className="mt-1 flex justify-between text-[10px] text-muted-foreground/70 uppercase tracking-wider">
+                <span>Deterministic</span>
+                <span>Balanced</span>
+                <span>Creative</span>
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                How much variation the model adds. Low values stick to
+                predictable wording; high values vary phrasing more —
+                useful for outbound emails, riskier for compliance copy.
+                Most production agents sit between 0.3 and 0.7.
+              </p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
+              <label htmlFor="max-tokens" className="block text-sm font-medium text-foreground mb-1.5">
                 Max Tokens
               </label>
               <input
+                id="max-tokens"
                 type="number"
                 value={maxTokens}
                 onChange={(e) => setMaxTokens(parseInt(e.target.value) || 2000)}
@@ -582,6 +612,12 @@ export default function EditAgentPage() {
                 max={32000}
                 className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500"
               />
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Cap on the model's response length (1 token ≈ 4 characters
+                of English). Cuts cost on chatty agents; risks truncating
+                long-form replies when set too low. 2000 is a safe
+                default for email + support agents.
+              </p>
             </div>
           </div>
         );
@@ -600,13 +636,16 @@ export default function EditAgentPage() {
                 <p className="text-muted-foreground">Loading tools...</p>
               </div>
             ) : (
-              <div className={isSystemAgent ? "opacity-50 pointer-events-none" : ""}>
-                <ToolSelector
-                  tools={availableTools}
-                  selectedTools={tools}
-                  onChange={setTools}
-                />
-              </div>
+              // UX-EDT-023: pass `disabled` down so the underlying
+              // inputs are keyboard-unfocusable for system agents, not
+              // just visually muted. `opacity-50 pointer-events-none`
+              // would let a keyboard user tab into the inputs.
+              <ToolSelector
+                tools={availableTools}
+                selectedTools={tools}
+                onChange={setTools}
+                disabled={isSystemAgent}
+              />
             )}
           </div>
         );
@@ -635,26 +674,29 @@ export default function EditAgentPage() {
               </div>
             </label>
 
-            <div className={cn("space-y-6", isSystemAgent && "opacity-50 pointer-events-none")}>
+            <div className="space-y-6">
               <ConfidenceSlider
                 value={confidenceThreshold}
                 onChange={setConfidenceThreshold}
                 label="Minimum Confidence to Respond"
+                disabled={isSystemAgent}
               />
 
               <ConfidenceSlider
                 value={requireApprovalBelow}
                 onChange={setRequireApprovalBelow}
                 label="Require Approval Below"
+                disabled={isSystemAgent}
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-foreground mb-2">
+                <label htmlFor="max-daily-responses" className="block text-sm font-medium text-foreground mb-1.5">
                   Max Daily Responses
                 </label>
                 <input
+                  id="max-daily-responses"
                   type="number"
                   value={maxDailyResponses}
                   onChange={(e) => setMaxDailyResponses(parseInt(e.target.value) || 100)}
@@ -665,12 +707,17 @@ export default function EditAgentPage() {
                     isSystemAgent && "opacity-50 cursor-not-allowed"
                   )}
                 />
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  Hard cap. Messages beyond the cap are queued and the
+                  agent picks them up the next day.
+                </p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-foreground mb-2">
+                <label htmlFor="response-delay" className="block text-sm font-medium text-foreground mb-1.5">
                   Response Delay (minutes)
                 </label>
                 <input
+                  id="response-delay"
                   type="number"
                   value={responseDelayMinutes}
                   onChange={(e) => setResponseDelayMinutes(parseInt(e.target.value) || 0)}
@@ -681,14 +728,19 @@ export default function EditAgentPage() {
                     isSystemAgent && "opacity-50 cursor-not-allowed"
                   )}
                 />
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  Adds a delay before the agent replies so it doesn't
+                  look robotic. 0 = reply instantly.
+                </p>
               </div>
             </div>
 
-            <div className={isSystemAgent ? "opacity-50 pointer-events-none" : ""}>
+            <div>
               <h3 className="text-lg font-medium text-foreground mb-4">Working Hours</h3>
               <WorkingHoursConfigPanel
                 value={workingHours}
                 onChange={setWorkingHours}
+                disabled={isSystemAgent}
               />
             </div>
           </div>
@@ -702,20 +754,22 @@ export default function EditAgentPage() {
                 This is a system agent. Prompts cannot be modified.
               </div>
             )}
-            <div className={isSystemAgent ? "opacity-50 pointer-events-none" : ""}>
+            <div>
               <PromptEditor
                 value={systemPrompt}
                 onChange={setSystemPrompt}
                 label="System Prompt"
                 rows={12}
+                disabled={isSystemAgent}
               />
             </div>
 
-            <div className={isSystemAgent ? "opacity-50 pointer-events-none" : ""}>
+            <div>
               <InstructionsEditor
                 value={customInstructions}
                 onChange={setCustomInstructions}
                 rows={4}
+                disabled={isSystemAgent}
               />
             </div>
           </div>
@@ -1275,6 +1329,23 @@ export default function EditAgentPage() {
             setError(err instanceof Error ? err.message : "Failed to disable email");
           }
         }}
+      />
+
+      {/* UX-EDT-025: Unsaved-changes guard. useRouteGuard captures
+          anchor-click navigations away from this page when hasChanges
+          is true; this dialog renders the user's choice. confirmPending
+          performs the navigation; cancelPending dismisses. */}
+      <ConfirmDialog
+        open={pendingHref !== null}
+        onOpenChange={(open) => {
+          if (!open) cancelPending();
+        }}
+        title="Leave with unsaved changes?"
+        description="You have edits in this form that haven't been saved. Leaving will discard them."
+        confirmLabel="Discard and leave"
+        cancelLabel="Stay on this page"
+        tone="warning"
+        onConfirm={confirmPending}
       />
     </div>
   );
