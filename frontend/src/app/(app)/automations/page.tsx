@@ -12,16 +12,6 @@ import {
   Trash2,
   Clock,
   Edit2,
-  Building2,
-  Ticket,
-  Users,
-  Mail,
-  MonitorCheck,
-  Calendar,
-  FileText,
-  CalendarCheck,
-  Activity,
-  ShieldCheck,
 } from "lucide-react";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useAutomations } from "@/hooks/useAutomations";
@@ -29,45 +19,12 @@ import { AutomationModule, Automation } from "@/lib/api";
 import { EmptyState } from "@/components/EmptyState";
 import { SearchInput } from "@/components/ui/search-input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-
-const moduleLabels: Record<AutomationModule, string> = {
-  crm: "CRM",
-  tickets: "Tickets",
-  hiring: "Hiring",
-  email_marketing: "Email",
-  uptime: "Uptime",
-  sprints: "Sprints",
-  forms: "Forms",
-  booking: "Booking",
-  tracking: "Tracking",
-  compliance: "Compliance",
-};
-
-const moduleIcons: Record<AutomationModule, React.ElementType> = {
-  crm: Building2,
-  tickets: Ticket,
-  hiring: Users,
-  email_marketing: Mail,
-  uptime: MonitorCheck,
-  sprints: Calendar,
-  forms: FileText,
-  booking: CalendarCheck,
-  tracking: Activity,
-  compliance: ShieldCheck,
-};
-
-const moduleColors: Record<AutomationModule, string> = {
-  crm: "bg-blue-500/20 text-blue-400",
-  tickets: "bg-orange-500/20 text-orange-400",
-  hiring: "bg-purple-500/20 text-purple-400",
-  email_marketing: "bg-pink-500/20 text-pink-400",
-  uptime: "bg-green-500/20 text-green-400",
-  sprints: "bg-yellow-500/20 text-yellow-400",
-  forms: "bg-cyan-500/20 text-cyan-400",
-  booking: "bg-indigo-500/20 text-indigo-400",
-  tracking: "bg-teal-500/20 text-teal-400",
-  compliance: "bg-red-500/20 text-red-400",
-};
+import {
+  ALL_MODULES,
+  moduleColors,
+  moduleIcons,
+  moduleLabels,
+} from "@/lib/automationTemplates";
 
 function ModuleBadge({ module }: { module: AutomationModule }) {
   const Icon = moduleIcons[module] || Zap;
@@ -170,8 +127,6 @@ function AutomationCard({
     </div>
   );
 }
-
-const ALL_MODULES: AutomationModule[] = ["crm", "tickets", "hiring", "email_marketing", "uptime", "sprints", "forms", "booking", "tracking", "compliance"];
 
 export default function AutomationsPage() {
   const t = useTranslations("automations");

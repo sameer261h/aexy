@@ -73,9 +73,31 @@
 
     "builder": {
       "namePlaceholder": "इस automation का नाम दें",
+      "descriptionPlaceholder": "विवरण जोड़ें...",
       "addTriggerHint": "शुरू करने के लिए एक trigger चुनें",
       "addActionHint": "trigger के बगल में एक action जोड़ें",
-      "testRun": "टेस्ट रन"
+      "testRun": "टेस्ट रन",
+      "fromTemplate": "से पूर्व-भरा गया",
+      "fromTemplateTail": "- नीचे workflow को कस्टमाइज़ करें, फिर सहेजें।",
+      "pickAnotherTemplate": "दूसरा template चुनें"
+    },
+
+    "gallery": {
+      "kicker": "नई automation शुरू करें",
+      "title": "एक प्रारंभिक बिंदु चुनें",
+      "subtitle": "Templates आपके लिए trigger और पहले कुछ actions तैयार करते हैं। बाद में canvas पर कुछ भी बदला जा सकता है।",
+      "back": "Automations पर वापस",
+      "searchPlaceholder": "Templates खोजें...",
+      "allModules": "सभी",
+      "startBlank": "खाली से शुरू करें",
+      "noResults": "उस खोज से कोई template मेल नहीं खाता।",
+      "noResultsHint": "एक अलग कीवर्ड आज़माएं या फ़िल्टर से एक मॉड्यूल चुनें।",
+      "blankCard": {
+        "title": "शून्य से शुरू करें",
+        "subtitle": "खाली canvas",
+        "description": "अपना खुद का trigger और actions जोड़ें। तब सबसे अच्छा जब कोई template मेल न खाए।",
+        "cta": "खाली canvas खोलें"
+      }
     }
   }
 }
