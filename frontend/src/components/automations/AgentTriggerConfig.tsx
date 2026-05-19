@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   Bot,
   Plus,
@@ -25,6 +26,7 @@ import {
   useAutomationAgentTriggers,
 } from "@/hooks/useAutomationAgents";
 import { useAgents } from "@/hooks/useAgents";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 interface AgentTriggerConfigProps {
   workspaceId: string;
@@ -58,9 +60,11 @@ export function AgentTriggerConfig({
   automationId,
   className,
 }: AgentTriggerConfigProps) {
+  const t = useTranslations("automations");
   const [isAdding, setIsAdding] = useState(false);
   const [expandedTriggerId, setExpandedTriggerId] = useState<string | null>(null);
   const [editingTrigger, setEditingTrigger] = useState<AutomationAgentTriggerListItem | null>(null);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
   const {
     triggers,
@@ -93,10 +97,14 @@ export function AgentTriggerConfig({
     }
   };
 
-  const handleDeleteTrigger = async (triggerId: string) => {
-    if (!confirm("Are you sure you want to remove this agent trigger?")) return;
+  const handleDeleteTrigger = (triggerId: string) => {
+    setDeleteTargetId(triggerId);
+  };
+
+  const confirmDeleteTrigger = async () => {
+    if (!deleteTargetId) return;
     try {
-      await deleteTrigger(triggerId);
+      await deleteTrigger(deleteTargetId);
     } catch (error) {
       console.error("Failed to delete trigger:", error);
     }
@@ -176,6 +184,16 @@ export function AgentTriggerConfig({
           </p>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!deleteTargetId}
+        onOpenChange={(open) => !open && setDeleteTargetId(null)}
+        title={t("removeAgentTrigger.title")}
+        description={t("removeAgentTrigger.description")}
+        confirmLabel={t("removeAgentTrigger.confirm")}
+        onConfirm={confirmDeleteTrigger}
+        tone="danger"
+      />
     </div>
   );
 }

@@ -141,7 +141,12 @@
     },
 
     "confirmations": {
-      "deleteAgentConfirm": "क्या आप वाकई इस Agent को हटाना चाहते हैं? यह क्रिया पूर्ववत नहीं की जा सकती।"
+      "deleteAgentConfirm": "क्या आप वाकई इस Agent को हटाना चाहते हैं? यह क्रिया पूर्ववत नहीं की जा सकती।",
+      "deleteAgentTitle": "इस Agent को हटाएं?",
+      "deleteAgentDescription": "बातचीत, कॉन्फ़िगरेशन और निष्पादन इतिहास स्थायी रूप से हटा दिए जाएंगे। यह पूर्ववत नहीं किया जा सकता।",
+      "deleteConversationTitle": "इस बातचीत को हटाएं?",
+      "deleteConversationDescription": "बातचीत थ्रेड और सभी संदेश हटा दिए जाएंगे।",
+      "deleteConversationConfirm": "बातचीत हटाएं"
     },
 
     "search": {

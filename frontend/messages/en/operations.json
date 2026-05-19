@@ -1,0 +1,62 @@
+{
+  "operations": {
+    "title": "Operations",
+    "subtitle": "Everything that runs on a trigger - reactive agents and workflows.",
+    "create": "New",
+    "createAgent": "New Agent",
+    "createAutomation": "New Automation",
+
+    "type": {
+      "agent": "Agent",
+      "automation": "Workflow"
+    },
+
+    "stats": {
+      "total": "Total",
+      "active": "Active",
+      "executions": "Total Runs"
+    },
+
+    "filter": {
+      "all": "All",
+      "agents": "Agents",
+      "automations": "Workflows",
+      "active": "Active",
+      "paused": "Paused",
+      "searchPlaceholder": "Search by name or description..."
+    },
+
+    "row": {
+      "noDescription": "No description",
+      "noRuns": "No runs yet",
+      "executions": "{count, plural, =1 {1 run} other {# runs}}",
+      "lastRun": "Last run {when}",
+      "neverRun": "Never run"
+    },
+
+    "empty": {
+      "title": "Nothing running yet",
+      "description": "Create an agent to handle email, scheduling, or CRM updates - or wire up a workflow that fires when something changes.",
+      "primaryAction": "Browse automation templates",
+      "secondaryAction": "Create an agent"
+    },
+
+    "filteredEmpty": {
+      "title": "No matches",
+      "description": "Try a different filter or search term."
+    },
+
+    "picker": {
+      "title": "What do you want to build?",
+      "agent": {
+        "name": "Reactive Agent",
+        "description": "An LLM-powered persona that handles email, scheduling, support tickets, or CRM updates. Configure tools, prompts, and an inbox."
+      },
+      "automation": {
+        "name": "Workflow",
+        "description": "A trigger -> condition -> action chain across CRM, sprints, compliance, or any module. No LLM required."
+      },
+      "cancel": "Cancel"
+    }
+  }
+}

@@ -83,16 +83,56 @@ export function useAgents(
     },
   });
 
+  // UX-AGT-LST-002: optimistic toggle. The prior implementation waited
+  // for the round-trip, so the agent card flashed its stale state for
+  // ~400ms before flipping. Now we mutate the local cache on click,
+  // roll back on error, and reconcile on success.
   const toggleMutation = useMutation({
     mutationFn: (agentId: string) => agentsApi.toggle(workspaceId!, agentId),
+    onMutate: async (agentId: string) => {
+      const listKey = ["agents", workspaceId] as const;
+      const detailKey = ["agent", workspaceId, agentId] as const;
+      // Pause in-flight refetches so they can't clobber the optimistic
+      // value before the server confirms.
+      await queryClient.cancelQueries({ queryKey: listKey });
+      await queryClient.cancelQueries({ queryKey: detailKey });
+      const previousList = queryClient.getQueryData<CRMAgent[]>(listKey);
+      const previousDetail = queryClient.getQueryData<CRMAgent>(detailKey);
+      // Flip is_active locally on both the list entry and the detail
+      // cache entry so any open detail view also updates.
+      if (previousList) {
+        queryClient.setQueryData<CRMAgent[]>(
+          listKey,
+          previousList.map((a) =>
+            a.id === agentId ? { ...a, is_active: !a.is_active } : a,
+          ),
+        );
+      }
+      if (previousDetail) {
+        queryClient.setQueryData<CRMAgent>(detailKey, {
+          ...previousDetail,
+          is_active: !previousDetail.is_active,
+        });
+      }
+      return { previousList, previousDetail, listKey, detailKey };
+    },
+    onError: (error, _agentId, context) => {
+      // Roll back to the snapshot we captured pre-mutation.
+      if (context?.previousList) {
+        queryClient.setQueryData(context.listKey, context.previousList);
+      }
+      if (context?.previousDetail) {
+        queryClient.setQueryData(context.detailKey, context.previousDetail);
+      }
+      toast.error(error instanceof Error ? error.message : "Failed to toggle agent");
+    },
     onSuccess: (updatedAgent, agentId) => {
       const isActive = updatedAgent?.is_active;
       toast.success(isActive ? "Agent enabled" : "Agent disabled");
+      // Reconcile against authoritative server data (avoids drift if
+      // anything else changed in the response — last_active_at, etc.).
       queryClient.invalidateQueries({ queryKey: ["agents", workspaceId] });
       queryClient.invalidateQueries({ queryKey: ["agent", workspaceId, agentId] });
-    },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Failed to toggle agent");
     },
   });
 
@@ -160,16 +200,48 @@ export function useAgent(workspaceId: string | null, agentId: string | null) {
     },
   });
 
+  // Detail-page variant of the optimistic toggle (UX-AGT-LST-002).
+  // Same shape as the list-page toggle above so both cache entries
+  // stay in sync regardless of which surface the user clicks from.
   const toggleMutation = useMutation({
     mutationFn: () => agentsApi.toggle(workspaceId!, agentId!),
+    onMutate: async () => {
+      const detailKey = ["agent", workspaceId, agentId] as const;
+      const listKey = ["agents", workspaceId] as const;
+      await queryClient.cancelQueries({ queryKey: detailKey });
+      await queryClient.cancelQueries({ queryKey: listKey });
+      const previousDetail = queryClient.getQueryData<CRMAgent>(detailKey);
+      const previousList = queryClient.getQueryData<CRMAgent[]>(listKey);
+      if (previousDetail) {
+        queryClient.setQueryData<CRMAgent>(detailKey, {
+          ...previousDetail,
+          is_active: !previousDetail.is_active,
+        });
+      }
+      if (previousList && agentId) {
+        queryClient.setQueryData<CRMAgent[]>(
+          listKey,
+          previousList.map((a) =>
+            a.id === agentId ? { ...a, is_active: !a.is_active } : a,
+          ),
+        );
+      }
+      return { previousDetail, previousList, detailKey, listKey };
+    },
+    onError: (error, _v, context) => {
+      if (context?.previousDetail) {
+        queryClient.setQueryData(context.detailKey, context.previousDetail);
+      }
+      if (context?.previousList) {
+        queryClient.setQueryData(context.listKey, context.previousList);
+      }
+      toast.error(error instanceof Error ? error.message : "Failed to toggle agent");
+    },
     onSuccess: (updatedAgent) => {
       const isActive = updatedAgent?.is_active;
       toast.success(isActive ? "Agent enabled" : "Agent disabled");
       queryClient.invalidateQueries({ queryKey: ["agent", workspaceId, agentId] });
       queryClient.invalidateQueries({ queryKey: ["agents", workspaceId] });
-    },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Failed to toggle agent");
     },
   });
 
@@ -295,6 +367,18 @@ export function useAgentExecutions(
     queryFn: () =>
       agentsApi.listExecutions(workspaceId!, agentId!, { status }),
     enabled: !!workspaceId && !!agentId,
+    // Auto-refresh so the detail page's "live status" strip + execution
+    // history feel like an ops view instead of a snapshot. Tight 2s poll
+    // while any execution is in-flight (pending/running); falls back to a
+    // 15s background refresh otherwise so cost stays bounded.
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const hasActiveRun = Array.isArray(data)
+        ? data.some((exec) => exec.status === "pending" || exec.status === "running")
+        : false;
+      return hasActiveRun ? 2000 : 15000;
+    },
+    refetchIntervalInBackground: false,
   });
 
   return {

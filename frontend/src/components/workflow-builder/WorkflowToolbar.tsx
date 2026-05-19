@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { createPortal } from "react-dom";
 import {
   Save,
   Play,
@@ -16,6 +15,25 @@ import {
   Upload,
   GitBranch,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
+
+/** Each row in the validation popover. Toolbar doesn't need the full
+ *  ValidationError shape — just enough to render and to wire a
+ *  "reveal" jump. Defined here so callers don't have to import the
+ *  hook's types into the toolbar. */
+export interface ToolbarValidationItem {
+  nodeId: string;
+  nodeLabel?: string;
+  message: string;
+  severity: "error" | "warning";
+}
 
 interface WorkflowToolbarProps {
   hasChanges: boolean;
@@ -24,6 +42,11 @@ interface WorkflowToolbarProps {
   isTestRunning?: boolean;
   validationErrors?: number;
   validationWarnings?: number;
+  /** When provided, the error/warning chip becomes a popover that
+   *  lists every issue. Each row has a "Reveal" button that calls
+   *  onRevealError to jump the viewport to the offending node. */
+  validationItems?: ToolbarValidationItem[];
+  onRevealNode?: (nodeId: string) => void;
   currentVersion?: number;
   onSave: () => Promise<void>;
   onPublish: () => Promise<void>;
@@ -44,6 +67,8 @@ export function WorkflowToolbar({
   isTestRunning = false,
   validationErrors = 0,
   validationWarnings = 0,
+  validationItems,
+  onRevealNode,
   currentVersion,
   onSave,
   onPublish,
@@ -62,6 +87,7 @@ export function WorkflowToolbar({
   const [isImporting, setIsImporting] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const [showValidationPopover, setShowValidationPopover] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Use external test running state if provided
@@ -170,8 +196,9 @@ export function WorkflowToolbar({
         {onTestResultsOpen && (
           <button
             onClick={onTestResultsOpen}
-            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            aria-label="Test results"
             title="Test results"
+            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
             <TestTube className="h-4 w-4" />
           </button>
@@ -206,8 +233,9 @@ export function WorkflowToolbar({
         {/* Fit view button */}
         <button
           onClick={onFitView}
-          className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          aria-label="Fit view"
           title="Fit view"
+          className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         >
           <Maximize className="h-4 w-4" />
         </button>
@@ -216,8 +244,9 @@ export function WorkflowToolbar({
         {onHistoryOpen && (
           <button
             onClick={onHistoryOpen}
-            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            aria-label="Execution history"
             title="Execution history"
+            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
             <History className="h-4 w-4" />
           </button>
@@ -227,8 +256,9 @@ export function WorkflowToolbar({
         {onVersionHistoryOpen && (
           <button
             onClick={onVersionHistoryOpen}
-            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            aria-label={`Version history${currentVersion ? ` (v${currentVersion})` : ""}`}
             title={`Version history${currentVersion ? ` (v${currentVersion})` : ""}`}
+            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
             <GitBranch className="h-4 w-4" />
           </button>
@@ -242,8 +272,9 @@ export function WorkflowToolbar({
               <button
                 onClick={handleExport}
                 disabled={isExporting}
-                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+                aria-label="Export workflow"
                 title="Export workflow"
+                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
               >
                 {isExporting ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -256,8 +287,9 @@ export function WorkflowToolbar({
               <button
                 onClick={() => setShowImportModal(true)}
                 disabled={isImporting}
-                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+                aria-label="Import workflow"
                 title="Import workflow"
+                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
               >
                 {isImporting ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -269,23 +301,103 @@ export function WorkflowToolbar({
           </>
         )}
 
-        {/* Validation indicator */}
+        {/* Validation indicator — now a clickable pill that opens a
+            popover listing every issue. Clicking a row jumps the
+            viewport to the offending node via onRevealNode. UX-WFL-005. */}
         {(validationErrors > 0 || validationWarnings > 0) && (
           <>
             <div className="w-px h-6 bg-accent" />
-            <div className="flex items-center gap-1.5">
-              {validationErrors > 0 && (
-                <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-500/20 text-red-400">
-                  <AlertCircle className="h-3.5 w-3.5" />
-                  <span className="text-xs font-medium">{validationErrors}</span>
-                </div>
-              )}
-              {validationWarnings > 0 && (
-                <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-500/20 text-amber-400">
-                  <AlertCircle className="h-3.5 w-3.5" />
-                  <span className="text-xs font-medium">{validationWarnings}</span>
-                </div>
-              )}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() =>
+                  validationItems && validationItems.length > 0
+                    ? setShowValidationPopover((v) => !v)
+                    : undefined
+                }
+                aria-haspopup={validationItems ? "dialog" : undefined}
+                aria-expanded={showValidationPopover}
+                className={cn(
+                  "flex items-center gap-1.5 px-2 py-1 rounded-lg transition-colors",
+                  validationItems && validationItems.length > 0
+                    ? "cursor-pointer hover:bg-accent"
+                    : "cursor-default",
+                )}
+              >
+                {validationErrors > 0 && (
+                  <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-500/20 text-red-600 dark:text-red-400">
+                    <AlertCircle className="h-3.5 w-3.5" />
+                    <span className="text-xs font-medium">{validationErrors}</span>
+                  </span>
+                )}
+                {validationWarnings > 0 && (
+                  <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                    <AlertCircle className="h-3.5 w-3.5" />
+                    <span className="text-xs font-medium">{validationWarnings}</span>
+                  </span>
+                )}
+              </button>
+
+              {showValidationPopover && validationItems && validationItems.length > 0 ? (
+                <>
+                  {/* Click-out backdrop */}
+                  <div
+                    className="fixed inset-0 z-30"
+                    onClick={() => setShowValidationPopover(false)}
+                    aria-hidden
+                  />
+                  <div
+                    role="dialog"
+                    aria-label="Validation issues"
+                    className="absolute top-full mt-2 right-0 z-40 w-80 max-h-96 overflow-y-auto bg-popover border border-border rounded-xl shadow-xl"
+                  >
+                    <div className="px-3 py-2 border-b border-border flex items-center justify-between">
+                      <span className="text-xs font-semibold text-foreground">
+                        Issues
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {validationItems.length === 1
+                          ? "1 to fix"
+                          : `${validationItems.length} to fix`}
+                      </span>
+                    </div>
+                    <ul className="divide-y divide-border">
+                      {validationItems.map((item, idx) => (
+                        <li key={`${item.nodeId}-${idx}`}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onRevealNode?.(item.nodeId);
+                              setShowValidationPopover(false);
+                            }}
+                            className="w-full text-left px-3 py-2.5 hover:bg-accent transition-colors flex items-start gap-2.5"
+                          >
+                            <AlertCircle
+                              className={cn(
+                                "h-4 w-4 mt-0.5 shrink-0",
+                                item.severity === "error"
+                                  ? "text-red-500 dark:text-red-400"
+                                  : "text-amber-500 dark:text-amber-400",
+                              )}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs font-medium text-foreground truncate">
+                                {item.nodeLabel || item.nodeId}
+                              </div>
+                              <div className="text-xs text-muted-foreground mt-0.5">
+                                {item.message}
+                              </div>
+                            </div>
+                            <span className="text-[10px] text-muted-foreground/70 shrink-0 mt-0.5">
+                              Reveal
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </>
+              ) : null}
             </div>
           </>
         )}
@@ -303,134 +415,157 @@ export function WorkflowToolbar({
         </div>
       </div>
 
-      {/* Test Modal - rendered via portal to escape stacking context */}
-      {showTestModal && typeof document !== "undefined" && createPortal(
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]">
-          <div className="bg-muted border border-border rounded-xl p-6 w-full max-w-md shadow-xl">
-            <h3 className="text-lg font-semibold text-foreground mb-4">Test Workflow</h3>
+      {/* Test Modal — Radix Dialog gives us focus trap, Esc-to-close,
+          scroll lock, and proper aria-modal that the prior raw portal
+          implementation lacked. */}
+      <Dialog
+        open={showTestModal}
+        onOpenChange={testInProgress ? undefined : (open) => !open && setShowTestModal(false)}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Test Workflow</DialogTitle>
+          </DialogHeader>
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-muted-foreground mb-1">
-                  Record ID (optional)
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={testRecordId}
-                    onChange={(e) => setTestRecordId(e.target.value)}
-                    placeholder="Enter a record ID to test with..."
-                    className="flex-1 bg-accent border border-border rounded-lg px-3 py-2 text-foreground text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setTestRecordId(crypto.randomUUID())}
-                    className="px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm hover:bg-muted transition-colors whitespace-nowrap"
-                  >
-                    Generate
-                  </button>
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Leave empty for a dry run, or generate a mock ID for testing
+          <div className="space-y-4">
+            <div>
+              <label
+                htmlFor="test-record-id"
+                className="block text-sm text-muted-foreground mb-1"
+              >
+                Record ID (optional)
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="test-record-id"
+                  type="text"
+                  value={testRecordId}
+                  onChange={(e) => setTestRecordId(e.target.value)}
+                  placeholder="Enter a record ID to test with..."
+                  className="flex-1 bg-accent border border-border rounded-lg px-3 py-2 text-foreground text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setTestRecordId(crypto.randomUUID())}
+                  className="px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm hover:bg-muted transition-colors whitespace-nowrap"
+                >
+                  Generate
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Leave empty for a dry run, or generate a mock ID for testing
+              </p>
+            </div>
+
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="h-4 w-4 text-amber-500 dark:text-amber-400 mt-0.5" />
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  This will execute the workflow in test mode. Actions will be simulated but not actually performed.
                 </p>
               </div>
-
-              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
-                <div className="flex items-start gap-2">
-                  <AlertCircle className="h-4 w-4 text-amber-400 mt-0.5" />
-                  <p className="text-xs text-amber-300">
-                    This will execute the workflow in test mode. Actions will be simulated but not actually performed.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3 mt-6">
-              <button
-                onClick={() => setShowTestModal(false)}
-                className="px-4 py-2 text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleTest}
-                disabled={testInProgress}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50"
-              >
-                {testInProgress ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Play className="h-4 w-4" />
-                )}
-                Run Test
-              </button>
             </div>
           </div>
-        </div>,
-        document.body
-      )}
 
-      {/* Import Modal - rendered via portal to escape stacking context */}
-      {showImportModal && typeof document !== "undefined" && createPortal(
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]">
-          <div className="bg-muted border border-border rounded-xl p-6 w-full max-w-md shadow-xl">
-            <h3 className="text-lg font-semibold text-foreground mb-4">Import Workflow</h3>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-muted-foreground mb-2">
-                  Select a workflow JSON file
-                </label>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".json,application/json"
-                  onChange={handleFileSelect}
-                  className="w-full text-sm text-muted-foreground
-                    file:mr-4 file:py-2 file:px-4
-                    file:rounded-lg file:border-0
-                    file:text-sm file:font-medium
-                    file:bg-blue-500/20 file:text-blue-400
-                    hover:file:bg-blue-500/30
-                    file:cursor-pointer
-                  "
-                />
-              </div>
-
-              {importError && (
-                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-                  <div className="flex items-start gap-2">
-                    <AlertCircle className="h-4 w-4 text-red-400 mt-0.5" />
-                    <p className="text-xs text-red-300">{importError}</p>
-                  </div>
-                </div>
+          <DialogFooter className="gap-2">
+            <button
+              type="button"
+              onClick={() => setShowTestModal(false)}
+              disabled={testInProgress}
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-border text-foreground hover:bg-accent disabled:opacity-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleTest}
+              disabled={testInProgress}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+            >
+              {testInProgress ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4" />
               )}
+              Run Test
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+      {/* Import Modal */}
+      <Dialog
+        open={showImportModal}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShowImportModal(false);
+            setImportError(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Import Workflow</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <label
+                htmlFor="import-workflow-file"
+                className="block text-sm text-muted-foreground mb-2"
+              >
+                Select a workflow JSON file
+              </label>
+              <input
+                id="import-workflow-file"
+                ref={fileInputRef}
+                type="file"
+                accept=".json,application/json"
+                onChange={handleFileSelect}
+                className="w-full text-sm text-muted-foreground
+                  file:mr-4 file:py-2 file:px-4
+                  file:rounded-lg file:border-0
+                  file:text-sm file:font-medium
+                  file:bg-blue-500/20 file:text-blue-600 dark:file:text-blue-400
+                  hover:file:bg-blue-500/30
+                  file:cursor-pointer
+                "
+              />
+            </div>
+
+            {importError && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
                 <div className="flex items-start gap-2">
-                  <AlertCircle className="h-4 w-4 text-amber-400 mt-0.5" />
-                  <p className="text-xs text-amber-300">
-                    Importing will replace the current workflow. This action cannot be undone.
-                  </p>
+                  <AlertCircle className="h-4 w-4 text-red-500 dark:text-red-400 mt-0.5" />
+                  <p className="text-xs text-red-700 dark:text-red-300">{importError}</p>
                 </div>
               </div>
-            </div>
+            )}
 
-            <div className="flex justify-end gap-3 mt-6">
-              <button
-                onClick={() => {
-                  setShowImportModal(false);
-                  setImportError(null);
-                }}
-                className="px-4 py-2 text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Cancel
-              </button>
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="h-4 w-4 text-amber-500 dark:text-amber-400 mt-0.5" />
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  Importing will replace the current workflow. This action cannot be undone.
+                </p>
+              </div>
             </div>
           </div>
-        </div>,
-        document.body
-      )}
+
+          <DialogFooter className="gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setShowImportModal(false);
+                setImportError(null);
+              }}
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-border text-foreground hover:bg-accent transition-colors"
+            >
+              Cancel
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

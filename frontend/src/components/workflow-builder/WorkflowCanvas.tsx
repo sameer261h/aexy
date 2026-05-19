@@ -134,6 +134,37 @@ function WorkflowCanvasInner({
   const [isPaletteCollapsed, setIsPaletteCollapsed] = useState(false);
   const [showMobilePalette, setShowMobilePalette] = useState(false);
 
+  // UX-WFL-006: React Flow's Background takes a raw color string and
+  // applies it as an SVG fill — it can't honor CSS variables or
+  // currentColor. We mirror the project's --muted-foreground / hsl
+  // values into a plain string and re-read on theme toggle so the
+  // dotgrid stays legible across light + dark without overpowering
+  // either. Defaults to a slate mid-tone for first paint.
+  const [backgroundColor, setBackgroundColor] = useState("#94a3b8");
+  useEffect(() => {
+    const readColor = () => {
+      if (typeof window === "undefined") return;
+      const value = getComputedStyle(document.documentElement)
+        .getPropertyValue("--muted-foreground")
+        .trim();
+      if (!value) return;
+      // Tailwind CSS vars are usually `H S% L%` triplets (sometimes
+      // `HSL(...)`, sometimes already `hsl(...)`). Wrap in hsl() if
+      // it's just numbers; otherwise pass through.
+      const formatted = /^\d/.test(value) ? `hsl(${value})` : value;
+      setBackgroundColor(formatted);
+    };
+    readColor();
+    // Theme toggles flip the class on <html>; observe that to refresh
+    // the computed value when the user switches.
+    const observer = new MutationObserver(readColor);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme", "style"],
+    });
+    return () => observer.disconnect();
+  }, []);
+
   // Workflow validation
   const { validationResult, getNodeErrors, hasNodeErrors } = useWorkflowValidation(nodes, edges);
 
@@ -630,10 +661,13 @@ function WorkflowCanvasInner({
         </>
       )}
 
-      {/* Mobile FAB to toggle palette */}
+      {/* Mobile FAB to toggle palette — pinned bottom-right so it
+          doesn't collide with React Flow's built-in Controls (zoom in /
+          zoom out / fit-view), which live at bottom-left by default. */}
       <button
         onClick={() => setShowMobilePalette(!showMobilePalette)}
-        className="fixed bottom-6 left-6 z-30 md:hidden p-4 bg-indigo-500 text-white rounded-full shadow-lg hover:bg-indigo-600 transition-colors"
+        aria-label={showMobilePalette ? "Close palette" : "Open palette"}
+        className="fixed bottom-6 right-6 z-30 md:hidden p-4 bg-indigo-500 text-white rounded-full shadow-lg hover:bg-indigo-600 transition-colors"
       >
         {showMobilePalette ? (
           <X className="h-6 w-6" />
@@ -643,7 +677,38 @@ function WorkflowCanvasInner({
       </button>
 
       {/* Main Canvas */}
-      <div className="flex-1 h-full bg-background">
+      <div className="flex-1 h-full bg-background relative">
+        {/* Empty-canvas onboarding — overlaid above the snap grid when
+            the user has no nodes yet. Closes the "blank Figma board"
+            cold-start cliff. Pointer-events-none on the wrapper lets
+            users still pan/zoom around it; the inner CTA opts back in. */}
+        {nodes.length === 0 && (
+          <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center">
+            <div className="pointer-events-auto max-w-sm text-center px-6">
+              <div className="mx-auto mb-4 h-24 w-48 rounded-2xl border-2 border-dashed border-border bg-muted/40 flex items-center justify-center">
+                <Plus className="h-8 w-8 text-muted-foreground/60" />
+              </div>
+              <h3 className="text-base font-semibold text-foreground">
+                Start with a Trigger
+              </h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Pick what kicks this workflow off - a record created, a form
+                submitted, a webhook fired. Then chain actions to it.
+              </p>
+              <button
+                type="button"
+                onClick={() => addNode("trigger")}
+                className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-foreground text-background rounded-lg text-sm font-medium hover:bg-foreground/90 transition-colors"
+              >
+                <Plus className="h-4 w-4" />
+                Add a Trigger
+              </button>
+              <p className="mt-2 text-xs text-muted-foreground/70">
+                Or drag any node from the palette on the left.
+              </p>
+            </div>
+          </div>
+        )}
         <ReactFlow
           nodes={enhancedNodes}
           edges={enhancedEdges}
@@ -662,7 +727,7 @@ function WorkflowCanvasInner({
           snapGrid={[15, 15]}
           className="bg-background"
         >
-          <Background color="#334155" gap={15} />
+          <Background color={backgroundColor} gap={15} bgColor="transparent" />
           <Controls className="bg-muted border-border" />
           <MiniMap
             pannable
@@ -697,6 +762,37 @@ function WorkflowCanvasInner({
               isTestRunning={isTestRunning}
               validationErrors={validationResult.errors.length}
               validationWarnings={validationResult.warnings.length}
+              // UX-WFL-005: hand the toolbar the full issue list +
+              // a reveal callback so the validation chip becomes a
+              // jump-to-error popover. The label resolves from the
+              // live `nodes` array so renames flow through.
+              validationItems={[
+                ...validationResult.errors,
+                ...validationResult.warnings,
+              ].map((err) => {
+                const node = nodes.find((n) => n.id === err.nodeId);
+                const label =
+                  (node?.data as { label?: string } | undefined)?.label ??
+                  undefined;
+                return {
+                  nodeId: err.nodeId,
+                  nodeLabel: label,
+                  message: err.message,
+                  severity: err.severity,
+                };
+              })}
+              onRevealNode={(nodeId) => {
+                const node = nodes.find((n) => n.id === nodeId);
+                if (!node) return;
+                setSelectedNode(node);
+                // Center on the node and zoom in a touch so it stands
+                // out from a dense canvas.
+                fitView({
+                  nodes: [{ id: nodeId }],
+                  duration: 400,
+                  padding: 0.4,
+                });
+              }}
               onSave={handleSave}
               onPublish={onPublish}
               onUnpublish={onUnpublish}

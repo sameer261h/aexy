@@ -21,7 +21,7 @@ const AUTH_REQUIRED_PREFIXES = [
   "/crm",
   "/databases",
   "/dependencies",
-  "/docs/",
+  "/docs",
   "/email",
   "/epics",
   "/forms",

@@ -1,0 +1,62 @@
+{
+  "operations": {
+    "title": "Operations",
+    "subtitle": "हर वो चीज़ जो एक trigger पर चलती है - प्रतिक्रियात्मक agents और workflows।",
+    "create": "नया",
+    "createAgent": "नया Agent",
+    "createAutomation": "नया Workflow",
+
+    "type": {
+      "agent": "Agent",
+      "automation": "Workflow"
+    },
+
+    "stats": {
+      "total": "कुल",
+      "active": "सक्रिय",
+      "executions": "कुल रन"
+    },
+
+    "filter": {
+      "all": "सभी",
+      "agents": "Agents",
+      "automations": "Workflows",
+      "active": "सक्रिय",
+      "paused": "रोकी गई",
+      "searchPlaceholder": "नाम या विवरण से खोजें..."
+    },
+
+    "row": {
+      "noDescription": "कोई विवरण नहीं",
+      "noRuns": "अब तक कोई रन नहीं",
+      "executions": "{count, plural, =1 {1 रन} other {# रन}}",
+      "lastRun": "अंतिम रन {when}",
+      "neverRun": "अब तक नहीं चला"
+    },
+
+    "empty": {
+      "title": "अभी कुछ नहीं चल रहा",
+      "description": "Email, scheduling, या CRM अपडेट संभालने के लिए एक agent बनाएं - या एक workflow तैयार करें जो किसी चीज़ के बदलने पर चले।",
+      "primaryAction": "Automation templates देखें",
+      "secondaryAction": "Agent बनाएं"
+    },
+
+    "filteredEmpty": {
+      "title": "कोई मेल नहीं",
+      "description": "अलग filter या खोज शब्द आज़माएं।"
+    },
+
+    "picker": {
+      "title": "आप क्या बनाना चाहते हैं?",
+      "agent": {
+        "name": "प्रतिक्रियात्मक Agent",
+        "description": "एक LLM-संचालित persona जो email, scheduling, support tickets, या CRM अपडेट संभालता है। Tools, prompts, और एक inbox कॉन्फ़िगर करें।"
+      },
+      "automation": {
+        "name": "Workflow",
+        "description": "CRM, sprints, compliance, या किसी भी module में trigger -> condition -> action श्रृंखला। LLM की आवश्यकता नहीं।"
+      },
+      "cancel": "रद्द करें"
+    }
+  }
+}

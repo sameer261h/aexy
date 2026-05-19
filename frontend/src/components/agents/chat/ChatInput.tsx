@@ -58,10 +58,11 @@ export function ChatInput({
           placeholder={placeholder}
           disabled={disabled || isSending}
           rows={1}
+          aria-label="Message"
           className={cn(
             "w-full px-4 py-3 bg-accent border border-border rounded-xl",
             "text-foreground placeholder-muted-foreground resize-none",
-            "focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-purple-500",
+            "focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/50 focus-visible:border-purple-500",
             "disabled:opacity-50 disabled:cursor-not-allowed",
             "max-h-[200px] overflow-y-auto"
           )}

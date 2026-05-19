@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import {
+  AlertCircle,
   Bot,
   Save,
   Settings,
@@ -24,9 +25,11 @@ import {
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useAgent, useAgentTools } from "@/hooks/useAgents";
 import { useAgentEmail, useEmailDomains } from "@/hooks/useAgentInbox";
+import { useRouteGuard } from "@/hooks/useRouteGuard";
 import { getAgentTypeConfig, AgentType, WorkingHoursConfig } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   AgentTypeBadge,
   ToolSelector,
@@ -57,7 +60,6 @@ const TABS: Tab[] = [
 
 export default function EditAgentPage() {
   const params = useParams();
-  const router = useRouter();
   const agentId = params.agentId as string;
   const { currentWorkspaceId, currentWorkspaceLoading } = useWorkspace();
 
@@ -76,6 +78,11 @@ export default function EditAgentPage() {
   const [hasChanges, setHasChanges] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Lifted to component scope so the ConfirmDialog can render at the
+  // page root (outside the per-tab render switch) — Disable Email is
+  // destructive (severs the agent's email address, orphans any
+  // pending inbox messages) and needs a confirm step. UX-EDT-017.
+  const [showDisableEmailConfirm, setShowDisableEmailConfirm] = useState(false);
 
   // Form state
   const [name, setName] = useState("");
@@ -97,7 +104,11 @@ export default function EditAgentPage() {
   const [customInstructions, setCustomInstructions] = useState("");
   const [escalationEmail, setEscalationEmail] = useState("");
   const [escalationSlackChannel, setEscalationSlackChannel] = useState("");
-  const [emailEnabled, setEmailEnabled] = useState(false);
+  // Only the setter is consumed — the canonical "is email enabled?" read
+  // comes from `agent.email_enabled`, which the polling query refreshes
+  // after enable / disable mutations. Keeping the setter so the mutation
+  // callbacks can flip the local view optimistically.
+  const [, setEmailEnabled] = useState(false);
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(true);
   const [emailSignature, setEmailSignature] = useState("");
   const [emailCopied, setEmailCopied] = useState(false);
@@ -107,72 +118,112 @@ export default function EditAgentPage() {
   const [newEmailHandle, setNewEmailHandle] = useState("");
   const [newEmailDomain, setNewEmailDomain] = useState("");
 
-  // Initialize form from agent
-  useEffect(() => {
-    if (agent) {
-      setName(agent.name);
-      setDescription(agent.description || "");
-      setMentionHandle(agent.mention_handle || "");
-      setAgentType(agent.agent_type);
-      setLlmProvider(agent.llm_provider || "gemini");
-      setLlmModel(agent.llm_model || agent.model || "gemini-2.0-flash");
-      setTemperature(agent.temperature ?? 0.7);
-      setMaxTokens(agent.max_tokens ?? 2000);
-      setTools(agent.tools || []);
-      setAutoRespond(agent.auto_respond ?? true);
-      setConfidenceThreshold(agent.confidence_threshold ?? 0.7);
-      setRequireApprovalBelow(agent.require_approval_below ?? 0.8);
-      setMaxDailyResponses(agent.max_daily_responses ?? 100);
-      setResponseDelayMinutes(agent.response_delay_minutes ?? 5);
-      setWorkingHours(agent.working_hours || null);
-      setSystemPrompt(agent.system_prompt || "");
-      setCustomInstructions(agent.custom_instructions || "");
-      setEscalationEmail(agent.escalation_email || "");
-      setEscalationSlackChannel(agent.escalation_slack_channel || "");
-      setEmailEnabled(agent.email_enabled || false);
-      setAutoReplyEnabled(agent.auto_reply_enabled ?? true);
-      setEmailSignature(agent.email_signature || "");
-    }
-  }, [agent]);
-
-  // Track changes
+  // Initialize form from agent. UX-EDT-021: skip the sync when the
+  // user has unsaved local edits — otherwise an incoming refetch
+  // (the global polling, or an invalidate after another mutation)
+  // can silently clobber in-flight typing. The initial-load case is
+  // identified by `name === ""` (we haven't initialized yet), which
+  // always re-syncs regardless of hasChanges so we don't strand the
+  // form in its empty default.
   useEffect(() => {
     if (!agent) return;
-
-    // System agents can only change LLM configuration
-    if (agent.is_system) {
-      const changed =
-        llmProvider !== (agent.llm_provider || "gemini") ||
-        llmModel !== (agent.llm_model || agent.model || "gemini-2.0-flash") ||
-        temperature !== (agent.temperature ?? 0.7);
-
-      setHasChanges(changed);
+    const isInitialLoad = name === "";
+    if (!isInitialLoad && hasChanges) {
       return;
     }
+    setName(agent.name);
+    setDescription(agent.description || "");
+    setMentionHandle(agent.mention_handle || "");
+    setAgentType(agent.agent_type);
+    setLlmProvider(agent.llm_provider || "gemini");
+    setLlmModel(agent.llm_model || agent.model || "gemini-2.0-flash");
+    setTemperature(agent.temperature ?? 0.7);
+    setMaxTokens(agent.max_tokens ?? 2000);
+    setTools(agent.tools || []);
+    setAutoRespond(agent.auto_respond ?? true);
+    setConfidenceThreshold(agent.confidence_threshold ?? 0.7);
+    setRequireApprovalBelow(agent.require_approval_below ?? 0.8);
+    setMaxDailyResponses(agent.max_daily_responses ?? 100);
+    setResponseDelayMinutes(agent.response_delay_minutes ?? 5);
+    setWorkingHours(agent.working_hours || null);
+    setSystemPrompt(agent.system_prompt || "");
+    setCustomInstructions(agent.custom_instructions || "");
+    setEscalationEmail(agent.escalation_email || "");
+    setEscalationSlackChannel(agent.escalation_slack_channel || "");
+    setEmailEnabled(agent.email_enabled || false);
+    setAutoReplyEnabled(agent.auto_reply_enabled ?? true);
+    setEmailSignature(agent.email_signature || "");
+    // `hasChanges` and `name` are read inside on purpose: the dirty-guard
+    // above must use the freshest values at re-render time, but they
+    // MUST NOT trigger this effect — adding them to deps would re-sync
+    // the form mid-edit and clobber typing. The `[agent]` trigger is the
+    // intended single source of "new data arrived from the server".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent]);
 
-    const changed =
-      name !== agent.name ||
-      description !== (agent.description || "") ||
-      mentionHandle !== (agent.mention_handle || "") ||
-      llmProvider !== (agent.llm_provider || "gemini") ||
-      llmModel !== (agent.llm_model || agent.model || "gemini-2.0-flash") ||
-      temperature !== (agent.temperature ?? 0.7) ||
-      maxTokens !== (agent.max_tokens ?? 2000) ||
-      JSON.stringify(tools) !== JSON.stringify(agent.tools || []) ||
-      autoRespond !== (agent.auto_respond ?? true) ||
-      confidenceThreshold !== (agent.confidence_threshold ?? 0.7) ||
-      requireApprovalBelow !== (agent.require_approval_below ?? 0.8) ||
-      maxDailyResponses !== (agent.max_daily_responses ?? 100) ||
-      responseDelayMinutes !== (agent.response_delay_minutes ?? 5) ||
-      JSON.stringify(workingHours) !== JSON.stringify(agent.working_hours || null) ||
-      systemPrompt !== (agent.system_prompt || "") ||
-      customInstructions !== (agent.custom_instructions || "") ||
-      escalationEmail !== (agent.escalation_email || "") ||
-      escalationSlackChannel !== (agent.escalation_slack_channel || "") ||
-      autoReplyEnabled !== (agent.auto_reply_enabled ?? true) ||
-      emailSignature !== (agent.email_signature || "");
-
-    setHasChanges(changed);
+  // Per-tab dirty tracking — each tab independently reports whether any
+  // of its fields differ from the persisted agent. The audit flagged the
+  // prior single boolean as confidence-killing: users switching tabs lost
+  // sight of which sections had pending edits.
+  const dirtyByTab = useMemo<Record<TabId, boolean>>(() => {
+    if (!agent) {
+      return {
+        general: false,
+        llm: false,
+        tools: false,
+        behavior: false,
+        prompts: false,
+        escalation: false,
+        email: false,
+      };
+    }
+    // System agents are LLM-only; everything else is locked to its
+    // persisted value, so it can't be dirty.
+    if (agent.is_system) {
+      return {
+        general: false,
+        llm:
+          llmProvider !== (agent.llm_provider || "gemini") ||
+          llmModel !==
+            (agent.llm_model || agent.model || "gemini-2.0-flash") ||
+          temperature !== (agent.temperature ?? 0.7),
+        tools: false,
+        behavior: false,
+        prompts: false,
+        escalation: false,
+        email: false,
+      };
+    }
+    return {
+      general:
+        name !== agent.name ||
+        description !== (agent.description || "") ||
+        mentionHandle !== (agent.mention_handle || ""),
+      llm:
+        llmProvider !== (agent.llm_provider || "gemini") ||
+        llmModel !==
+          (agent.llm_model || agent.model || "gemini-2.0-flash") ||
+        temperature !== (agent.temperature ?? 0.7) ||
+        maxTokens !== (agent.max_tokens ?? 2000),
+      tools: JSON.stringify(tools) !== JSON.stringify(agent.tools || []),
+      behavior:
+        autoRespond !== (agent.auto_respond ?? true) ||
+        confidenceThreshold !== (agent.confidence_threshold ?? 0.7) ||
+        requireApprovalBelow !== (agent.require_approval_below ?? 0.8) ||
+        maxDailyResponses !== (agent.max_daily_responses ?? 100) ||
+        responseDelayMinutes !== (agent.response_delay_minutes ?? 5) ||
+        JSON.stringify(workingHours) !==
+          JSON.stringify(agent.working_hours || null),
+      prompts:
+        systemPrompt !== (agent.system_prompt || "") ||
+        customInstructions !== (agent.custom_instructions || ""),
+      escalation:
+        escalationEmail !== (agent.escalation_email || "") ||
+        escalationSlackChannel !== (agent.escalation_slack_channel || ""),
+      email:
+        autoReplyEnabled !== (agent.auto_reply_enabled ?? true) ||
+        emailSignature !== (agent.email_signature || ""),
+    };
   }, [
     agent,
     name,
@@ -197,8 +248,125 @@ export default function EditAgentPage() {
     emailSignature,
   ]);
 
+  // hasChanges is now a derived value but kept in state for compatibility
+  // with the existing save flow (and so saveSuccess resetting the agent
+  // payload re-derives cleanly when the next agent fetch lands).
+  useEffect(() => {
+    const anyDirty = Object.values(dirtyByTab).some(Boolean);
+    setHasChanges(anyDirty);
+  }, [dirtyByTab]);
+
+  // UX-EDT-025 + UX-DLG-004: pop a ConfirmDialog when the user clicks
+  // a link to navigate away (sidebar, breadcrumb, etc.) while edits
+  // are pending. The hook also handles the beforeunload fallback for
+  // hard refresh / tab close, so we no longer need a separate effect
+  // for that.
+  const { pendingHref, confirmPending, cancelPending } = useRouteGuard({
+    enabled: hasChanges,
+  });
+
+  const dirtyTabCount = useMemo(
+    () => Object.values(dirtyByTab).filter(Boolean).length,
+    [dirtyByTab],
+  );
+
+  // Per-tab validation errors. UX-EDT-016: prior to this, the form
+  // passed empty names, malformed emails, and out-of-range numbers
+  // straight to the server. Real-time validation surfaces problems
+  // inline + on the tab (red dot) so users don't get bounced by a
+  // server error after a long save.
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const errorsByTab = useMemo<Record<TabId, string[]>>(() => {
+    const errors: Record<TabId, string[]> = {
+      general: [],
+      llm: [],
+      tools: [],
+      behavior: [],
+      prompts: [],
+      escalation: [],
+      email: [],
+    };
+    // System agents only edit LLM fields; everything else is locked
+    // and can't be in error.
+    if (agent?.is_system) {
+      if (temperature < 0 || temperature > 2) {
+        errors.llm.push("Temperature must be between 0 and 2");
+      }
+      return errors;
+    }
+    // General
+    if (!name.trim()) errors.general.push("Name is required");
+    if (mentionHandle && !/^[a-z0-9-]{2,}$/.test(mentionHandle)) {
+      errors.general.push(
+        "Mention handle must be at least 2 characters, lowercase letters, numbers or hyphens",
+      );
+    }
+    // LLM
+    if (temperature < 0 || temperature > 2) {
+      errors.llm.push("Temperature must be between 0 and 2");
+    }
+    if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 32000) {
+      errors.llm.push("Max tokens must be a whole number between 1 and 32000");
+    }
+    // Behavior
+    if (confidenceThreshold < 0 || confidenceThreshold > 1) {
+      errors.behavior.push("Confidence threshold must be between 0 and 1");
+    }
+    if (requireApprovalBelow < 0 || requireApprovalBelow > 1) {
+      errors.behavior.push("Approval threshold must be between 0 and 1");
+    }
+    if (!Number.isInteger(maxDailyResponses) || maxDailyResponses < 1) {
+      errors.behavior.push("Daily response cap must be at least 1");
+    }
+    if (!Number.isInteger(responseDelayMinutes) || responseDelayMinutes < 0) {
+      errors.behavior.push("Response delay can't be negative");
+    }
+    // Escalation
+    if (escalationEmail.trim() && !EMAIL_RE.test(escalationEmail.trim())) {
+      errors.escalation.push("Escalation email must be a valid email address");
+    }
+    return errors;
+  }, [
+    agent?.is_system,
+    name,
+    mentionHandle,
+    temperature,
+    maxTokens,
+    confidenceThreshold,
+    requireApprovalBelow,
+    maxDailyResponses,
+    responseDelayMinutes,
+    escalationEmail,
+  ]);
+
+  const hasErrors = useMemo(
+    () => Object.values(errorsByTab).some((list) => list.length > 0),
+    [errorsByTab],
+  );
+  const errorTabCount = useMemo(
+    () => Object.values(errorsByTab).filter((list) => list.length > 0).length,
+    [errorsByTab],
+  );
+
+  // UX-EDT-020: the two thresholds invert when require_approval_below >
+  // confidence_threshold — there's then an ambiguous gap where the agent
+  // both auto-responds AND requires approval. Render an inline warning
+  // (not a blocking error) when that's true.
+  const thresholdInverted =
+    !agent?.is_system && requireApprovalBelow > confidenceThreshold;
+
   const handleSave = async () => {
     if (!hasChanges) return;
+    // Block submission when validation errors exist; surface the first
+    // tab with an error so the user lands where they need to look.
+    if (hasErrors) {
+      const firstBad = (Object.keys(errorsByTab) as TabId[]).find(
+        (id) => errorsByTab[id].length > 0,
+      );
+      if (firstBad) setActiveTab(firstBad);
+      setError("Please fix the validation errors before saving.");
+      return;
+    }
 
     setError(null);
     setSaveSuccess(false);
@@ -299,23 +467,28 @@ export default function EditAgentPage() {
               </div>
             )}
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
+              <label htmlFor="agent-name" className="block text-sm font-medium text-foreground mb-1.5">
                 Agent Name
               </label>
               <input
+                id="agent-name"
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 disabled={isSystemAgent}
                 className={cn(
-                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500",
+                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500",
                   isSystemAgent && "opacity-50 cursor-not-allowed"
                 )}
               />
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Shown on the agent's profile, in @mentions, and as the
+                From-name on outbound email.
+              </p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
+              <label className="block text-sm font-medium text-foreground mb-1.5">
                 Agent Type
               </label>
               <div className="flex sm:flex-row flex-col sm:items-center items-start gap-2">
@@ -324,41 +497,65 @@ export default function EditAgentPage() {
                   (Cannot be changed after creation)
                 </span>
               </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                The type seeds the agent's default tool set, prompt
+                template, and persona. To switch types, create a new
+                agent.
+              </p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
+              <label htmlFor="mention-handle" className="block text-sm font-medium text-foreground mb-1.5">
                 Mention Handle
               </label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">@</span>
                 <input
+                  id="mention-handle"
                   type="text"
                   value={mentionHandle}
-                  onChange={(e) => setMentionHandle(e.target.value.toLowerCase())}
+                  // UX-EDT-022: strip invalid chars on input so users can't
+                  // create a handle the server is just going to reject.
+                  // Matches the same sanitization used by newEmailHandle.
+                  onChange={(e) =>
+                    setMentionHandle(
+                      e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
+                    )
+                  }
                   disabled={isSystemAgent}
+                  placeholder="my-agent"
                   className={cn(
-                    "w-full pl-8 pr-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500",
+                    "w-full pl-8 pr-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500",
                     isSystemAgent && "opacity-50 cursor-not-allowed"
                   )}
                 />
               </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Lowercase letters, numbers, and hyphens. Used to ping the
+                agent from chat with @{mentionHandle || "your-handle"}.
+              </p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
+              <label htmlFor="agent-description" className="block text-sm font-medium text-foreground mb-1.5">
                 Description
               </label>
               <textarea
+                id="agent-description"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 disabled={isSystemAgent}
                 rows={3}
+                placeholder="What does this agent do?"
                 className={cn(
-                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none",
+                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 resize-none",
                   isSystemAgent && "opacity-50 cursor-not-allowed"
                 )}
               />
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                A one-liner shown to teammates browsing your workspace's
+                agents. Not seen by end users.
+              </p>
             </div>
           </div>
         );
@@ -376,37 +573,56 @@ export default function EditAgentPage() {
             />
 
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
-                Temperature
-              </label>
-              <div className="flex items-center gap-4">
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.1}
-                  value={temperature}
-                  onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                  className="flex-1 h-2 bg-accent rounded-lg appearance-none cursor-pointer"
-                />
-                <span className="w-12 text-right text-foreground font-medium">
-                  {temperature.toFixed(1)}
+              <div className="flex items-center justify-between mb-1.5">
+                <label htmlFor="temperature" className="block text-sm font-medium text-foreground">
+                  Temperature
+                </label>
+                <span className="text-sm text-foreground font-medium tabular-nums">
+                  {temperature.toFixed(2)}
                 </span>
               </div>
+              <input
+                id="temperature"
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={temperature}
+                onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                className="w-full h-2 bg-accent rounded-lg appearance-none cursor-pointer"
+              />
+              <div className="mt-1 flex justify-between text-[10px] text-muted-foreground/70 uppercase tracking-wider">
+                <span>Deterministic</span>
+                <span>Balanced</span>
+                <span>Creative</span>
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                How much variation the model adds. Low values stick to
+                predictable wording; high values vary phrasing more —
+                useful for outbound emails, riskier for compliance copy.
+                Most production agents sit between 0.3 and 0.7.
+              </p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
+              <label htmlFor="max-tokens" className="block text-sm font-medium text-foreground mb-1.5">
                 Max Tokens
               </label>
               <input
+                id="max-tokens"
                 type="number"
                 value={maxTokens}
                 onChange={(e) => setMaxTokens(parseInt(e.target.value) || 2000)}
                 min={100}
                 max={32000}
-                className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500"
+                className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
               />
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Cap on the model's response length (1 token ≈ 4 characters
+                of English). Cuts cost on chatty agents; risks truncating
+                long-form replies when set too low. 2000 is a safe
+                default for email + support agents.
+              </p>
             </div>
           </div>
         );
@@ -425,13 +641,16 @@ export default function EditAgentPage() {
                 <p className="text-muted-foreground">Loading tools...</p>
               </div>
             ) : (
-              <div className={isSystemAgent ? "opacity-50 pointer-events-none" : ""}>
-                <ToolSelector
-                  tools={availableTools}
-                  selectedTools={tools}
-                  onChange={setTools}
-                />
-              </div>
+              // UX-EDT-023: pass `disabled` down so the underlying
+              // inputs are keyboard-unfocusable for system agents, not
+              // just visually muted. `opacity-50 pointer-events-none`
+              // would let a keyboard user tab into the inputs.
+              <ToolSelector
+                tools={availableTools}
+                selectedTools={tools}
+                onChange={setTools}
+                disabled={isSystemAgent}
+              />
             )}
           </div>
         );
@@ -450,7 +669,7 @@ export default function EditAgentPage() {
                 checked={autoRespond}
                 onChange={(e) => setAutoRespond(e.target.checked)}
                 disabled={isSystemAgent}
-                className="w-5 h-5 mt-0.5 rounded border-border bg-accent text-purple-500 focus:ring-purple-500"
+                className="w-5 h-5 mt-0.5 rounded border-border bg-accent text-purple-500 focus-visible:ring-purple-500"
               />
               <div>
                 <div className="font-medium text-foreground">Enable Auto-Response</div>
@@ -460,60 +679,73 @@ export default function EditAgentPage() {
               </div>
             </label>
 
-            <div className={cn("space-y-6", isSystemAgent && "opacity-50 pointer-events-none")}>
+            <div className="space-y-6">
               <ConfidenceSlider
                 value={confidenceThreshold}
                 onChange={setConfidenceThreshold}
                 label="Minimum Confidence to Respond"
+                disabled={isSystemAgent}
               />
 
               <ConfidenceSlider
                 value={requireApprovalBelow}
                 onChange={setRequireApprovalBelow}
                 label="Require Approval Below"
+                disabled={isSystemAgent}
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-foreground mb-2">
+                <label htmlFor="max-daily-responses" className="block text-sm font-medium text-foreground mb-1.5">
                   Max Daily Responses
                 </label>
                 <input
+                  id="max-daily-responses"
                   type="number"
                   value={maxDailyResponses}
                   onChange={(e) => setMaxDailyResponses(parseInt(e.target.value) || 100)}
                   disabled={isSystemAgent}
                   min={1}
                   className={cn(
-                    "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500",
+                    "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500",
                     isSystemAgent && "opacity-50 cursor-not-allowed"
                   )}
                 />
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  Hard cap. Messages beyond the cap are queued and the
+                  agent picks them up the next day.
+                </p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-foreground mb-2">
+                <label htmlFor="response-delay" className="block text-sm font-medium text-foreground mb-1.5">
                   Response Delay (minutes)
                 </label>
                 <input
+                  id="response-delay"
                   type="number"
                   value={responseDelayMinutes}
                   onChange={(e) => setResponseDelayMinutes(parseInt(e.target.value) || 0)}
                   disabled={isSystemAgent}
                   min={0}
                   className={cn(
-                    "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500",
+                    "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500",
                     isSystemAgent && "opacity-50 cursor-not-allowed"
                   )}
                 />
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  Adds a delay before the agent replies so it doesn't
+                  look robotic. 0 = reply instantly.
+                </p>
               </div>
             </div>
 
-            <div className={isSystemAgent ? "opacity-50 pointer-events-none" : ""}>
+            <div>
               <h3 className="text-lg font-medium text-foreground mb-4">Working Hours</h3>
               <WorkingHoursConfigPanel
                 value={workingHours}
                 onChange={setWorkingHours}
+                disabled={isSystemAgent}
               />
             </div>
           </div>
@@ -527,20 +759,22 @@ export default function EditAgentPage() {
                 This is a system agent. Prompts cannot be modified.
               </div>
             )}
-            <div className={isSystemAgent ? "opacity-50 pointer-events-none" : ""}>
+            <div>
               <PromptEditor
                 value={systemPrompt}
                 onChange={setSystemPrompt}
                 label="System Prompt"
                 rows={12}
+                disabled={isSystemAgent}
               />
             </div>
 
-            <div className={isSystemAgent ? "opacity-50 pointer-events-none" : ""}>
+            <div>
               <InstructionsEditor
                 value={customInstructions}
                 onChange={setCustomInstructions}
                 rows={4}
+                disabled={isSystemAgent}
               />
             </div>
           </div>
@@ -565,7 +799,7 @@ export default function EditAgentPage() {
                 disabled={isSystemAgent}
                 placeholder="support@example.com"
                 className={cn(
-                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500",
+                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500",
                   isSystemAgent && "opacity-50 cursor-not-allowed"
                 )}
               />
@@ -585,7 +819,7 @@ export default function EditAgentPage() {
                 disabled={isSystemAgent}
                 placeholder="#support-escalations"
                 className={cn(
-                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500",
+                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500",
                   isSystemAgent && "opacity-50 cursor-not-allowed"
                 )}
               />
@@ -617,15 +851,9 @@ export default function EditAgentPage() {
           }
         };
 
-        const handleDisableEmail = async () => {
-          try {
-            await disableEmail();
-            setEmailEnabled(false);
-          } catch (err) {
-            console.error("Failed to disable email:", err);
-            setError(err instanceof Error ? err.message : "Failed to disable email");
-          }
-        };
+        // handleDisableEmail removed — the destructive action now lives in
+        // the page-level ConfirmDialog (UX-EDT-017) whose onConfirm holds
+        // the disableEmail() call directly.
 
         const copyEmailAddress = async () => {
           if (agent?.email_address) {
@@ -677,7 +905,7 @@ export default function EditAgentPage() {
                       value={newEmailHandle}
                       onChange={(e) => setNewEmailHandle(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
                       placeholder="support"
-                      className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
                     />
                     <p className="mt-1 text-xs text-muted-foreground">
                       Letters, numbers, and hyphens only
@@ -694,7 +922,7 @@ export default function EditAgentPage() {
                       <select
                         value={newEmailDomain}
                         onChange={(e) => setNewEmailDomain(e.target.value)}
-                        className="w-full pl-10 pr-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500 appearance-none"
+                        className="w-full pl-10 pr-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 appearance-none"
                       >
                         {domains.map((d) => (
                           <option key={d.domain} value={d.domain}>
@@ -780,9 +1008,9 @@ export default function EditAgentPage() {
                 {!isSystemAgent && (
                   agent?.email_enabled ? (
                     <button
-                      onClick={handleDisableEmail}
+                      onClick={() => setShowDisableEmailConfirm(true)}
                       disabled={isDisabling}
-                      className="px-4 py-2 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30 transition-colors disabled:opacity-50"
+                      className="px-4 py-2 bg-red-500/20 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-500/30 transition-colors disabled:opacity-50"
                     >
                       {isDisabling ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
@@ -811,7 +1039,7 @@ export default function EditAgentPage() {
                     checked={autoReplyEnabled}
                     onChange={(e) => setAutoReplyEnabled(e.target.checked)}
                     disabled={isSystemAgent}
-                    className="w-5 h-5 mt-0.5 rounded border-border bg-accent text-purple-500 focus:ring-purple-500"
+                    className="w-5 h-5 mt-0.5 rounded border-border bg-accent text-purple-500 focus-visible:ring-purple-500"
                   />
                   <div>
                     <div className="font-medium text-foreground">Enable Auto-Reply</div>
@@ -833,7 +1061,7 @@ export default function EditAgentPage() {
                     rows={4}
                     placeholder="Best regards,&#10;{agent_name}"
                     className={cn(
-                      "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none",
+                      "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 resize-none",
                       isSystemAgent && "opacity-50 cursor-not-allowed"
                     )}
                   />
@@ -906,12 +1134,38 @@ export default function EditAgentPage() {
                 </p>
               </div>
             </div>
+            {/* Validation-errors hint takes priority over the dirty-tabs
+                hint when both apply — fixing errors is the user's next
+                action, not knowing where their edits are scattered. */}
+            {errorTabCount > 0 && !isUpdating && !saveSuccess ? (
+              <span
+                className="hidden sm:inline-flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400 mr-1"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                {errorTabCount === 1
+                  ? "1 tab has errors"
+                  : `${errorTabCount} tabs have errors`}
+              </span>
+            ) : dirtyTabCount > 0 && !isUpdating && !saveSuccess ? (
+              <span
+                className="hidden sm:inline-flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 mr-1"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                {dirtyTabCount === 1
+                  ? "1 tab has unsaved changes"
+                  : `${dirtyTabCount} tabs have unsaved changes`}
+              </span>
+            ) : null}
             <button
               onClick={handleSave}
-              disabled={!hasChanges || isUpdating}
+              disabled={!hasChanges || isUpdating || hasErrors}
               className={cn(
                 "flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm font-medium flex-shrink-0",
-                hasChanges
+                hasChanges && !hasErrors
                   ? "bg-purple-600 hover:bg-purple-700 text-white"
                   : "bg-accent text-muted-foreground cursor-not-allowed"
               )}
@@ -951,19 +1205,38 @@ export default function EditAgentPage() {
               {TABS.map((tab) => {
                 const Icon = tab.icon;
                 const isActive = activeTab === tab.id;
+                const isDirty = dirtyByTab[tab.id];
+                const hasError = errorsByTab[tab.id].length > 0;
                 return (
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
+                    aria-current={isActive ? "page" : undefined}
                     className={cn(
-                      "flex items-center gap-2 sm:gap-3 px-3 py-2 rounded-lg text-left transition whitespace-nowrap sm:w-full",
+                      "flex items-center gap-2 sm:gap-3 px-3 py-2 rounded-lg text-left transition whitespace-nowrap sm:w-full relative",
                       isActive
                         ? "bg-purple-500/20 text-purple-400"
                         : "text-muted-foreground hover:text-foreground hover:bg-accent"
                     )}
                   >
                     <Icon className="h-4 w-4 flex-shrink-0" />
-                    <span className="text-sm font-medium">{tab.label}</span>
+                    <span className="text-sm font-medium flex-1">{tab.label}</span>
+                    {/* Status dot: red when there are validation errors,
+                        amber when only dirty. Errors take priority since
+                        they block the save the user is about to attempt. */}
+                    {hasError ? (
+                      <span
+                        className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0"
+                        aria-label="validation errors"
+                        title={errorsByTab[tab.id].join("; ")}
+                      />
+                    ) : isDirty ? (
+                      <span
+                        className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0"
+                        aria-label="unsaved changes"
+                        title="Unsaved changes in this tab"
+                      />
+                    ) : null}
                   </button>
                 );
               })}
@@ -971,13 +1244,114 @@ export default function EditAgentPage() {
           </nav>
 
           {/* Tab content */}
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 space-y-4">
+            {/* Validation banner for the active tab — lists every error
+                inline. Rendered above the tab card so users see what to
+                fix without scrolling for the offending field. */}
+            {errorsByTab[activeTab].length > 0 ? (
+              <div
+                role="alert"
+                className="rounded-xl border border-red-500/40 bg-red-500/5 p-4 text-sm text-red-700 dark:text-red-300"
+              >
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1">
+                    <div className="font-medium mb-1">
+                      Fix these before saving
+                    </div>
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      {errorsByTab[activeTab].map((msg) => (
+                        <li key={msg}>{msg}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            {/* Threshold inversion is a footgun, not a blocker — surfaced
+                as a warning on the Behavior tab where it lives. */}
+            {activeTab === "behavior" && thresholdInverted ? (
+              <div
+                role="status"
+                className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 text-sm text-amber-700 dark:text-amber-300"
+              >
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1">
+                    <div className="font-medium mb-0.5">
+                      Approval threshold sits above confidence threshold
+                    </div>
+                    <p className="text-amber-600/90 dark:text-amber-300/90">
+                      The agent will auto-respond at{" "}
+                      {Math.round(confidenceThreshold * 100)}% confidence
+                      yet still require approval up to{" "}
+                      {Math.round(requireApprovalBelow * 100)}%. Drafts in
+                      that overlap will land in the inbox awaiting review
+                      instead of going out automatically. If that's
+                      intentional, ignore — otherwise lower the approval
+                      threshold to be at or below confidence.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <div className="bg-muted rounded-xl border border-border p-6">
               {renderTabContent()}
             </div>
           </div>
         </div>
       </main>
+
+      <ConfirmDialog
+        open={showDisableEmailConfirm}
+        onOpenChange={setShowDisableEmailConfirm}
+        title="Disable email for this agent?"
+        description={
+          agent?.email_address ? (
+            <>
+              The address{" "}
+              <span className="font-mono text-foreground">
+                {agent.email_address}
+              </span>{" "}
+              will be released. Any pending replies in the inbox stay archived
+              but the agent will no longer receive new messages. You can
+              re-enable email later, but the address may already be claimed
+              by another agent.
+            </>
+          ) : (
+            "The agent will stop receiving and replying to email. You can re-enable later."
+          )
+        }
+        confirmLabel="Disable email"
+        tone="danger"
+        isPending={isDisabling}
+        onConfirm={async () => {
+          try {
+            await disableEmail();
+            setEmailEnabled(false);
+          } catch (err) {
+            console.error("Failed to disable email:", err);
+            setError(err instanceof Error ? err.message : "Failed to disable email");
+          }
+        }}
+      />
+
+      {/* UX-EDT-025: Unsaved-changes guard. useRouteGuard captures
+          anchor-click navigations away from this page when hasChanges
+          is true; this dialog renders the user's choice. confirmPending
+          performs the navigation; cancelPending dismisses. */}
+      <ConfirmDialog
+        open={pendingHref !== null}
+        onOpenChange={(open) => {
+          if (!open) cancelPending();
+        }}
+        title="Leave with unsaved changes?"
+        description="You have edits in this form that haven't been saved. Leaving will discard them."
+        confirmLabel="Discard and leave"
+        cancelLabel="Stay on this page"
+        tone="warning"
+        onConfirm={confirmPending}
+      />
     </div>
   );
 }
