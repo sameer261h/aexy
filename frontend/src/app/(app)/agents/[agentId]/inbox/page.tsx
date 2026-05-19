@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -10,6 +10,8 @@ import {
   Send,
   AlertTriangle,
   Archive,
+  ArrowDown,
+  ArrowLeft,
   Clock,
   User,
   RefreshCw,
@@ -24,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import DOMPurify from "isomorphic-dompurify";
+import { toast } from "sonner";
 
 import { useWorkspace, useWorkspaceMembers } from "@/hooks/useWorkspace";
 import { useAgent } from "@/hooks/useAgents";
@@ -256,8 +259,61 @@ function MessageDetail({
   isArchiving: boolean;
   isProcessing: boolean;
 }) {
-  const [replyText, setReplyText] = useState("");
+  // Draft persistence — keyed per message so switching threads doesn't
+  // lose what the user typed. sessionStorage so the draft survives a
+  // page refresh but not a new browser session (matches the audit
+  // request in UX-INB-023 without persisting potentially-sensitive
+  // reply drafts beyond the tab's lifetime).
+  const draftKey = `inbox-draft:${message.id}`;
+  const [replyText, setReplyText] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return sessionStorage.getItem(draftKey) || "";
+  });
+  // Re-read the draft when the user navigates between messages.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setReplyText(sessionStorage.getItem(draftKey) || "");
+  }, [draftKey]);
+  // Persist on every change. Skip empty so we don't leave a key behind
+  // after the user clears the box.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (replyText) {
+      sessionStorage.setItem(draftKey, replyText);
+    } else {
+      sessionStorage.removeItem(draftKey);
+    }
+  }, [draftKey, replyText]);
+
   const [showEscalateModal, setShowEscalateModal] = useState(false);
+  // UX-INB-025: AI Analysis card is collapsible. Default open on
+  // pending messages, collapsed once the agent has responded /
+  // escalated so the body becomes the focus.
+  const [analysisOpen, setAnalysisOpen] = useState(message.status === "pending");
+  const replyTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Auto-grow the textarea up to a sensible cap. Reset to auto so a
+  // backspaced line shrinks the box back.
+  useEffect(() => {
+    const el = replyTextareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
+  }, [replyText]);
+
+  // Submit on Cmd/Ctrl+Enter from inside the textarea. The page-level
+  // keyboard handler explicitly bails out when the focused element is
+  // a textarea, so this shortcut and the global j/k don't conflict.
+  const handleReplyKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const isSubmit =
+      (e.metaKey || e.ctrlKey) && e.key === "Enter" && replyText.trim();
+    if (isSubmit) {
+      e.preventDefault();
+      onReply(replyText.trim());
+      setReplyText("");
+    }
+  };
+
   const status = statusConfig[message.status] || statusConfig.pending;
   const priority = priorityConfig[message.priority] || priorityConfig.normal;
 
@@ -298,41 +354,65 @@ function MessageDetail({
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto p-4">
-        {/* AI Analysis */}
+        {/* AI Analysis — collapsible. Default open on pending so users
+            see the AI triage immediately; collapsed once the agent
+            has acted so the body becomes the focus. UX-INB-025. */}
         {(message.classification || message.summary) && (
-          <div className="bg-purple-500/10 border border-purple-500/20 rounded-lg p-4 mb-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Sparkles className="h-4 w-4 text-purple-400" />
-              <span className="text-sm font-medium text-purple-300">AI Analysis</span>
+          <details
+            open={analysisOpen}
+            onToggle={(e) => setAnalysisOpen(e.currentTarget.open)}
+            className="bg-purple-500/10 border border-purple-500/20 rounded-lg mb-4 group"
+          >
+            <summary className="flex items-center gap-2 p-4 cursor-pointer list-none">
+              <Sparkles className="h-4 w-4 text-purple-500 dark:text-purple-400 shrink-0" />
+              <span className="text-sm font-medium text-purple-700 dark:text-purple-300">
+                AI Analysis
+              </span>
+              {message.summary && !analysisOpen ? (
+                <span className="text-xs text-purple-700/70 dark:text-purple-300/70 truncate">
+                  {message.summary}
+                </span>
+              ) : null}
               {message.confidence_score !== null && (
-                <span className="text-xs text-purple-400 ml-auto">
+                <span className="text-xs text-purple-700 dark:text-purple-400 ml-auto shrink-0">
                   {Math.round(message.confidence_score * 100)}% confidence
                 </span>
               )}
+              <ChevronRight
+                className={cn(
+                  "h-4 w-4 text-purple-500 dark:text-purple-400 transition-transform shrink-0",
+                  analysisOpen && "rotate-90",
+                )}
+              />
+            </summary>
+            <div className="px-4 pb-4 -mt-1 space-y-2">
+              {message.summary ? (
+                <p className="text-sm text-foreground">{message.summary}</p>
+              ) : null}
+              {message.classification && (
+                <div className="flex flex-wrap gap-2 text-xs">
+                  {message.classification.sentiment && (
+                    <ClassificationPill
+                      label="Sentiment"
+                      value={String(message.classification.sentiment)}
+                    />
+                  )}
+                  {message.classification.urgency && (
+                    <ClassificationPill
+                      label="Urgency"
+                      value={String(message.classification.urgency)}
+                    />
+                  )}
+                  {message.classification.intent && (
+                    <ClassificationPill
+                      label="Intent"
+                      value={String(message.classification.intent)}
+                    />
+                  )}
+                </div>
+              )}
             </div>
-            {message.summary && (
-              <p className="text-sm text-foreground mb-2">{message.summary}</p>
-            )}
-            {message.classification && (
-              <div className="flex flex-wrap gap-2 text-xs">
-                {message.classification.sentiment && (
-                  <span className="px-2 py-1 bg-accent rounded text-foreground">
-                    Sentiment: {message.classification.sentiment}
-                  </span>
-                )}
-                {message.classification.urgency && (
-                  <span className="px-2 py-1 bg-accent rounded text-foreground">
-                    Urgency: {message.classification.urgency}
-                  </span>
-                )}
-                {message.classification.intent && (
-                  <span className="px-2 py-1 bg-accent rounded text-foreground">
-                    Intent: {message.classification.intent}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
+          </details>
         )}
 
         {/* Email Body — body_html is attacker-controlled (the sender wrote
@@ -356,28 +436,58 @@ function MessageDetail({
           )}
         </div>
 
-        {/* Suggested Response */}
+        {/* Suggested Response — UX-INB-024: prior version was a one-click
+            commit ("Send Suggested Response") with no edit step. Users
+            who wanted to tweak the AI suggestion had to copy-paste it
+            manually. Now the primary action loads it into the reply
+            textarea so the user can edit before sending; a secondary
+            "Send as-is" preserves the original behavior for users who
+            trust the suggestion verbatim. */}
         {message.suggested_response && message.status === "pending" && (
           <div className="mt-6 bg-green-500/10 border border-green-500/20 rounded-lg p-4">
             <div className="flex items-center gap-2 mb-3">
-              <Sparkles className="h-4 w-4 text-green-400" />
-              <span className="text-sm font-medium text-green-300">Suggested Response</span>
+              <Sparkles className="h-4 w-4 text-green-500 dark:text-green-400" />
+              <span className="text-sm font-medium text-green-700 dark:text-green-300">
+                Suggested Response
+              </span>
             </div>
             <p className="text-sm text-foreground whitespace-pre-wrap mb-4">
               {message.suggested_response}
             </p>
-            <button
-              onClick={() => onReply(message.suggested_response!, true)}
-              disabled={isReplying}
-              className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors disabled:opacity-50"
-            >
-              {isReplying ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
-              Send Suggested Response
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => {
+                  setReplyText(message.suggested_response ?? "");
+                  // Focus + scroll the textarea into view so the user lands
+                  // on the editable surface, not the action button they
+                  // just clicked.
+                  requestAnimationFrame(() => {
+                    const el = replyTextareaRef.current;
+                    if (!el) return;
+                    el.focus();
+                    el.setSelectionRange(el.value.length, el.value.length);
+                    el.scrollIntoView({ block: "nearest" });
+                  });
+                }}
+                disabled={isReplying}
+                className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors disabled:opacity-50 text-sm font-medium"
+              >
+                <ArrowDown className="h-4 w-4" />
+                Edit in reply
+              </button>
+              <button
+                onClick={() => onReply(message.suggested_response!, true)}
+                disabled={isReplying}
+                className="flex items-center gap-2 px-3 py-2 border border-green-500/40 text-green-700 dark:text-green-300 rounded-lg hover:bg-green-500/10 transition-colors disabled:opacity-50 text-sm font-medium"
+              >
+                {isReplying ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
+                Send as-is
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -400,21 +510,40 @@ function MessageDetail({
             </button>
           )}
 
-          <div className="space-y-3">
+          <div className="space-y-2">
             <textarea
               id="reply-textarea"
               data-reply-textarea
+              ref={replyTextareaRef}
               value={replyText}
               onChange={(e) => setReplyText(e.target.value)}
+              onKeyDown={handleReplyKeyDown}
               placeholder="Write a custom reply..."
-              className="w-full bg-accent border border-border rounded-lg px-3 py-2 text-foreground text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+              // resize-none + autosize effect for a tidy single-handle UX
+              // (no manual drag handle showing). min-height keeps the box
+              // a comfortable two lines even when empty; effect caps at
+              // 320px so a very long draft scrolls inside the textarea.
+              className="w-full bg-accent border border-border rounded-lg px-3 py-2 text-foreground text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[72px]"
               rows={3}
             />
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground/80">
+              <span>
+                <kbd className="px-1 py-0.5 bg-background border border-border rounded font-mono text-[10px]">
+                  ⌘/Ctrl
+                </kbd>
+                {" + "}
+                <kbd className="px-1 py-0.5 bg-background border border-border rounded font-mono text-[10px]">
+                  Enter
+                </kbd>
+                {" to send"}
+              </span>
+              {replyText.trim() ? <span>Draft saved</span> : null}
+            </div>
             <div className="flex gap-2">
               <button
                 onClick={() => {
                   if (replyText.trim()) {
-                    onReply(replyText);
+                    onReply(replyText.trim());
                     setReplyText("");
                   }
                 }}
@@ -865,9 +994,28 @@ export default function AgentInboxPage() {
 
   const handleArchive = async () => {
     if (!selectedMessageId) return;
+    // Capture the subject before the row vanishes so the toast can
+    // reference it. UX-INB-022: the audit asked for a 5s undo toast,
+    // but the backend doesn't expose an unarchive endpoint yet — so
+    // this is a confirmation toast + "View archive" affordance until
+    // the inverse mutation lands. The Undo behavior is tracked in the
+    // tracker as a deferred bet that needs backend work.
+    const archived = messages.find((m) => m.id === selectedMessageId);
     await archiveMessage(selectedMessageId);
     setSelectedMessageId(null);
     refetch();
+    toast.success(
+      archived?.subject
+        ? `Archived "${archived.subject.slice(0, 60)}"`
+        : "Message archived",
+      {
+        duration: 4000,
+        action: {
+          label: "View archive",
+          onClick: () => setStatusFilter("archived"),
+        },
+      },
+    );
   };
 
   const handleProcess = async () => {
@@ -971,8 +1119,16 @@ export default function AgentInboxPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-200px)]">
-            {/* Message List */}
-            <div className="lg:col-span-1 bg-muted border border-border rounded-xl overflow-hidden flex flex-col">
+            {/* Message List — on mobile, hidden when a message is open
+                so the detail view gets the full viewport. The "Back to
+                inbox" affordance in MessageDetail's header brings it
+                back. UX-INB-029. */}
+            <div
+              className={cn(
+                "lg:col-span-1 bg-muted border border-border rounded-xl overflow-hidden flex flex-col",
+                selectedMessageId ? "hidden lg:flex" : "flex",
+              )}
+            >
               {/* List header: select-all + count / shortcuts hint. Doubles
                   as the bulk action bar when a selection is active. */}
               {checkedIds.size > 0 ? (
@@ -1072,22 +1228,47 @@ export default function AgentInboxPage() {
               </div>
             </div>
 
-            {/* Message Detail */}
-            <div className="lg:col-span-2 bg-muted border border-border rounded-xl overflow-hidden">
+            {/* Message Detail — on mobile, only rendered when a message
+                is selected. The list takes the full viewport otherwise. */}
+            <div
+              className={cn(
+                "lg:col-span-2 bg-muted border border-border rounded-xl overflow-hidden flex flex-col",
+                selectedMessage ? "flex" : "hidden lg:flex",
+              )}
+            >
               {selectedMessage ? (
-                <MessageDetail
-                  message={selectedMessage}
-                  agentId={agentId}
-                  workspaceId={workspaceId}
-                  onReply={handleReply}
-                  onEscalate={handleEscalate}
-                  onArchive={handleArchive}
-                  onProcess={handleProcess}
-                  isReplying={isReplying}
-                  isEscalating={isEscalating}
-                  isArchiving={isArchiving}
-                  isProcessing={isProcessing}
-                />
+                <>
+                  {/* Mobile back affordance — only visible on <lg
+                      because the desktop layout always shows both
+                      panes side-by-side. Tapping it deselects the
+                      message which the parent grid uses to swap
+                      visibility. */}
+                  <div className="lg:hidden flex items-center px-3 py-2 border-b border-border">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedMessageId(null)}
+                      className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground px-2 py-1 rounded-md hover:bg-accent transition-colors"
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                      Inbox
+                    </button>
+                  </div>
+                  <div className="flex-1 min-h-0">
+                    <MessageDetail
+                      message={selectedMessage}
+                      agentId={agentId}
+                      workspaceId={workspaceId}
+                      onReply={handleReply}
+                      onEscalate={handleEscalate}
+                      onArchive={handleArchive}
+                      onProcess={handleProcess}
+                      isReplying={isReplying}
+                      isEscalating={isEscalating}
+                      isArchiving={isArchiving}
+                      isProcessing={isProcessing}
+                    />
+                  </div>
+                </>
               ) : (
                 <div className="flex items-center justify-center h-full text-muted-foreground">
                   <div className="text-center">
@@ -1177,5 +1358,41 @@ function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
         </ul>
       </div>
     </div>
+  );
+}
+
+/**
+ * Colored pill for the AI Analysis classification chips. Tones the
+ * background and text by the sentiment / urgency / intent value so a
+ * "negative" sentiment doesn't read identical to a "positive" one —
+ * the prior implementation used the same flat `bg-accent` for all
+ * three.
+ */
+function ClassificationPill({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  const v = value.toLowerCase();
+  const tone =
+    v === "negative" || v === "urgent" || v === "high" || v === "angry"
+      ? "bg-red-500/15 text-red-700 dark:text-red-300"
+      : v === "positive" || v === "low" || v === "happy"
+        ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+        : v === "neutral" || v === "normal" || v === "medium"
+          ? "bg-blue-500/15 text-blue-700 dark:text-blue-300"
+          : "bg-accent text-foreground";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 px-2 py-1 rounded font-medium",
+        tone,
+      )}
+    >
+      <span className="text-muted-foreground font-normal">{label}:</span>
+      <span className="capitalize">{value}</span>
+    </span>
   );
 }
