@@ -964,7 +964,16 @@ export default function EditAgentPage() {
 
                 <div className="flex justify-end gap-2">
                   <button
-                    onClick={() => setShowEmailSetup(false)}
+                    // UX-EDT-027: Cancel clears the draft handle +
+                    // domain so reopening the panel starts from the
+                    // user's persisted state, not whatever they typed
+                    // and abandoned. The prior implementation left the
+                    // draft latent which read as a UI bug.
+                    onClick={() => {
+                      setShowEmailSetup(false);
+                      setNewEmailHandle("");
+                      setNewEmailDomain("");
+                    }}
                     className="px-4 py-2 text-muted-foreground hover:text-foreground transition-colors"
                   >
                     Cancel
@@ -1183,6 +1192,13 @@ export default function EditAgentPage() {
             <button
               onClick={handleSave}
               disabled={!hasChanges || isUpdating || hasErrors}
+              // UX-EDT-026: aria-label always carries the resolved
+              // state so SR users + mobile (icon-only) users don't see
+              // an ambiguous Save vs Saving vs Saved.
+              aria-label={
+                isUpdating ? "Saving changes" : saveSuccess ? "Changes saved" : "Save changes"
+              }
+              title={isUpdating ? "Saving..." : saveSuccess ? "Saved!" : "Save changes"}
               className={cn(
                 "flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition text-sm font-medium flex-shrink-0",
                 hasChanges && !hasErrors
@@ -1192,17 +1208,17 @@ export default function EditAgentPage() {
             >
               {isUpdating ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
                   <span className="hidden sm:inline">Saving...</span>
                 </>
               ) : saveSuccess ? (
                 <>
-                  <Check className="h-4 w-4" />
+                  <Check className="h-4 w-4" aria-hidden />
                   <span className="hidden sm:inline">Saved!</span>
                 </>
               ) : (
                 <>
-                  <Save className="h-4 w-4" />
+                  <Save className="h-4 w-4" aria-hidden />
                   <span className="hidden sm:inline">Save Changes</span>
                 </>
               )}

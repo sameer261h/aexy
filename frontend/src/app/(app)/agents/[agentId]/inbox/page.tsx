@@ -827,6 +827,19 @@ export default function AgentInboxPage() {
 
   const selectedMessage = messages.find((m) => m.id === selectedMessageId);
 
+  // UX-INB-030: per-status counts on the filter dropdown. Only
+  // populated when the user is on the unfiltered "All Status" view
+  // since that's the only state where we have every message in
+  // `messages`. When a status is selected the dropdown shows labels
+  // only — the count would lie since we only fetched one slice.
+  const statusCounts = useMemo<Record<string, number> | null>(() => {
+    if (statusFilter) return null;
+    return messages.reduce<Record<string, number>>((acc, m) => {
+      acc[m.status] = (acc[m.status] ?? 0) + 1;
+      return acc;
+    }, {});
+  }, [messages, statusFilter]);
+
   // Drop any checked ids that vanished after a filter change / refetch so
   // the bulk bar's count stays accurate.
   useEffect(() => {
@@ -1095,14 +1108,27 @@ export default function AgentInboxPage() {
               <select
                 value={statusFilter || ""}
                 onChange={(e) => setStatusFilter(e.target.value || undefined)}
+                aria-label="Filter by status"
                 className="bg-accent border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
               >
-                <option value="">All Status</option>
-                <option value="pending">Pending</option>
-                <option value="processing">Processing</option>
-                <option value="responded">Responded</option>
-                <option value="escalated">Escalated</option>
-                <option value="archived">Archived</option>
+                <option value="">
+                  All Status{statusCounts ? ` (${messages.length})` : ""}
+                </option>
+                <option value="pending">
+                  Pending{statusCounts?.pending !== undefined ? ` (${statusCounts.pending})` : ""}
+                </option>
+                <option value="processing">
+                  Processing{statusCounts?.processing !== undefined ? ` (${statusCounts.processing})` : ""}
+                </option>
+                <option value="responded">
+                  Responded{statusCounts?.responded !== undefined ? ` (${statusCounts.responded})` : ""}
+                </option>
+                <option value="escalated">
+                  Escalated{statusCounts?.escalated !== undefined ? ` (${statusCounts.escalated})` : ""}
+                </option>
+                <option value="archived">
+                  Archived{statusCounts?.archived !== undefined ? ` (${statusCounts.archived})` : ""}
+                </option>
               </select>
               <button
                 onClick={() => refetch()}
