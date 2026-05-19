@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { safeInternalPath, stashPostLoginRedirect } from "@/lib/oauth";
+import { setAuthPresenceCookie } from "@/lib/authCookie";
 import {
   ArrowRight,
   BarChart3,
@@ -135,6 +136,13 @@ export default function Home() {
     const nextPath = safeInternalPath(rawNext);
     const token = localStorage.getItem("token");
     if (token) {
+      // Sync the middleware-visible presence cookie BEFORE redirecting.
+      // Without this, the middleware (which can't read localStorage) sees
+      // no `aexy_authed` cookie, bounces `/dashboard` back here with
+      // `?next=/dashboard`, and we re-enter this branch — infinite loop
+      // on the black loader. If the token is stale, the dashboard's
+      // useAuth /me call will 401 and the (app) layout clears both.
+      setAuthPresenceCookie();
       router.replace(nextPath ?? "/dashboard");
     } else {
       if (nextPath) stashPostLoginRedirect(nextPath);

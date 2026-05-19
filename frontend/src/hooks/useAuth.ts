@@ -5,22 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { developerApi, repositoriesApi, Developer } from "@/lib/api";
 import { consumePostLoginRedirect } from "@/lib/oauth";
-
-// Cookie used solely as a *presence* signal for the Next.js middleware so
-// it can avoid rendering the authenticated shell to logged-out users.
-// Not httpOnly (must be readable by JS to keep in sync with localStorage)
-// and not load-bearing for actual auth — the JWT in localStorage is.
-const AUTH_PRESENCE_COOKIE = "aexy_authed";
-
-function setAuthPresenceCookie(): void {
-  if (typeof document === "undefined") return;
-  document.cookie = `${AUTH_PRESENCE_COOKIE}=1; path=/; SameSite=Lax`;
-}
-
-function clearAuthPresenceCookie(): void {
-  if (typeof document === "undefined") return;
-  document.cookie = `${AUTH_PRESENCE_COOKIE}=; path=/; SameSite=Lax; max-age=0`;
-}
+import { setAuthPresenceCookie, clearAuthPresenceCookie } from "@/lib/authCookie";
 
 export function useAuth() {
   const router = useRouter();
