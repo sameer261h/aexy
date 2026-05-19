@@ -313,12 +313,17 @@ export function FieldPicker({
               e.stopPropagation();
               onChange("");
             }}
+            aria-label="Clear field"
+            title="Clear"
             className="text-muted-foreground hover:text-foreground"
           >
-            <X className="h-4 w-4" />
+            <X className="h-4 w-4" aria-hidden />
           </button>
         )}
-        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`} />
+        <ChevronDown
+          aria-hidden
+          className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`}
+        />
       </div>
 
       {/* Dropdown */}

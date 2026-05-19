@@ -24,6 +24,7 @@ import {
   Loader2,
   Keyboard,
   X,
+  Copy,
 } from "lucide-react";
 import DOMPurify from "isomorphic-dompurify";
 import { toast } from "sonner";
@@ -1119,15 +1120,52 @@ export default function AgentInboxPage() {
             </Link>
           </div>
         ) : messages.length === 0 ? (
-          <div className="text-center py-12">
-            <MailOpen className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <h2 className="text-lg font-medium text-foreground mb-2">No Messages</h2>
-            <p className="text-muted-foreground">
-              {statusFilter
-                ? `No ${statusFilter} messages found.`
-                : "This inbox is empty. Send an email to start."}
-            </p>
-          </div>
+          // UX-INB-028: when the global inbox is empty, surface the
+          // agent's email address as a copy-friendly affordance. Without
+          // this users had to scroll up to the header to find where to
+          // send mail to in the first place — the empty state ended up
+          // being a dead-end. Filtered-empty (statusFilter set) keeps
+          // the terser copy because the address is already visible
+          // above and the user is mid-triage.
+          statusFilter ? (
+            <div className="text-center py-12">
+              <MailOpen className="h-12 w-12 text-muted-foreground mx-auto mb-4" aria-hidden />
+              <h2 className="text-lg font-medium text-foreground mb-2">No Messages</h2>
+              <p className="text-muted-foreground">
+                {`No ${statusFilter} messages found.`}
+              </p>
+            </div>
+          ) : (
+            <div className="text-center py-12 max-w-md mx-auto">
+              <MailOpen className="h-12 w-12 text-muted-foreground mx-auto mb-4" aria-hidden />
+              <h2 className="text-lg font-medium text-foreground mb-2">Send the first email</h2>
+              <p className="text-muted-foreground mb-4">
+                This inbox is empty. Forward or send mail to the address
+                below — the agent picks up new messages every few seconds.
+              </p>
+              {agent?.email_address ? (
+                <div className="inline-flex items-center gap-2 bg-muted border border-border rounded-lg px-3 py-2">
+                  <code className="text-sm text-foreground font-mono select-all">
+                    {agent.email_address}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (typeof navigator !== "undefined" && navigator.clipboard) {
+                        navigator.clipboard.writeText(agent.email_address || "");
+                        toast.success("Email address copied");
+                      }
+                    }}
+                    aria-label="Copy inbox email address"
+                    title="Copy address"
+                    className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors focus-visible:ring-2 focus-visible:ring-blue-500"
+                  >
+                    <Copy className="h-4 w-4" aria-hidden />
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          )
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-200px)]">
             {/* Message List — on mobile, hidden when a message is open
@@ -1300,15 +1338,14 @@ export default function AgentInboxPage() {
   );
 }
 
+// UX-INB-021: ShortcutsOverlay was a raw fixed-inset div with a manual
+// Escape handler that fought the page-level keyboard nav for focus and
+// Esc handling. Migrated to the Radix Dialog primitive — focus trap,
+// scroll lock, Esc serialization, and aria-modal all come from Radix,
+// and the page-level keydown handler bails out the moment focus is in
+// a dialog (Radix dispatches a portal).
 function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
   const ti = useTranslations("inbox.shortcuts");
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
 
   const rows: { keys: string[]; label: string }[] = [
     { keys: ["j", "↓"], label: ti("nextMessage") },
@@ -1321,33 +1358,17 @@ function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
   ];
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-sm bg-muted border border-border rounded-xl p-5 shadow-2xl"
-      >
-        <div className="flex items-center justify-between mb-4">
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
           <div className="flex items-center gap-2">
-            <Keyboard className="h-4 w-4 text-foreground" />
-            <h2 className="text-sm font-semibold text-foreground">
+            <Keyboard className="h-4 w-4 text-foreground" aria-hidden />
+            <DialogTitle className="text-sm font-semibold">
               {ti("title")}
-            </h2>
+            </DialogTitle>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1 text-muted-foreground hover:text-foreground rounded transition-colors"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <ul className="space-y-1.5">
+        </DialogHeader>
+        <ul className="space-y-1.5 pt-1">
           {rows.map(({ keys, label }) => (
             <li
               key={label}
@@ -1367,8 +1388,8 @@ function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
             </li>
           ))}
         </ul>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
