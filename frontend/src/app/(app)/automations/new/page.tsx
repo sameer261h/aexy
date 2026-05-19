@@ -2,13 +2,13 @@
 
 import { useState, useCallback } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { ChevronLeft, Sparkles } from "lucide-react";
+import { ChevronLeft, Loader2, Sparkles } from "lucide-react";
 import { Node, Edge } from "@xyflow/react";
 
 import { useWorkspace } from "@/hooks/useWorkspace";
-import { WorkflowCanvas } from "@/components/workflow-builder";
 import { api, AutomationModule } from "@/lib/api";
 import {
   AUTOMATION_TEMPLATES,
@@ -19,6 +19,24 @@ import {
   moduleLabels,
 } from "@/lib/automationTemplates";
 import { TemplateGallery } from "@/components/automations/TemplateGallery";
+
+// WorkflowCanvas drags in @xyflow/react + 7 node components (~150 KB). It
+// only matters when the user actually opens the canvas — both the
+// template gallery first-run path AND the early `if (!workspaceId)`
+// skeleton avoid loading it. Lazy-import via dynamic() so the bundle
+// only ships when we're sure we need it.
+const WorkflowCanvas = dynamic(
+  () => import("@/components/workflow-builder").then((m) => m.WorkflowCanvas),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-full flex items-center justify-center text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin mr-2" />
+        Loading canvas...
+      </div>
+    ),
+  },
+);
 
 export default function NewAutomationPage() {
   const t = useTranslations("automations");

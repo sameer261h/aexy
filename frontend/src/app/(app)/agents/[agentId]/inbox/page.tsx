@@ -23,12 +23,22 @@ import {
   Keyboard,
   X,
 } from "lucide-react";
-import { useWorkspace } from "@/hooks/useWorkspace";
+import DOMPurify from "isomorphic-dompurify";
+
+import { useWorkspace, useWorkspaceMembers } from "@/hooks/useWorkspace";
 import { useAgent } from "@/hooks/useAgents";
 import { useAgentInbox, useAgentInboxMessage } from "@/hooks/useAgentInbox";
 import { AgentInboxMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 const statusConfig = {
   pending: {
@@ -325,10 +335,22 @@ function MessageDetail({
           </div>
         )}
 
-        {/* Email Body */}
+        {/* Email Body — body_html is attacker-controlled (the sender wrote
+            it), so we MUST sanitize before rendering. DOMPurify with the
+            default config strips <script>, <iframe>, event handlers, and
+            javascript: URLs. We also explicitly forbid forms + external
+            stylesheets to keep phishing surfaces narrow. */}
         <div className="prose prose-sm prose-invert max-w-none">
           {message.body_html ? (
-            <div dangerouslySetInnerHTML={{ __html: message.body_html }} />
+            <div
+              dangerouslySetInnerHTML={{
+                __html: DOMPurify.sanitize(message.body_html, {
+                  USE_PROFILES: { html: true },
+                  FORBID_TAGS: ["form", "input", "button", "style"],
+                  FORBID_ATTR: ["style"],
+                }),
+              }}
+            />
           ) : (
             <p className="whitespace-pre-wrap">{message.body_text}</p>
           )}
@@ -380,6 +402,8 @@ function MessageDetail({
 
           <div className="space-y-3">
             <textarea
+              id="reply-textarea"
+              data-reply-textarea
               value={replyText}
               onChange={(e) => setReplyText(e.target.value)}
               placeholder="Write a custom reply..."
@@ -445,7 +469,168 @@ function MessageDetail({
           </div>
         </div>
       )}
+
+      <EscalateDialog
+        open={showEscalateModal}
+        onOpenChange={setShowEscalateModal}
+        workspaceId={workspaceId}
+        isEscalating={isEscalating}
+        onSubmit={(escalateTo, note) => {
+          onEscalate(escalateTo, note);
+          setShowEscalateModal(false);
+        }}
+      />
     </div>
+  );
+}
+
+function EscalateDialog({
+  open,
+  onOpenChange,
+  workspaceId,
+  isEscalating,
+  onSubmit,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  workspaceId: string;
+  isEscalating: boolean;
+  onSubmit: (escalateTo: string, note?: string) => void;
+}) {
+  const ti = useTranslations("inbox.escalate");
+  const { members } = useWorkspaceMembers(workspaceId);
+  const [escalateTo, setEscalateTo] = useState("");
+  const [note, setNote] = useState("");
+
+  // Reset state when the dialog closes so the next escalation starts fresh.
+  useEffect(() => {
+    if (!open) {
+      setEscalateTo("");
+      setNote("");
+    }
+  }, [open]);
+
+  // Workspace members with an email + a non-removed status are the
+  // candidate set. We sort by name for stable ordering and dedupe by
+  // email — a single physical person should only appear once even if
+  // they hold multiple workspace rows.
+  const candidates = useMemo(() => {
+    if (!members) return [];
+    const seen = new Set<string>();
+    return members
+      .filter((m) => m.status === "active" && !!m.developer_email)
+      .filter((m) => {
+        const email = m.developer_email!.toLowerCase();
+        if (seen.has(email)) return false;
+        seen.add(email);
+        return true;
+      })
+      .sort((a, b) => {
+        const an = a.developer_name || a.developer_email || "";
+        const bn = b.developer_name || b.developer_email || "";
+        return an.localeCompare(bn);
+      });
+  }, [members]);
+
+  const isValid = escalateTo.trim().length > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={isEscalating ? undefined : onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <div className="flex items-start gap-3">
+            <div className="rounded-full p-2 shrink-0 bg-orange-500/15">
+              <ArrowUpRight className="h-5 w-5 text-orange-500 dark:text-orange-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <DialogTitle>{ti("title")}</DialogTitle>
+              <DialogDescription className="mt-1.5">
+                {ti("description")}
+              </DialogDescription>
+            </div>
+          </div>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div>
+            <label
+              htmlFor="escalate-to"
+              className="block text-sm font-medium text-foreground mb-1.5"
+            >
+              {ti("assigneeLabel")}
+            </label>
+            {/* Combined input: a datalist-backed text input lets users
+                either pick a teammate from the workspace roster or type
+                an arbitrary email (oncall@, manager@) without forcing
+                the latter through a separate "custom" toggle. */}
+            <input
+              id="escalate-to"
+              type="text"
+              list="escalate-candidates"
+              value={escalateTo}
+              onChange={(e) => setEscalateTo(e.target.value)}
+              placeholder={ti("assigneePlaceholder")}
+              autoFocus
+              autoComplete="off"
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+            />
+            <datalist id="escalate-candidates">
+              {candidates.map((m) => (
+                <option
+                  key={m.id}
+                  value={m.developer_email ?? ""}
+                  label={m.developer_name ?? undefined}
+                />
+              ))}
+            </datalist>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {ti("assigneeHint")}
+            </p>
+          </div>
+
+          <div>
+            <label
+              htmlFor="escalate-note"
+              className="block text-sm font-medium text-foreground mb-1.5"
+            >
+              {ti("noteLabel")}
+            </label>
+            <textarea
+              id="escalate-note"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder={ti("notePlaceholder")}
+              rows={3}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none"
+            />
+          </div>
+        </div>
+
+        <DialogFooter className="gap-2">
+          <button
+            type="button"
+            onClick={() => onOpenChange(false)}
+            disabled={isEscalating}
+            className="px-4 py-2 text-sm font-medium rounded-lg border border-border text-foreground hover:bg-accent disabled:opacity-50 transition-colors"
+          >
+            {ti("cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={() => onSubmit(escalateTo.trim(), note.trim() || undefined)}
+            disabled={!isValid || isEscalating}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-orange-600 hover:bg-orange-700 text-white disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+          >
+            {isEscalating ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <ArrowUpRight className="h-4 w-4" />
+            )}
+            {ti("submit")}
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -627,6 +812,22 @@ export default function AgentInboxPage() {
           if (checkedIds.size > 0) {
             e.preventDefault();
             clearChecked();
+          }
+          break;
+        case "r":
+          // Focus the reply textarea for the currently-open message.
+          // Only meaningful when a message is selected AND it's still
+          // pending (responded/escalated/archived rows don't render the
+          // reply box).
+          if (selectedMessageId) {
+            e.preventDefault();
+            const reply = document.querySelector<HTMLTextAreaElement>(
+              "[data-reply-textarea]",
+            );
+            if (reply) {
+              reply.focus();
+              reply.scrollIntoView({ block: "nearest" });
+            }
           }
           break;
         case "?":
@@ -922,6 +1123,7 @@ function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
     { keys: ["k", "↑"], label: ti("prevMessage") },
     { keys: ["x"], label: ti("toggleSelect") },
     { keys: ["e"], label: ti("archive") },
+    { keys: ["r"], label: ti("reply") },
     { keys: ["esc"], label: ti("clearOrClose") },
     { keys: ["?"], label: ti("toggleOverlay") },
   ];

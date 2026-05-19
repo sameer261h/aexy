@@ -1,7 +1,13 @@
 import axios from "axios";
+import { toast } from "sonner";
 import { clearAuthPresenceCookie } from "./authCookie";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+
+// Module-level latch so a burst of concurrent 401s (e.g. five queries
+// firing in parallel after a token expires) only renders one toast +
+// one redirect, not five stacked.
+let sessionExpiredHandled = false;
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -48,8 +54,20 @@ api.interceptors.response.use(
         const isProtected = PROTECTED_PATH_PREFIXES.some(
           (prefix) => path === prefix || path.startsWith(`${prefix}/`)
         );
-        if (isProtected) {
-          window.location.href = "/";
+        if (isProtected && !sessionExpiredHandled) {
+          sessionExpiredHandled = true;
+          // Tell the user before we yank them away. The toast renders
+          // synchronously; the redirect is delayed by a beat so the
+          // message has a chance to land.
+          toast.error("Your session expired. Please sign in again.", {
+            duration: 4000,
+          });
+          // Preserve where they were so post-login can drop them back
+          // into the same workspace surface.
+          const next = encodeURIComponent(path + window.location.search);
+          setTimeout(() => {
+            window.location.href = `/?next=${next}`;
+          }, 600);
         }
       }
     }

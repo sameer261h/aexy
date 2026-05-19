@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Check, Loader2, AlertCircle } from "lucide-react";
@@ -8,8 +9,24 @@ import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Node, Edge } from "@xyflow/react";
 
 import { useWorkspace } from "@/hooks/useWorkspace";
-import { WorkflowCanvas } from "@/components/workflow-builder";
 import { api, AutomationModule } from "@/lib/api";
+
+// WorkflowCanvas + @xyflow/react together are ~150 KB. Defer the load
+// so the detail page's metadata (name / description / module) renders
+// without paying that cost upfront. Matches the dynamic-import in
+// automations/new/page.tsx.
+const WorkflowCanvas = dynamic(
+  () => import("@/components/workflow-builder").then((m) => m.WorkflowCanvas),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-full flex items-center justify-center text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin mr-2" />
+        Loading canvas...
+      </div>
+    ),
+  },
+);
 
 const moduleLabels: Record<AutomationModule, string> = {
   crm: "CRM",

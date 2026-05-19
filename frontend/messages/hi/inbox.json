@@ -48,6 +48,7 @@
       "prevMessage": "पिछला संदेश",
       "toggleSelect": "चयन टॉगल करें",
       "archive": "संग्रह करें",
+      "reply": "जवाब पर फ़ोकस",
       "clearOrClose": "चयन साफ़ करें / बंद करें",
       "toggleOverlay": "इस ओवरले को टॉगल करें"
     },
@@ -70,6 +71,18 @@
       "title": "Email अभी कनेक्ट नहीं है",
       "description": "संदेश प्राप्त करने और जवाब देने के लिए agent के email चैनल को कॉन्फ़िगर करें।",
       "cta": "Email कॉन्फ़िगर करें"
+    },
+
+    "escalate": {
+      "title": "इस संदेश को एस्केलेट करें",
+      "description": "इसे एक साथी या साझा मेलबॉक्स को सौंपें। उन्हें आपके note के साथ एक सूचना मिलेगी।",
+      "assigneeLabel": "किसे भेजें",
+      "assigneePlaceholder": "teammate@company.com",
+      "assigneeHint": "अपने workspace से किसी को चुनें या कोई भी email टाइप करें - oncall@, manager@, आदि।",
+      "noteLabel": "Note (वैकल्पिक)",
+      "notePlaceholder": "आप इसे क्यों एस्केलेट कर रहे हैं? असाइनी के लिए संदर्भ जोड़ें।",
+      "cancel": "रद्द करें",
+      "submit": "एस्केलेट करें"
     }
   }
 }
