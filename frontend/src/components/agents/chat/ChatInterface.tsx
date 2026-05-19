@@ -113,9 +113,17 @@ export function ChatInterface({
             </div>
           )}
 
-          {/* Messages */}
+          {/* Messages — pass onResend down so user messages get a
+              re-fire affordance. ChatInterface holds the canonical
+              send pipeline; MessageBubble doesn't need to know about
+              isSending — onResend itself is the same surface as the
+              chat input would call. */}
           {messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
+            <MessageBubble
+              key={message.id}
+              message={message}
+              onResend={message.role === "user" && !isSending ? handleSend : undefined}
+            />
           ))}
 
           {/* Thinking indicator when sending */}

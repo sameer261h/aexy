@@ -1009,6 +1009,9 @@ export default function AgentDetailPage() {
                   <RefreshCw className="h-4 w-4" />
                 </button>
               </div>
+              {/* 600px = ~10 execution rows at typical row height.
+                  Past that the panel scrolls; the user opens the full
+                  Executions sheet from the toolbar for deeper paging. */}
               <div className="p-4 space-y-2 max-h-[600px] overflow-y-auto">
                 {executionsLoading ? (
                   <div className="text-center py-8">

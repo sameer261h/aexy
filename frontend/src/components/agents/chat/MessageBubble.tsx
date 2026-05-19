@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Bot, Check, Copy, User } from "lucide-react";
+import { Bot, Check, Copy, RotateCw, User } from "lucide-react";
 import { useLocale } from "next-intl";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -13,6 +13,11 @@ import { ThinkingIndicator } from "./ThinkingIndicator";
 
 interface MessageBubbleProps {
   message: AgentMessage;
+  /** Optional resend handler. When provided, user messages render
+   *  a small "Resend" button that re-fires the same prompt as a new
+   *  user message. Edit happens in the input field after — once the
+   *  text is dropped in, the user can tweak and send. */
+  onResend?: (content: string) => void;
 }
 
 function formatTime(dateString: string, locale: string): string {
@@ -139,7 +144,7 @@ function CopyButton({ content }: { content: string }) {
   );
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, onResend }: MessageBubbleProps) {
   const locale = useLocale();
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
@@ -180,13 +185,31 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             </div>
             <div className="flex items-center gap-1 mt-1">
               <CopyButton content={message.content} />
+              {/* UX-CHAT-007: Resend on user messages. Re-fires the
+                  same prompt as a NEW user message (additive, never
+                  destructive — no backend delete needed). Users wanting
+                  to edit before resending can copy via the adjacent
+                  copy button then paste into the input — and once a
+                  proper inline edit affordance lands this becomes a
+                  pencil icon. */}
+              {onResend ? (
+                <button
+                  type="button"
+                  onClick={() => onResend(message.content)}
+                  aria-label="Resend message"
+                  title="Resend this prompt"
+                  className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent"
+                >
+                  <RotateCw className="h-3.5 w-3.5" aria-hidden />
+                </button>
+              ) : null}
               <span className="text-xs text-muted-foreground">
                 {formatTime(message.created_at, locale)}
               </span>
             </div>
           </div>
           <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-purple-500/20 flex items-center justify-center">
-            <User className="h-4 w-4 text-purple-400" />
+            <User className="h-4 w-4 text-purple-600 dark:text-purple-300" aria-hidden />
           </div>
         </div>
       </div>
@@ -199,7 +222,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       <div className="flex justify-start group">
         <div className="flex items-start gap-3 max-w-3xl">
           <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-purple-500/20 flex items-center justify-center">
-            <Bot className="h-4 w-4 text-purple-400" />
+            <Bot className="h-4 w-4 text-purple-600 dark:text-purple-300" aria-hidden />
           </div>
           <div className="flex flex-col min-w-0">
             <div className="bg-accent/50 rounded-2xl rounded-tl-md px-4 py-3 text-foreground">
