@@ -10,12 +10,18 @@ import pytest
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aexy.models.repository import Repository, WorkspaceRepository
 from aexy.models.sprint import SprintTask, TaskGitHubLink
 from aexy.models.workspace import Workspace
 from aexy.services.github_task_sync_service import GitHubTaskSyncService
 
 
-async def _make_workspace(db: AsyncSession, slug: str = "acme") -> Workspace:
+async def _make_workspace(
+    db: AsyncSession,
+    slug: str = "acme",
+    *,
+    adopt_repo: str | None = "owner/repo",
+) -> Workspace:
     ws = Workspace(
         id=str(uuid4()),
         name="Acme",
@@ -25,7 +31,47 @@ async def _make_workspace(db: AsyncSession, slug: str = "acme") -> Workspace:
     db.add(ws)
     await db.commit()
     await db.refresh(ws)
+    if adopt_repo:
+        await _adopt_repo(db, ws, adopt_repo)
     return ws
+
+
+async def _adopt_repo(
+    db: AsyncSession, workspace: Workspace, full_name: str
+) -> WorkspaceRepository:
+    """Adopt a GitHub repo for a workspace so [slug:key] auto-link can resolve.
+    WS-083: auto-link requires the repo to be adopted by the target workspace."""
+    owner, _, name = full_name.partition("/")
+    # Use a deterministic github_id per full_name so multiple workspaces in a
+    # test can adopt the same repo via a single Repository row.
+    github_id = abs(hash(full_name)) % (10**9)
+    existing = (
+        await db.execute(
+            select(Repository).where(Repository.full_name == full_name)
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        existing = Repository(
+            id=str(uuid4()),
+            github_id=github_id,
+            full_name=full_name,
+            name=name or full_name,
+            owner_login=owner or full_name,
+            owner_type="Organization",
+        )
+        db.add(existing)
+        await db.commit()
+        await db.refresh(existing)
+    link = WorkspaceRepository(
+        id=str(uuid4()),
+        workspace_id=workspace.id,
+        repository_id=existing.id,
+        is_active=True,
+    )
+    db.add(link)
+    await db.commit()
+    await db.refresh(link)
+    return link
 
 
 async def _make_task(
@@ -266,3 +312,78 @@ async def test_issue_edited_refreshes_cached_title_and_state(
     ).scalar_one()
     assert link.github_issue_title == "Renamed title"
     assert link.github_issue_state == "closed"
+
+
+@pytest.mark.asyncio
+async def test_cross_workspace_slug_injection_is_blocked(
+    db_session: AsyncSession,
+) -> None:
+    """WS-083: a PR/issue in repo A's workspace must NOT be able to link to
+    a task in workspace B by mentioning B's slug. The auto-link can only
+    resolve to a workspace that has adopted the mentioning repo."""
+    # Workspace A adopts "attacker/repo".
+    ws_attacker = await _make_workspace(
+        db_session, slug="attacker", adopt_repo="attacker/repo"
+    )
+    await _make_task(db_session, ws_attacker, task_key=1)
+
+    # Workspace B is unrelated — it adopts a different repo.
+    ws_victim = await _make_workspace(
+        db_session, slug="victim", adopt_repo="victim/repo"
+    )
+    victim_task = await _make_task(
+        db_session, ws_victim, task_key=42, title="Sensitive"
+    )
+
+    service = GitHubTaskSyncService(db_session)
+    issue = {
+        "number": 1,
+        "title": "Hello",
+        "body": "Refs [victim:42] — should NOT link.",
+        "state": "open",
+        "html_url": "https://github.com/attacker/repo/issues/1",
+    }
+    links = await service.process_issue(
+        issue, repository="attacker/repo", action="opened"
+    )
+
+    assert links == [], "must not auto-link a task whose workspace did not adopt this repo"
+
+    # Confirm no row was written linking the victim task.
+    rows = (
+        await db_session.execute(
+            select(TaskGitHubLink).where(
+                TaskGitHubLink.task_id == victim_task.id,
+            )
+        )
+    ).scalars().all()
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_shared_adoption_still_links(
+    db_session: AsyncSession,
+) -> None:
+    """When BOTH workspaces have adopted the same repo, mentions resolve to
+    the workspace whose slug was used — unchanged behavior."""
+    ws_acme = await _make_workspace(db_session, slug="acme", adopt_repo="shared/repo")
+    task_acme = await _make_task(db_session, ws_acme, task_key=1)
+
+    ws_beta = await _make_workspace(db_session, slug="beta", adopt_repo="shared/repo")
+    task_beta = await _make_task(db_session, ws_beta, task_key=1)
+
+    service = GitHubTaskSyncService(db_session)
+    issue = {
+        "number": 2,
+        "title": "Cross-team",
+        "body": "Links [beta:1] explicitly.",
+        "state": "open",
+        "html_url": "https://github.com/shared/repo/issues/2",
+    }
+    links = await service.process_issue(
+        issue, repository="shared/repo", action="opened"
+    )
+    assert len(links) == 1
+    assert links[0].task_id == task_beta.id
+    # Acme's task with the same task_key is NOT linked despite same repo.
+    assert links[0].task_id != task_acme.id

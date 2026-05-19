@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type React from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { ExternalLink, GitCommit, ListTree, Lock } from "lucide-react";
 
 import {
@@ -60,6 +61,7 @@ interface Props {
 }
 
 export function AnalyticsDetailsModal({ context, open, onOpenChange }: Props) {
+  const t = useTranslations("insights.details");
   const [tab, setTab] = useState<Tab>("summary");
 
   // Admin gate for the Raw tab. The raw JSON exposes commit-level
@@ -83,13 +85,13 @@ export function AnalyticsDetailsModal({ context, open, onOpenChange }: Props) {
 
   const tabs = useMemo<{ id: Tab; label: string }[]>(() => {
     const out: { id: Tab; label: string }[] = [
-      { id: "summary", label: "Summary" },
+      { id: "summary", label: t("tabs.summary") },
     ];
-    if (showSourcesTab) out.push({ id: "sources", label: "Sources" });
-    out.push({ id: "commits", label: "Commits" });
-    if (isAdmin) out.push({ id: "raw", label: "Raw" });
+    if (showSourcesTab) out.push({ id: "sources", label: t("tabs.sources") });
+    out.push({ id: "commits", label: t("tabs.commits") });
+    if (isAdmin) out.push({ id: "raw", label: t("tabs.raw") });
     return out;
-  }, [showSourcesTab, isAdmin]);
+  }, [showSourcesTab, isAdmin, t]);
 
   // If the active tab gets hidden (e.g. switching from team metric to
   // row-scoped close-and-reopen), fall back to summary so we don't end
@@ -162,8 +164,12 @@ export function AnalyticsDetailsModal({ context, open, onOpenChange }: Props) {
         <DialogHeader>
           <DialogTitle>{context.title}</DialogTitle>
           <DialogDescription>
-            Evidence for {context.metric}
-            {context.developerName ? `, ${context.developerName}` : ""}.
+            {context.developerName
+              ? t("evidenceForDeveloper", {
+                  metric: context.metric,
+                  name: context.developerName,
+                })
+              : t("evidenceFor", { metric: context.metric })}
           </DialogDescription>
         </DialogHeader>
 
@@ -186,19 +192,19 @@ export function AnalyticsDetailsModal({ context, open, onOpenChange }: Props) {
         <div className="overflow-auto pr-1 max-h-[60vh]">
           {tab === "summary" && (
             <div className="grid sm:grid-cols-2 gap-3">
-              <DetailItem label="Metric" value={context.metric} />
-              <DetailItem label="Value" value={context.value} />
-              <DetailItem label="Period" value={context.periodType} />
+              <DetailItem label={t("summary.metric")} value={context.metric} />
+              <DetailItem label={t("summary.value")} value={context.value} />
+              <DetailItem label={t("summary.period")} value={context.periodType} />
               <DetailItem
-                label="Range"
+                label={t("summary.range")}
                 value={
                   context.periodStart && context.periodEnd
                     ? `${formatDate(context.periodStart)} - ${formatDate(context.periodEnd)}`
-                    : "Server default"
+                    : t("summary.serverDefault")
                 }
               />
               {context.developerId && (
-                <DetailItem label="Developer ID" value={context.developerId} />
+                <DetailItem label={t("summary.developerId")} value={context.developerId} />
               )}
             </div>
           )}
@@ -226,7 +232,7 @@ export function AnalyticsDetailsModal({ context, open, onOpenChange }: Props) {
               </pre>
             ) : (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Lock className="h-4 w-4" /> Raw data is workspace admin only.
+                <Lock className="h-4 w-4" /> {t("raw.adminOnly")}
               </div>
             )
           )}
@@ -252,19 +258,20 @@ function SourceTable({
   data?: RepositoryInsightsListResponse;
   isLoading: boolean;
 }) {
-  if (isLoading) return <div className="text-sm text-muted-foreground">Loading sources...</div>;
+  const t = useTranslations("insights.details.sources");
+  if (isLoading) return <div className="text-sm text-muted-foreground">{t("loading")}</div>;
   if (!data?.repositories.length) {
-    return <div className="text-sm text-muted-foreground">No repository sources found.</div>;
+    return <div className="text-sm text-muted-foreground">{t("empty")}</div>;
   }
   return (
     <table className="w-full text-sm">
       <thead className="text-xs text-muted-foreground">
         <tr>
-          <th className="py-2 text-left font-medium">Repository</th>
-          <th className="py-2 text-right font-medium">Commits</th>
-          <th className="py-2 text-right font-medium">PRs</th>
-          <th className="py-2 text-right font-medium">Reviews</th>
-          <th className="py-2 text-right font-medium">Lines</th>
+          <th className="py-2 text-left font-medium">{t("columns.repository")}</th>
+          <th className="py-2 text-right font-medium">{t("columns.commits")}</th>
+          <th className="py-2 text-right font-medium">{t("columns.prs")}</th>
+          <th className="py-2 text-right font-medium">{t("columns.reviews")}</th>
+          <th className="py-2 text-right font-medium">{t("columns.lines")}</th>
         </tr>
       </thead>
       <tbody className="divide-y divide-border">
@@ -298,25 +305,24 @@ function CommitTable({
   isLoading: boolean;
   hasDeveloper: boolean;
 }) {
+  const t = useTranslations("insights.details.commits");
   if (!hasDeveloper) {
     return (
-      <div className="text-sm text-muted-foreground">
-        Select a developer row to inspect commit-level evidence.
-      </div>
+      <div className="text-sm text-muted-foreground">{t("selectDeveloper")}</div>
     );
   }
-  if (isLoading) return <div className="text-sm text-muted-foreground">Loading commits...</div>;
+  if (isLoading) return <div className="text-sm text-muted-foreground">{t("loading")}</div>;
   if (!data?.commits.length) {
-    return <div className="text-sm text-muted-foreground">No commits found for this period.</div>;
+    return <div className="text-sm text-muted-foreground">{t("empty")}</div>;
   }
   return (
     <table className="w-full text-sm">
       <thead className="text-xs text-muted-foreground">
         <tr>
-          <th className="py-2 text-left font-medium">Commit</th>
-          <th className="py-2 text-left font-medium">Repository</th>
-          <th className="py-2 text-right font-medium">+/-</th>
-          <th className="py-2 text-left font-medium">Author</th>
+          <th className="py-2 text-left font-medium">{t("columns.commit")}</th>
+          <th className="py-2 text-left font-medium">{t("columns.repository")}</th>
+          <th className="py-2 text-right font-medium">{t("columns.delta")}</th>
+          <th className="py-2 text-left font-medium">{t("columns.author")}</th>
         </tr>
       </thead>
       <tbody className="divide-y divide-border">
@@ -336,7 +342,7 @@ function CommitTable({
                       <a
                         href={commit.html_url}
                         target="_blank"
-                        rel="noreferrer"
+                        rel="noopener noreferrer"
                         className="inline-flex ml-2 text-indigo-400 hover:text-indigo-300"
                       >
                         <ExternalLink className="h-3 w-3" />
@@ -351,7 +357,7 @@ function CommitTable({
               +{commit.additions}/-{commit.deletions}
             </td>
             <td className="py-2 text-muted-foreground">
-              {commit.author_github_login || commit.author_email || "Unknown"}
+              {commit.author_github_login || commit.author_email || t("unknownAuthor")}
             </td>
           </tr>
         ))}

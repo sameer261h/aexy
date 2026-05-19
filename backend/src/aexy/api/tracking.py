@@ -118,6 +118,82 @@ async def get_active_sprint(team_id: str, db: AsyncSession) -> Sprint | None:
     return result.scalar_one_or_none()
 
 
+async def _resolve_tracking_workspace(
+    db: AsyncSession,
+    developer_id: str,
+    *,
+    task_id: str | None = None,
+    sprint_id: str | None = None,
+    team_id: str | None = None,
+) -> str:
+    """Pick the workspace a tracking row should be stamped with, then check
+    membership. WS-084: the row's workspace is derived from the supplied
+    task/sprint/team references (in that priority), not from the caller's
+    first team — otherwise a caller with memberships in multiple workspaces
+    could attribute rows to the wrong tenant by supplying ids from another.
+
+    Each supplied id is also verified to belong to the resolved workspace,
+    so a body that mixes refs across workspaces is rejected.
+    """
+    candidate_workspace: str | None = None
+
+    if task_id:
+        task = (
+            await db.execute(select(SprintTask).where(SprintTask.id == task_id))
+        ).scalar_one_or_none()
+        if not task or not task.workspace_id:
+            raise HTTPException(status_code=404, detail="Task not found")
+        candidate_workspace = str(task.workspace_id)
+
+    if sprint_id:
+        sprint = (
+            await db.execute(select(Sprint).where(Sprint.id == sprint_id))
+        ).scalar_one_or_none()
+        if not sprint or not sprint.workspace_id:
+            raise HTTPException(status_code=404, detail="Sprint not found")
+        sprint_ws = str(sprint.workspace_id)
+        if candidate_workspace and sprint_ws != candidate_workspace:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="task_id and sprint_id are in different workspaces",
+            )
+        candidate_workspace = sprint_ws
+
+    if team_id:
+        team = (
+            await db.execute(select(Team).where(Team.id == team_id))
+        ).scalar_one_or_none()
+        if not team or not team.workspace_id:
+            raise HTTPException(status_code=404, detail="Team not found")
+        team_ws = str(team.workspace_id)
+        if candidate_workspace and team_ws != candidate_workspace:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="task/sprint/team references span workspaces",
+            )
+        candidate_workspace = team_ws
+
+    if not candidate_workspace:
+        # No explicit refs — fall back to caller's primary team's workspace.
+        _team, ws = await get_developer_team(developer_id, db)
+        if not ws:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Developer is not assigned to any team",
+            )
+        candidate_workspace = str(ws)
+
+    if not await WorkspaceService(db).check_permission(
+        candidate_workspace, developer_id, "member"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Not a member of the referenced workspace",
+        )
+
+    return candidate_workspace
+
+
 def standup_to_response(standup: DeveloperStandup) -> StandupResponse:
     """Convert DeveloperStandup model to response schema."""
     return StandupResponse(
@@ -303,11 +379,21 @@ async def submit_standup(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Submit a standup via API."""
-    team, workspace_id = await get_developer_team(current_developer.id, db)
-    if not team:
+    workspace_id = await _resolve_tracking_workspace(
+        db,
+        str(current_developer.id),
+        sprint_id=standup.sprint_id,
+        team_id=standup.team_id,
+    )
+    # Re-derive the caller's team within the resolved workspace (used for
+    # sprint defaulting + streak math below).
+    team, _ = await get_developer_team(
+        str(current_developer.id), db, workspace_id=workspace_id
+    )
+    if not team and not standup.team_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Developer is not assigned to any team",
+            detail="Developer is not assigned to any team in this workspace",
         )
 
     target_date = standup.standup_date or date.today()
@@ -332,12 +418,13 @@ async def submit_standup(
         await _dispatch_standup_events(db, existing_standup)
         return standup_to_response(existing_standup)
 
-    # Get active sprint
-    sprint = await get_active_sprint(team.id, db)
+    # Get active sprint (only if we know which team to look it up against)
+    team_id_for_standup = standup.team_id or (team.id if team else None)
+    sprint = await get_active_sprint(team_id_for_standup, db) if team_id_for_standup else None
 
     new_standup = DeveloperStandup(
         developer_id=current_developer.id,
-        team_id=standup.team_id or team.id,
+        team_id=team_id_for_standup,
         sprint_id=standup.sprint_id or (sprint.id if sprint else None),
         workspace_id=workspace_id,
         standup_date=target_date,
@@ -522,13 +609,18 @@ async def create_work_log(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Create a work log."""
-    team, workspace_id = await get_developer_team(current_developer.id, db)
+    workspace_id = await _resolve_tracking_workspace(
+        db,
+        str(current_developer.id),
+        task_id=log.task_id,
+        sprint_id=log.sprint_id,
+    )
 
     new_log = WorkLog(
         developer_id=current_developer.id,
         task_id=log.task_id,
         sprint_id=log.sprint_id,
-        workspace_id=workspace_id or "",
+        workspace_id=workspace_id,
         notes=log.notes,
         log_type=log.log_type.value,
         source=log.source.value,
@@ -591,13 +683,18 @@ async def log_time(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Log time against a task."""
-    team, workspace_id = await get_developer_team(current_developer.id, db)
+    workspace_id = await _resolve_tracking_workspace(
+        db,
+        str(current_developer.id),
+        task_id=entry.task_id,
+        sprint_id=entry.sprint_id,
+    )
 
     new_entry = TimeEntry(
         developer_id=current_developer.id,
         task_id=entry.task_id,
         sprint_id=entry.sprint_id,
-        workspace_id=workspace_id or "",
+        workspace_id=workspace_id,
         duration_minutes=entry.duration_minutes,
         description=entry.description,
         entry_date=entry.entry_date or date.today(),
@@ -721,14 +818,29 @@ async def report_blocker(
     current_developer: Developer = Depends(get_current_developer),
 ):
     """Report a new blocker."""
-    team, workspace_id = await get_developer_team(current_developer.id, db)
+    workspace_id = await _resolve_tracking_workspace(
+        db,
+        str(current_developer.id),
+        task_id=blocker.task_id,
+        sprint_id=blocker.sprint_id,
+        team_id=blocker.team_id,
+    )
+    # When no team_id was supplied, fall back to the caller's team in the
+    # resolved workspace (matches prior behavior for self-service reports).
+    fallback_team_id: str = blocker.team_id or ""
+    if not fallback_team_id:
+        caller_team, _ = await get_developer_team(
+            str(current_developer.id), db, workspace_id=workspace_id
+        )
+        if caller_team:
+            fallback_team_id = str(caller_team.id)
 
     new_blocker = Blocker(
         developer_id=current_developer.id,
         task_id=blocker.task_id,
         sprint_id=blocker.sprint_id,
-        team_id=blocker.team_id or (team.id if team else ""),
-        workspace_id=workspace_id or "",
+        team_id=fallback_team_id,
+        workspace_id=workspace_id,
         description=blocker.description,
         severity=blocker.severity.value,
         category=blocker.category.value,

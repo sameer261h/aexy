@@ -135,6 +135,24 @@ async def verify_workspace_membership(
     return developer_id
 
 
+async def _is_workspace_admin(
+    db: AsyncSession, workspace_id: str, developer_id: str
+) -> bool:
+    """Return True when the caller has owner/admin role in the workspace.
+
+    Used to gate PII fields (e.g. raw commit author_email) on responses
+    that are otherwise visible to any active workspace member.
+    """
+    stmt = select(WorkspaceMember.role).where(
+        WorkspaceMember.workspace_id == workspace_id,
+        WorkspaceMember.developer_id == developer_id,
+        WorkspaceMember.status == "active",
+    )
+    result = await db.execute(stmt)
+    role = result.scalar_one_or_none()
+    return role in ("owner", "admin")
+
+
 async def _get_workspace_developer_ids(
     db: AsyncSession, workspace_id: str
 ) -> list[str]:
@@ -379,6 +397,12 @@ async def list_developer_commits(
         start_date, end_date = _default_range(period_type)
     _validate_date_range(start_date, end_date)
 
+    # WS-085: author_email is PII. Surface it only to workspace admins;
+    # other members get the field redacted. The frontend "Raw" tab was
+    # already admin-only, but the underlying query was visible to anyone
+    # who could call the endpoint directly.
+    caller_is_admin = await _is_workspace_admin(db, workspace_id, developer_id)
+
     # Build the repo allow-list once. Keeps the main query a single round-trip.
     repo_names = (
         await db.execute(
@@ -463,7 +487,7 @@ async def list_developer_commits(
                 "files_changed": r.files_changed or 0,
                 "committed_at": r.committed_at.isoformat() if r.committed_at else None,
                 "author_github_login": r.author_github_login,
-                "author_email": r.author_email,
+                "author_email": r.author_email if caller_is_admin else None,
                 "is_merge": bool(r.is_merge),
                 "change_class": r.change_class,
                 "author_class": r.author_class,

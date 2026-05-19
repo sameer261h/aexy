@@ -2,6 +2,7 @@
 
 import { useCallback, useState, useMemo } from "react";
 import type React from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { useWorkspace } from "@/hooks/useWorkspace";
@@ -94,6 +95,7 @@ function GiniIndicator({ value }: { value: number }) {
 }
 
 export default function InsightsPage() {
+  const tPage = useTranslations("insights.page");
   const { isLoading: authLoading, isAuthenticated } = useAuth();
   const { currentWorkspaceId } = useWorkspace();
   const { hasEnabledRepos, hasInstallation, installUrl, isLoading: reposLoading } = useEnabledRepositories();
@@ -193,7 +195,7 @@ export default function InsightsPage() {
         // Buttons are visually disabled when !detailsReady, but if a
         // user double-clicks during the loading window, give them a
         // soft cue instead of an opaque no-op.
-        toast.info("Analytics still loading — try again in a moment.");
+        toast.info(tPage("stillLoadingToast"));
         return;
       }
       setDetails({
@@ -285,13 +287,13 @@ export default function InsightsPage() {
               }
               className="text-xs text-muted-foreground hover:text-foreground"
             >
-              Sources
+              {tPage("sourcesButton")}
             </button>
             <Link
               href={`/insights/developers/${m.developer_id}`}
               className="text-xs text-indigo-400 hover:text-indigo-300"
             >
-              Profile →
+              {tPage("profileButton")}
             </Link>
           </div>
         ),
@@ -347,7 +349,7 @@ export default function InsightsPage() {
               onChange={(e) => setIncludeInactive(e.target.checked)}
               className="h-3.5 w-3.5"
             />
-            Show inactive
+            {tPage("showInactive")}
           </label>
 
           <Link

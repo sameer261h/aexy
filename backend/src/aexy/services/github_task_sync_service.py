@@ -165,7 +165,9 @@ class GitHubTaskSyncService:
         current_task_ids: set[str] = set()
 
         for ref in aexy_refs:
-            task = await self._find_aexy_task(ref.project_key, ref.identifier)
+            task = await self._find_aexy_task(
+                ref.project_key, ref.identifier, repository=repository
+            )
             if not task:
                 continue
             current_task_ids.add(str(task.id))
@@ -254,7 +256,9 @@ class GitHubTaskSyncService:
             Matching SprintTask or None
         """
         if ref.source == TaskReferenceSource.AEXY:
-            return await self._find_aexy_task(ref.project_key, ref.identifier)
+            return await self._find_aexy_task(
+                ref.project_key, ref.identifier, repository=repository
+            )
 
         if ref.source == TaskReferenceSource.GITHUB_ISSUE:
             # Look for GitHub issue in active sprints
@@ -277,8 +281,17 @@ class GitHubTaskSyncService:
         self,
         workspace_slug: str | None,
         task_key_str: str,
+        repository: str | None = None,
     ) -> SprintTask | None:
-        """Resolve a native Aexy reference [workspace-slug:task_key] to a task."""
+        """Resolve a native Aexy reference [workspace-slug:task_key] to a task.
+
+        WS-083: when a `repository` is given (always true on webhook-driven
+        paths), require the resolved task's workspace to be one that has
+        adopted this repository. Without this, a malicious PR body in
+        repo X (owned by workspace A) containing `[victim-workspace:42]`
+        could create a TaskGitHubLink row pointing at workspace B's task,
+        causing cross-tenant information leakage in both directions.
+        """
         if not workspace_slug:
             return None
         try:
@@ -287,6 +300,7 @@ class GitHubTaskSyncService:
             return None
 
         from aexy.models.workspace import Workspace
+        from aexy.models.repository import Repository, WorkspaceRepository
 
         stmt = (
             select(SprintTask)
@@ -299,6 +313,21 @@ class GitHubTaskSyncService:
             )
             .limit(1)
         )
+
+        if repository:
+            # Require resolved task's workspace to have adopted the repo
+            # whose PR/issue/commit mentioned the slug.
+            stmt = stmt.where(
+                SprintTask.workspace_id.in_(
+                    select(WorkspaceRepository.workspace_id)
+                    .join(Repository, Repository.id == WorkspaceRepository.repository_id)
+                    .where(
+                        Repository.full_name == repository,
+                        WorkspaceRepository.is_active.is_(True),
+                    )
+                )
+            )
+
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 

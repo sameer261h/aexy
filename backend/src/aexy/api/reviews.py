@@ -130,6 +130,34 @@ async def _require_review_party_or_admin(
     raise HTTPException(status_code=404, detail="Review not found")
 
 
+async def _require_reviewee(
+    db: AsyncSession,
+    review_id: str,
+    current_user: Developer,
+) -> IndividualReview:
+    """Caller must be the developer being reviewed (only they can submit a self-review)."""
+    review = await _load_review_or_404(db, review_id)
+    if str(current_user.id) != str(review.developer_id):
+        raise HTTPException(status_code=404, detail="Review not found")
+    return review
+
+
+async def _require_review_manager_or_admin(
+    db: AsyncSession,
+    review_id: str,
+    current_user: Developer,
+) -> IndividualReview:
+    """Caller must be the review's manager or a workspace admin."""
+    review = await _load_review_or_404(db, review_id)
+    caller_id = str(current_user.id)
+    if review.manager_id and caller_id == str(review.manager_id):
+        return review
+    ws_id = await _review_workspace_id(db, review_id)
+    if ws_id and await WorkspaceService(db).check_permission(str(ws_id), caller_id, "admin"):
+        return review
+    raise HTTPException(status_code=404, detail="Review not found")
+
+
 async def _require_goal_owner_or_admin(
     db: AsyncSession,
     goal_id: str,
@@ -867,6 +895,7 @@ async def submit_self_review(
     db: AsyncSession = Depends(get_db),
 ):
     """Submit a self-review."""
+    await _require_reviewee(db, review_id, current_user)
     service = ReviewService(db)
     try:
         submission = await service.submit_self_review(
@@ -905,6 +934,7 @@ async def submit_manager_review(
     db: AsyncSession = Depends(get_db),
 ):
     """Submit a manager review."""
+    await _require_review_manager_or_admin(db, review_id, current_user)
     service = ReviewService(db)
     try:
         submission = await service.submit_manager_review(
@@ -945,6 +975,7 @@ async def finalize_review(
     db: AsyncSession = Depends(get_db),
 ):
     """Finalize a review (manager action)."""
+    await _require_review_manager_or_admin(db, review_id, current_user)
     service = ReviewService(db, get_llm_gateway())
     review = await service.finalize_review(
         review_id=review_id,

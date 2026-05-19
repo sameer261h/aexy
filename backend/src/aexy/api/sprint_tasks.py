@@ -169,8 +169,6 @@ async def _filter_task_ids_to_workspace(
             detail="One or more tasks do not belong to this workspace",
         )
 
-    return sprint
-
 
 # Task CRUD
 @router.get("", response_model=list[SprintTaskResponse])

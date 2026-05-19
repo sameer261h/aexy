@@ -153,6 +153,58 @@
     "repositories": {
       "title": "रिपॉज़िटरीज़",
       "description": "रिपॉज़िटरी-स्तरीय इनसाइट्स और गतिविधि मेट्रिक्स"
+    },
+
+    "details": {
+      "evidenceFor": "{metric} का प्रमाण",
+      "evidenceForDeveloper": "{metric} का प्रमाण, {name}.",
+      "tabs": {
+        "summary": "सारांश",
+        "sources": "स्रोत",
+        "commits": "Commits",
+        "raw": "Raw डेटा"
+      },
+      "summary": {
+        "metric": "मेट्रिक",
+        "value": "मान",
+        "period": "अवधि",
+        "range": "रेंज",
+        "serverDefault": "सर्वर डिफ़ॉल्ट",
+        "developerId": "डेवलपर ID"
+      },
+      "raw": {
+        "adminOnly": "Raw डेटा केवल वर्कस्पेस एडमिन के लिए है।"
+      },
+      "sources": {
+        "loading": "स्रोत लोड हो रहे हैं...",
+        "empty": "कोई repository स्रोत नहीं मिला।",
+        "columns": {
+          "repository": "Repository",
+          "commits": "Commits",
+          "prs": "PRs",
+          "reviews": "Reviews",
+          "lines": "Lines"
+        }
+      },
+      "commits": {
+        "selectDeveloper": "Commit-स्तरीय प्रमाण देखने के लिए एक डेवलपर पंक्ति चुनें।",
+        "loading": "Commits लोड हो रहे हैं...",
+        "empty": "इस अवधि के लिए कोई commits नहीं मिले।",
+        "columns": {
+          "commit": "Commit",
+          "repository": "Repository",
+          "delta": "+/-",
+          "author": "लेखक"
+        },
+        "unknownAuthor": "अज्ञात"
+      }
+    },
+
+    "page": {
+      "stillLoadingToast": "Analytics अभी लोड हो रहे हैं - एक क्षण में दोबारा प्रयास करें।",
+      "sourcesButton": "स्रोत",
+      "profileButton": "प्रोफ़ाइल →",
+      "showInactive": "निष्क्रिय दिखाएं"
     }
   }
 }
