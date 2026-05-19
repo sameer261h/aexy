@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -135,44 +135,69 @@ export default function EditAgentPage() {
     }
   }, [agent]);
 
-  // Track changes
-  useEffect(() => {
-    if (!agent) return;
-
-    // System agents can only change LLM configuration
-    if (agent.is_system) {
-      const changed =
-        llmProvider !== (agent.llm_provider || "gemini") ||
-        llmModel !== (agent.llm_model || agent.model || "gemini-2.0-flash") ||
-        temperature !== (agent.temperature ?? 0.7);
-
-      setHasChanges(changed);
-      return;
+  // Per-tab dirty tracking — each tab independently reports whether any
+  // of its fields differ from the persisted agent. The audit flagged the
+  // prior single boolean as confidence-killing: users switching tabs lost
+  // sight of which sections had pending edits.
+  const dirtyByTab = useMemo<Record<TabId, boolean>>(() => {
+    if (!agent) {
+      return {
+        general: false,
+        llm: false,
+        tools: false,
+        behavior: false,
+        prompts: false,
+        escalation: false,
+        email: false,
+      };
     }
-
-    const changed =
-      name !== agent.name ||
-      description !== (agent.description || "") ||
-      mentionHandle !== (agent.mention_handle || "") ||
-      llmProvider !== (agent.llm_provider || "gemini") ||
-      llmModel !== (agent.llm_model || agent.model || "gemini-2.0-flash") ||
-      temperature !== (agent.temperature ?? 0.7) ||
-      maxTokens !== (agent.max_tokens ?? 2000) ||
-      JSON.stringify(tools) !== JSON.stringify(agent.tools || []) ||
-      autoRespond !== (agent.auto_respond ?? true) ||
-      confidenceThreshold !== (agent.confidence_threshold ?? 0.7) ||
-      requireApprovalBelow !== (agent.require_approval_below ?? 0.8) ||
-      maxDailyResponses !== (agent.max_daily_responses ?? 100) ||
-      responseDelayMinutes !== (agent.response_delay_minutes ?? 5) ||
-      JSON.stringify(workingHours) !== JSON.stringify(agent.working_hours || null) ||
-      systemPrompt !== (agent.system_prompt || "") ||
-      customInstructions !== (agent.custom_instructions || "") ||
-      escalationEmail !== (agent.escalation_email || "") ||
-      escalationSlackChannel !== (agent.escalation_slack_channel || "") ||
-      autoReplyEnabled !== (agent.auto_reply_enabled ?? true) ||
-      emailSignature !== (agent.email_signature || "");
-
-    setHasChanges(changed);
+    // System agents are LLM-only; everything else is locked to its
+    // persisted value, so it can't be dirty.
+    if (agent.is_system) {
+      return {
+        general: false,
+        llm:
+          llmProvider !== (agent.llm_provider || "gemini") ||
+          llmModel !==
+            (agent.llm_model || agent.model || "gemini-2.0-flash") ||
+          temperature !== (agent.temperature ?? 0.7),
+        tools: false,
+        behavior: false,
+        prompts: false,
+        escalation: false,
+        email: false,
+      };
+    }
+    return {
+      general:
+        name !== agent.name ||
+        description !== (agent.description || "") ||
+        mentionHandle !== (agent.mention_handle || ""),
+      llm:
+        llmProvider !== (agent.llm_provider || "gemini") ||
+        llmModel !==
+          (agent.llm_model || agent.model || "gemini-2.0-flash") ||
+        temperature !== (agent.temperature ?? 0.7) ||
+        maxTokens !== (agent.max_tokens ?? 2000),
+      tools: JSON.stringify(tools) !== JSON.stringify(agent.tools || []),
+      behavior:
+        autoRespond !== (agent.auto_respond ?? true) ||
+        confidenceThreshold !== (agent.confidence_threshold ?? 0.7) ||
+        requireApprovalBelow !== (agent.require_approval_below ?? 0.8) ||
+        maxDailyResponses !== (agent.max_daily_responses ?? 100) ||
+        responseDelayMinutes !== (agent.response_delay_minutes ?? 5) ||
+        JSON.stringify(workingHours) !==
+          JSON.stringify(agent.working_hours || null),
+      prompts:
+        systemPrompt !== (agent.system_prompt || "") ||
+        customInstructions !== (agent.custom_instructions || ""),
+      escalation:
+        escalationEmail !== (agent.escalation_email || "") ||
+        escalationSlackChannel !== (agent.escalation_slack_channel || ""),
+      email:
+        autoReplyEnabled !== (agent.auto_reply_enabled ?? true) ||
+        emailSignature !== (agent.email_signature || ""),
+    };
   }, [
     agent,
     name,
@@ -196,6 +221,33 @@ export default function EditAgentPage() {
     autoReplyEnabled,
     emailSignature,
   ]);
+
+  // hasChanges is now a derived value but kept in state for compatibility
+  // with the existing save flow (and so saveSuccess resetting the agent
+  // payload re-derives cleanly when the next agent fetch lands).
+  useEffect(() => {
+    const anyDirty = Object.values(dirtyByTab).some(Boolean);
+    setHasChanges(anyDirty);
+  }, [dirtyByTab]);
+
+  // Window-level guard: a hard refresh / tab-close with unsaved changes
+  // pops the browser's native warning. Doesn't fight router navigations,
+  // which still need explicit blocking when we add it.
+  useEffect(() => {
+    if (!hasChanges) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // Some browsers require returnValue to trigger the prompt.
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [hasChanges]);
+
+  const dirtyTabCount = useMemo(
+    () => Object.values(dirtyByTab).filter(Boolean).length,
+    [dirtyByTab],
+  );
 
   const handleSave = async () => {
     if (!hasChanges) return;
@@ -906,6 +958,21 @@ export default function EditAgentPage() {
                 </p>
               </div>
             </div>
+            {/* Pending-tabs hint sits to the left of the save button so
+                users get a count of where their edits are scattered
+                without having to scan the side nav. */}
+            {dirtyTabCount > 0 && !isUpdating && !saveSuccess ? (
+              <span
+                className="hidden sm:inline-flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 mr-1"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                {dirtyTabCount === 1
+                  ? "1 tab has unsaved changes"
+                  : `${dirtyTabCount} tabs have unsaved changes`}
+              </span>
+            ) : null}
             <button
               onClick={handleSave}
               disabled={!hasChanges || isUpdating}
@@ -951,19 +1018,31 @@ export default function EditAgentPage() {
               {TABS.map((tab) => {
                 const Icon = tab.icon;
                 const isActive = activeTab === tab.id;
+                const isDirty = dirtyByTab[tab.id];
                 return (
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
+                    aria-current={isActive ? "page" : undefined}
                     className={cn(
-                      "flex items-center gap-2 sm:gap-3 px-3 py-2 rounded-lg text-left transition whitespace-nowrap sm:w-full",
+                      "flex items-center gap-2 sm:gap-3 px-3 py-2 rounded-lg text-left transition whitespace-nowrap sm:w-full relative",
                       isActive
                         ? "bg-purple-500/20 text-purple-400"
                         : "text-muted-foreground hover:text-foreground hover:bg-accent"
                     )}
                   >
                     <Icon className="h-4 w-4 flex-shrink-0" />
-                    <span className="text-sm font-medium">{tab.label}</span>
+                    <span className="text-sm font-medium flex-1">{tab.label}</span>
+                    {/* Pending-changes dot: surfaces which tabs have edits
+                        that haven't been saved yet. Visible regardless of
+                        whether the tab is the active one. */}
+                    {isDirty ? (
+                      <span
+                        className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0"
+                        aria-label="unsaved changes"
+                        title="Unsaved changes in this tab"
+                      />
+                    ) : null}
                   </button>
                 );
               })}
