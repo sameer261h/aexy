@@ -68,6 +68,63 @@ function formatDuration(ms: number | null): string {
   return `${(ms / 60000).toFixed(1)}m`;
 }
 
+// UX-AGT-DTL-008: per-agent-type quick-start prompts. Replaces the
+// blank-textarea cold-start with three concrete starting points the user
+// can either fire as-is or edit. Keyed by agent_type so each agent gets
+// scaffolding that matches what it can actually do. Custom / unknown
+// types fall through to the freeform-only flow.
+const RUN_QUICK_STARTS: Record<string, string[]> = {
+  support: [
+    "Triage the latest inbox messages by urgency and surface the top 3.",
+    "Draft replies for any unread customer messages from the past 24 hours.",
+    "Summarize open issues across the inbox grouped by topic.",
+  ],
+  sales: [
+    "Identify high-intent leads in the inbox and draft warm follow-ups.",
+    "Send a check-in to contacts I haven't reached in 14 days.",
+    "Score the latest inbound leads and tee up the top 5 for outreach.",
+  ],
+  scheduling: [
+    "Propose times for any pending meeting requests in the inbox.",
+    "Confirm tomorrow's meetings and re-send calendar holds where needed.",
+    "Find the next 30-minute slot across all attendees in the latest thread.",
+  ],
+  onboarding: [
+    "Send the next onboarding step to users who've completed step 1.",
+    "Create tasks for any new signups from the last 24 hours.",
+    "Summarize where each onboarding user is in the funnel.",
+  ],
+  recruiting: [
+    "Draft outreach to the latest applicants matched to open roles.",
+    "Schedule screening calls with candidates who responded yes.",
+    "Summarize candidate pipeline by role and stage.",
+  ],
+  newsletter: [
+    "Draft this week's newsletter from recent shipped activity.",
+    "Audit the subscriber list and surface any anomalies.",
+    "Summarize last week's open + click rates.",
+  ],
+  triage: [
+    "Classify the open tickets by priority and department.",
+    "Re-route any misassigned tickets from the past 24h.",
+    "Flag tickets that have been waiting > 48h for response.",
+  ],
+  insights: [
+    "Surface the top 3 team metrics that changed this week.",
+    "Identify any burnout-risk signals in the team's activity.",
+    "Compare velocity this sprint vs last and explain the delta.",
+  ],
+  standup: [
+    "Draft today's standup summary for the team.",
+    "List everyone's blockers from the past 24 hours.",
+    "Remind anyone who hasn't posted yet.",
+  ],
+};
+
+function getRunQuickStarts(agentType: string): string[] {
+  return RUN_QUICK_STARTS[agentType] ?? [];
+}
+
 // Run Agent Dialog Component
 function RunAgentDialog({
   isOpen,
@@ -75,6 +132,7 @@ function RunAgentDialog({
   onRun,
   isRunning,
   agentName,
+  agentType,
   tools,
 }: {
   isOpen: boolean;
@@ -82,6 +140,7 @@ function RunAgentDialog({
   onRun: (context: Record<string, unknown>) => void;
   isRunning: boolean;
   agentName: string;
+  agentType: string;
   tools: string[];
 }) {
   const t = useTranslations("agents");
@@ -126,6 +185,24 @@ function RunAgentDialog({
             >
               {t("runDialog.taskDescription")}
             </label>
+            {/* UX-AGT-DTL-008: quick-start chips above the textarea.
+                Clicking one drops it into the task field; the user can
+                edit before running. Empty for agent types without
+                presets (custom / unknown) — falls back to freeform. */}
+            {getRunQuickStarts(agentType).length > 0 && !task ? (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {getRunQuickStarts(agentType).map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setTask(preset)}
+                    className="text-left text-xs px-2.5 py-1.5 rounded-full border border-border bg-accent/50 text-muted-foreground hover:text-foreground hover:border-purple-500/40 hover:bg-purple-500/5 transition-colors focus-visible:ring-2 focus-visible:ring-purple-500/40"
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <textarea
               id="run-agent-task"
               value={task}
@@ -776,6 +853,7 @@ export default function AgentDetailPage() {
         onRun={handleExecute}
         isRunning={isExecuting}
         agentName={agent.name}
+        agentType={agent.agent_type}
         tools={agent.tools}
       />
 

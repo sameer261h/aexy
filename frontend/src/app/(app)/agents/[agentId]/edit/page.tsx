@@ -1200,8 +1200,17 @@ export default function EditAgentPage() {
 
         <div className="flex gap-6 flex-col sm:flex-row">
           {/* Tabs sidebar */}
-          <nav className="w-full sm:w-48 flex-shrink-0">
-            <div className="bg-muted rounded-xl border border-border p-2 sticky top-24 flex sm:block overflow-x-auto gap-1 sm:gap-0">
+          <nav className="w-full sm:w-48 flex-shrink-0" aria-label="Edit sections">
+            {/* UX-MOB-003: keep the horizontal scroller on mobile but
+                strengthen the active-tab affordance so it doesn't get
+                lost next to the dirty/error dot, AND scroll the active
+                tab into view on mount + activeTab change so a tab the
+                user just jumped to via the validation banner isn't
+                stranded off-screen on a phone. The active state on
+                mobile gets a 2px purple bottom border that survives the
+                scroll; on desktop it stays the rounded fill it always
+                was. */}
+              <div className="bg-muted rounded-xl border border-border p-2 sticky top-24 flex sm:block overflow-x-auto gap-1 sm:gap-0 scroll-smooth">
               {TABS.map((tab) => {
                 const Icon = tab.icon;
                 const isActive = activeTab === tab.id;
@@ -1212,14 +1221,22 @@ export default function EditAgentPage() {
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
                     aria-current={isActive ? "page" : undefined}
+                    ref={(el) => {
+                      if (isActive && el && typeof window !== "undefined" && window.innerWidth < 640) {
+                        el.scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" });
+                      }
+                    }}
                     className={cn(
-                      "flex items-center gap-2 sm:gap-3 px-3 py-2 rounded-lg text-left transition whitespace-nowrap sm:w-full relative",
+                      "flex items-center gap-2 sm:gap-3 px-3 py-2 rounded-lg sm:rounded-lg text-left transition whitespace-nowrap sm:w-full relative",
+                      // Active state — stronger fill on desktop, fill+
+                      // bottom underline on mobile so it survives the
+                      // horizontal scroll-truncation.
                       isActive
-                        ? "bg-purple-500/20 text-purple-400"
+                        ? "bg-purple-500/20 text-purple-700 dark:text-purple-300 shadow-[inset_0_-2px_0_0_rgb(168,85,247)] sm:shadow-none"
                         : "text-muted-foreground hover:text-foreground hover:bg-accent"
                     )}
                   >
-                    <Icon className="h-4 w-4 flex-shrink-0" />
+                    <Icon className="h-4 w-4 flex-shrink-0" aria-hidden />
                     <span className="text-sm font-medium flex-1">{tab.label}</span>
                     {/* Status dot: red when there are validation errors,
                         amber when only dirty. Errors take priority since
