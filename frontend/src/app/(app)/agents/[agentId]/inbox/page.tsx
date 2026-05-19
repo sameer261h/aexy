@@ -523,7 +523,7 @@ function MessageDetail({
               // (no manual drag handle showing). min-height keeps the box
               // a comfortable two lines even when empty; effect caps at
               // 320px so a very long draft scrolls inside the textarea.
-              className="w-full bg-accent border border-border rounded-lg px-3 py-2 text-foreground text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[72px]"
+              className="w-full bg-accent border border-border rounded-lg px-3 py-2 text-foreground text-sm resize-none focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 min-h-[72px]"
               rows={3}
             />
             <div className="flex items-center justify-between text-[11px] text-muted-foreground/80">
@@ -701,7 +701,7 @@ function EscalateDialog({
               placeholder={ti("assigneePlaceholder")}
               autoFocus
               autoComplete="off"
-              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500"
             />
             <datalist id="escalate-candidates">
               {candidates.map((m) => (
@@ -730,7 +730,7 @@ function EscalateDialog({
               onChange={(e) => setNote(e.target.value)}
               placeholder={ti("notePlaceholder")}
               rows={3}
-              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none"
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 resize-none"
             />
           </div>
         </div>
@@ -1064,7 +1064,7 @@ export default function AgentInboxPage() {
               <select
                 value={statusFilter || ""}
                 onChange={(e) => setStatusFilter(e.target.value || undefined)}
-                className="bg-accent border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="bg-accent border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
               >
                 <option value="">All Status</option>
                 <option value="pending">Pending</option>

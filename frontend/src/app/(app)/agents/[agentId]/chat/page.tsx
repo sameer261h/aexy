@@ -172,6 +172,8 @@ export default function AgentChatPage() {
             <div className="flex items-center gap-2">
               <Link
                 href={`/agents/${agentId}/edit`}
+                aria-label="Agent settings"
+                title="Settings"
                 className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition"
               >
                 <Settings className="h-5 w-5" />

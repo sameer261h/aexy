@@ -132,7 +132,7 @@ export function PromptEditor({
         className={cn(
           "w-full px-4 py-3 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground",
           "font-mono text-sm leading-relaxed",
-          "focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent",
+          "focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus:border-transparent",
           "disabled:opacity-50 disabled:cursor-not-allowed",
           "resize-y min-h-[120px]"
         )}
@@ -183,7 +183,7 @@ export function InstructionsEditor({
         className={cn(
           "w-full px-4 py-3 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground",
           "text-sm leading-relaxed",
-          "focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent",
+          "focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus:border-transparent",
           "disabled:opacity-50 disabled:cursor-not-allowed",
           "resize-y"
         )}

@@ -90,7 +90,7 @@ export function ToolSelector({
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search tools..."
           disabled={disabled}
-          className="w-full pl-10 pr-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
+          className="w-full pl-10 pr-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 disabled:opacity-50"
         />
       </div>
 

@@ -204,10 +204,10 @@ function AgentCard({
               className={cn(
                 "text-lg font-semibold",
                 successRate >= 90
-                  ? "text-green-400"
+                  ? "text-green-700 dark:text-green-400"
                   : successRate >= 70
-                  ? "text-amber-400"
-                  : "text-red-400"
+                  ? "text-amber-700 dark:text-amber-400"
+                  : "text-red-700 dark:text-red-400"
               )}
             >
               {successRate}%
@@ -367,7 +367,9 @@ export default function AgentsListPage() {
             <div className="text-sm text-muted-foreground">{t("stats.totalAgents")}</div>
           </div>
           <div className="bg-muted rounded-xl p-4 border border-border">
-            <div className="text-2xl font-bold text-green-400">{activeCount}</div>
+            <div className="text-2xl font-bold text-emerald-700 dark:text-emerald-400">
+              {activeCount}
+            </div>
             <div className="text-sm text-muted-foreground">{t("stats.activeAgents")}</div>
           </div>
           <div className="bg-muted rounded-xl p-4 border border-border">
@@ -410,7 +412,7 @@ export default function AgentsListPage() {
                 <select
                   value={filterType}
                   onChange={(e) => setFilterType(e.target.value)}
-                  className="px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  className="px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
                 >
                   <option value="all">{t("types.allTypes")}</option>
                   {Object.entries(AGENT_TYPE_CONFIG).map(([key, config]) => (
@@ -425,7 +427,7 @@ export default function AgentsListPage() {
                 <select
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
-                  className="px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  className="px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
                 >
                   <option value="all">{t("status.allStatus")}</option>
                   <option value="active">{t("status.active")}</option>

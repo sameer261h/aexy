@@ -58,11 +58,11 @@ function AutomationCard({
     >
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-lg ${automation.is_active ? "bg-green-500/20 text-green-400" : "bg-accent text-muted-foreground"}`}>
+          <div className={`p-2 rounded-lg ${automation.is_active ? "bg-green-500/20 text-green-700 dark:text-green-400" : "bg-accent text-muted-foreground"}`}>
             <Zap className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="text-foreground font-medium group-hover:text-blue-400 transition-colors">{automation.name}</h3>
+            <h3 className="text-foreground font-medium group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{automation.name}</h3>
             <div className="flex items-center gap-2 mt-1">
               <ModuleBadge module={automation.module as AutomationModule} />
             </div>
@@ -71,25 +71,29 @@ function AutomationCard({
         <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
           <button
             onClick={onEdit}
-            className="p-2 rounded-lg bg-accent text-muted-foreground hover:bg-blue-500/20 hover:text-blue-400 transition-colors"
+            aria-label="Edit automation"
             title="Edit automation"
+            className="p-2 rounded-lg bg-accent text-muted-foreground hover:bg-blue-500/20 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
           >
             <Edit2 className="h-4 w-4" />
           </button>
           <button
             onClick={onToggle}
+            aria-label={automation.is_active ? "Pause automation" : "Activate automation"}
+            title={automation.is_active ? "Pause automation" : "Activate automation"}
             className={`p-2 rounded-lg transition-colors ${
               automation.is_active
-                ? "bg-green-500/20 text-green-400 hover:bg-green-500/30"
+                ? "bg-green-500/20 text-green-700 dark:text-green-400 hover:bg-green-500/30"
                 : "bg-accent text-muted-foreground hover:bg-muted"
             }`}
-            title={automation.is_active ? "Pause automation" : "Activate automation"}
           >
             {automation.is_active ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
           </button>
           <button
             onClick={onDelete}
-            className="p-2 rounded-lg bg-accent text-muted-foreground hover:bg-red-500/20 hover:text-red-400 transition-colors"
+            aria-label="Delete automation"
+            title="Delete automation"
+            className="p-2 rounded-lg bg-accent text-muted-foreground hover:bg-red-500/20 hover:text-red-600 dark:hover:text-red-400 transition-colors"
           >
             <Trash2 className="h-4 w-4" />
           </button>

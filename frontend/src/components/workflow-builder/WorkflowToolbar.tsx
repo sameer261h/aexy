@@ -196,8 +196,9 @@ export function WorkflowToolbar({
         {onTestResultsOpen && (
           <button
             onClick={onTestResultsOpen}
-            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            aria-label="Test results"
             title="Test results"
+            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
             <TestTube className="h-4 w-4" />
           </button>
@@ -232,8 +233,9 @@ export function WorkflowToolbar({
         {/* Fit view button */}
         <button
           onClick={onFitView}
-          className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          aria-label="Fit view"
           title="Fit view"
+          className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         >
           <Maximize className="h-4 w-4" />
         </button>
@@ -242,8 +244,9 @@ export function WorkflowToolbar({
         {onHistoryOpen && (
           <button
             onClick={onHistoryOpen}
-            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            aria-label="Execution history"
             title="Execution history"
+            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
             <History className="h-4 w-4" />
           </button>
@@ -253,8 +256,9 @@ export function WorkflowToolbar({
         {onVersionHistoryOpen && (
           <button
             onClick={onVersionHistoryOpen}
-            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            aria-label={`Version history${currentVersion ? ` (v${currentVersion})` : ""}`}
             title={`Version history${currentVersion ? ` (v${currentVersion})` : ""}`}
+            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
             <GitBranch className="h-4 w-4" />
           </button>
@@ -268,8 +272,9 @@ export function WorkflowToolbar({
               <button
                 onClick={handleExport}
                 disabled={isExporting}
-                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+                aria-label="Export workflow"
                 title="Export workflow"
+                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
               >
                 {isExporting ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -282,8 +287,9 @@ export function WorkflowToolbar({
               <button
                 onClick={() => setShowImportModal(true)}
                 disabled={isImporting}
-                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+                aria-label="Import workflow"
                 title="Import workflow"
+                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
               >
                 {isImporting ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -436,7 +442,7 @@ export function WorkflowToolbar({
                   value={testRecordId}
                   onChange={(e) => setTestRecordId(e.target.value)}
                   placeholder="Enter a record ID to test with..."
-                  className="flex-1 bg-accent border border-border rounded-lg px-3 py-2 text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="flex-1 bg-accent border border-border rounded-lg px-3 py-2 text-foreground text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 />
                 <button
                   type="button"

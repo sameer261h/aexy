@@ -131,7 +131,7 @@ function RunAgentDialog({
               value={task}
               onChange={(e) => setTask(e.target.value)}
               placeholder={t("runDialog.taskPlaceholder")}
-              className="w-full px-4 py-3 bg-accent border border-border rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-purple-500 resize-none"
+              className="w-full px-4 py-3 bg-accent border border-border rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/50 focus:border-purple-500 resize-none"
               rows={4}
               autoFocus
             />
@@ -266,11 +266,11 @@ function ExecutionDetail({ execution }: ExecutionDetailProps) {
       {/* Error */}
       {execution.error_message && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-          <div className="flex items-center gap-2 text-red-400 mb-1">
+          <div className="flex items-center gap-2 text-red-700 dark:text-red-400 mb-1">
             <XCircle className="h-4 w-4" />
             <span className="font-medium">Error</span>
           </div>
-          <p className="text-sm text-red-300">{execution.error_message}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{execution.error_message}</p>
         </div>
       )}
 
@@ -797,10 +797,10 @@ export default function AgentDetailPage() {
                     className={cn(
                       "font-medium",
                       successRate >= 90
-                        ? "text-green-400"
+                        ? "text-emerald-700 dark:text-emerald-400"
                         : successRate >= 70
-                        ? "text-amber-400"
-                        : "text-red-400"
+                        ? "text-amber-700 dark:text-amber-400"
+                        : "text-red-700 dark:text-red-400"
                     )}
                   >
                     {successRate}%
@@ -865,6 +865,8 @@ export default function AgentDetailPage() {
                 <h3 className="font-medium text-foreground">Execution History</h3>
                 <button
                   onClick={() => refetchExecutions()}
+                  aria-label="Refresh execution history"
+                  title="Refresh"
                   className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition"
                 >
                   <RefreshCw className="h-4 w-4" />

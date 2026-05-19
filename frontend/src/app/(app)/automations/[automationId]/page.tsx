@@ -298,7 +298,7 @@ export default function EditAutomationPage() {
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="text-lg font-semibold text-foreground bg-transparent border-none focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-2 py-1 -ml-2"
+                  className="text-lg font-semibold text-foreground bg-transparent border-none focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded px-2 py-1 -ml-2"
                   placeholder={t("builder.namePlaceholder")}
                 />
                 {automation?.module && (
@@ -344,7 +344,7 @@ export default function EditAutomationPage() {
                 type="text"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                className="block text-sm text-muted-foreground bg-transparent border-none focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-2 py-0.5 -ml-2 w-full max-w-md"
+                className="block text-sm text-muted-foreground bg-transparent border-none focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded px-2 py-0.5 -ml-2 w-full max-w-md"
                 placeholder="Add a description..."
               />
             </div>

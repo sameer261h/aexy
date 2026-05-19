@@ -472,7 +472,7 @@ export default function EditAgentPage() {
                 onChange={(e) => setName(e.target.value)}
                 disabled={isSystemAgent}
                 className={cn(
-                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500",
+                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500",
                   isSystemAgent && "opacity-50 cursor-not-allowed"
                 )}
               />
@@ -520,7 +520,7 @@ export default function EditAgentPage() {
                   disabled={isSystemAgent}
                   placeholder="my-agent"
                   className={cn(
-                    "w-full pl-8 pr-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500",
+                    "w-full pl-8 pr-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500",
                     isSystemAgent && "opacity-50 cursor-not-allowed"
                   )}
                 />
@@ -543,7 +543,7 @@ export default function EditAgentPage() {
                 rows={3}
                 placeholder="What does this agent do?"
                 className={cn(
-                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none",
+                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 resize-none",
                   isSystemAgent && "opacity-50 cursor-not-allowed"
                 )}
               />
@@ -610,7 +610,7 @@ export default function EditAgentPage() {
                 onChange={(e) => setMaxTokens(parseInt(e.target.value) || 2000)}
                 min={100}
                 max={32000}
-                className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500"
+                className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
               />
               <p className="mt-1.5 text-xs text-muted-foreground">
                 Cap on the model's response length (1 token ≈ 4 characters
@@ -664,7 +664,7 @@ export default function EditAgentPage() {
                 checked={autoRespond}
                 onChange={(e) => setAutoRespond(e.target.checked)}
                 disabled={isSystemAgent}
-                className="w-5 h-5 mt-0.5 rounded border-border bg-accent text-purple-500 focus:ring-purple-500"
+                className="w-5 h-5 mt-0.5 rounded border-border bg-accent text-purple-500 focus-visible:ring-purple-500"
               />
               <div>
                 <div className="font-medium text-foreground">Enable Auto-Response</div>
@@ -703,7 +703,7 @@ export default function EditAgentPage() {
                   disabled={isSystemAgent}
                   min={1}
                   className={cn(
-                    "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500",
+                    "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500",
                     isSystemAgent && "opacity-50 cursor-not-allowed"
                   )}
                 />
@@ -724,7 +724,7 @@ export default function EditAgentPage() {
                   disabled={isSystemAgent}
                   min={0}
                   className={cn(
-                    "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500",
+                    "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500",
                     isSystemAgent && "opacity-50 cursor-not-allowed"
                   )}
                 />
@@ -794,7 +794,7 @@ export default function EditAgentPage() {
                 disabled={isSystemAgent}
                 placeholder="support@example.com"
                 className={cn(
-                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500",
+                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500",
                   isSystemAgent && "opacity-50 cursor-not-allowed"
                 )}
               />
@@ -814,7 +814,7 @@ export default function EditAgentPage() {
                 disabled={isSystemAgent}
                 placeholder="#support-escalations"
                 className={cn(
-                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500",
+                  "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500",
                   isSystemAgent && "opacity-50 cursor-not-allowed"
                 )}
               />
@@ -900,7 +900,7 @@ export default function EditAgentPage() {
                       value={newEmailHandle}
                       onChange={(e) => setNewEmailHandle(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
                       placeholder="support"
-                      className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
                     />
                     <p className="mt-1 text-xs text-muted-foreground">
                       Letters, numbers, and hyphens only
@@ -917,7 +917,7 @@ export default function EditAgentPage() {
                       <select
                         value={newEmailDomain}
                         onChange={(e) => setNewEmailDomain(e.target.value)}
-                        className="w-full pl-10 pr-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500 appearance-none"
+                        className="w-full pl-10 pr-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 appearance-none"
                       >
                         {domains.map((d) => (
                           <option key={d.domain} value={d.domain}>
@@ -1034,7 +1034,7 @@ export default function EditAgentPage() {
                     checked={autoReplyEnabled}
                     onChange={(e) => setAutoReplyEnabled(e.target.checked)}
                     disabled={isSystemAgent}
-                    className="w-5 h-5 mt-0.5 rounded border-border bg-accent text-purple-500 focus:ring-purple-500"
+                    className="w-5 h-5 mt-0.5 rounded border-border bg-accent text-purple-500 focus-visible:ring-purple-500"
                   />
                   <div>
                     <div className="font-medium text-foreground">Enable Auto-Reply</div>
@@ -1056,7 +1056,7 @@ export default function EditAgentPage() {
                     rows={4}
                     placeholder="Best regards,&#10;{agent_name}"
                     className={cn(
-                      "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none",
+                      "w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 resize-none",
                       isSystemAgent && "opacity-50 cursor-not-allowed"
                     )}
                   />
