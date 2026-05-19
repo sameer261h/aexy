@@ -141,7 +141,7 @@ function ConversationItem({ conversation, isSelected, onSelect, onDelete }: Conv
                       onDelete();
                       setShowMenu(false);
                     }}
-                    className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-muted flex items-center gap-2"
+                    className="w-full px-3 py-2 text-left text-sm text-red-600 dark:text-red-400 hover:bg-muted flex items-center gap-2"
                   >
                     <Trash2 className="h-4 w-4" />
                     Delete
@@ -183,7 +183,7 @@ export function ConversationSidebar({
       <div className="flex-1 overflow-y-auto p-3 space-y-4">
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
-            <Clock className="h-5 w-5 text-muted-foreground animate-pulse" />
+            <Clock className="h-5 w-5 text-muted-foreground motion-safe:animate-pulse" />
           </div>
         ) : conversations.length === 0 ? (
           <div className="text-center py-8">

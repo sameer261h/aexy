@@ -621,6 +621,16 @@ export default function AgentDetailPage() {
             const haloColor = getAgentTypeConfig(agent.agent_type).color;
             return (
               <div
+                // UX-A11Y-008: live region so screen readers announce
+                // execution status transitions (running -> completed /
+                // failed). aria-atomic so the whole strip is re-spoken
+                // each tick rather than just the diff — the strip is
+                // short and the context matters. role="status" is
+                // implicit-polite, but we set both to be explicit.
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+                aria-label="Agent execution status"
                 className="hidden sm:flex items-center gap-3 mt-3 px-3 py-2 rounded-lg border border-border bg-background/40"
                 style={{
                   boxShadow: isRunning
