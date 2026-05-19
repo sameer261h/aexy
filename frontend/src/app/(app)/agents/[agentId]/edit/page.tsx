@@ -759,6 +759,13 @@ export default function EditAgentPage() {
                 This is a system agent. Prompts cannot be modified.
               </div>
             )}
+            <p className="text-sm text-muted-foreground">
+              The system prompt anchors the agent's tone and behavior on
+              every run. Custom instructions are layered on top for run-
+              specific guidance — use them for policy ("never quote a
+              price"), style ("be terse"), or escalation logic the
+              behavior thresholds can't express.
+            </p>
             <div>
               <PromptEditor
                 value={systemPrompt}
@@ -788,11 +795,20 @@ export default function EditAgentPage() {
                 This is a system agent. Escalation settings cannot be modified.
               </div>
             )}
+            <p className="text-sm text-muted-foreground">
+              The agent escalates when it falls below the approval
+              threshold on the Behavior tab, hits a manual "Escalate"
+              from the inbox, or encounters a tool failure it can't
+              recover from. The routes below are the destinations for
+              those events — either is fine on its own, both is fine
+              for higher-criticality agents.
+            </p>
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
+              <label htmlFor="escalation-email" className="block text-sm font-medium text-foreground mb-2">
                 Escalation Email
               </label>
               <input
+                id="escalation-email"
                 type="email"
                 value={escalationEmail}
                 onChange={(e) => setEscalationEmail(e.target.value)}
@@ -803,16 +819,18 @@ export default function EditAgentPage() {
                   isSystemAgent && "opacity-50 cursor-not-allowed"
                 )}
               />
-              <p className="mt-1 text-sm text-muted-foreground">
-                Email address to notify when agent escalates an issue
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Inbox + thread context land here as a regular email.
+                Leave blank to disable email escalation.
               </p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
+              <label htmlFor="escalation-slack" className="block text-sm font-medium text-foreground mb-2">
                 Slack Channel
               </label>
               <input
+                id="escalation-slack"
                 type="text"
                 value={escalationSlackChannel}
                 onChange={(e) => setEscalationSlackChannel(e.target.value)}
@@ -823,8 +841,10 @@ export default function EditAgentPage() {
                   isSystemAgent && "opacity-50 cursor-not-allowed"
                 )}
               />
-              <p className="mt-1 text-sm text-muted-foreground">
-                Slack channel to post escalation notifications
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Posts a summary card with a deep-link back to the
+                original inbox message. Requires the workspace Slack
+                integration; leave blank to skip.
               </p>
             </div>
           </div>

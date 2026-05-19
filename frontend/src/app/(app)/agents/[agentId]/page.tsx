@@ -414,6 +414,8 @@ export default function AgentDetailPage() {
   const {
     agent,
     isLoading: agentLoading,
+    error: agentError,
+    refetch: refetchAgent,
     toggleAgent,
     deleteAgent,
     executeAgent,
@@ -517,18 +519,65 @@ export default function AgentDetailPage() {
   }
 
   if (!agent) {
+    // UX-LE-002: distinguish 404 / 403 / network. axios surfaces the
+    // HTTP status as `error.response?.status`; absence of `response`
+    // means the request never reached the server (CORS / offline /
+    // dropped). Each case gets its own copy + appropriate next-action
+    // so a workspace-switched user (403) isn't told their agent was
+    // deleted (404). Anchor the lift on agentError shape.
+    const status =
+      (agentError as { response?: { status?: number } } | null | undefined)
+        ?.response?.status;
+    const variant: "notFound" | "forbidden" | "network" =
+      status === 404 ? "notFound" : status === 403 ? "forbidden" : agentError ? "network" : "notFound";
+    const copy: Record<typeof variant, { title: string; body: React.ReactNode }> = {
+      notFound: {
+        title: "Agent Not Found",
+        body: (
+          <>The agent you&apos;re looking for doesn&apos;t exist or has been deleted.</>
+        ),
+      },
+      forbidden: {
+        title: "You don't have access to this agent",
+        body: (
+          <>
+            This agent belongs to a workspace you can't see. If you
+            switched workspaces in another tab, head back to the agents
+            list to find what you're working in now.
+          </>
+        ),
+      },
+      network: {
+        title: "Couldn't load this agent",
+        body: (
+          <>
+            The request failed before it reached the server — check your
+            connection and try again.
+          </>
+        ),
+      },
+    };
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <Bot className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-          <h2 className="text-xl font-medium text-foreground mb-2">Agent Not Found</h2>
-          <p className="text-muted-foreground mb-4">
-            The agent you&apos;re looking for doesn&apos;t exist or has been deleted.
-          </p>
-          <Breadcrumb
-            items={[{ label: "Agents", href: "/agents" }]}
-            className="justify-center"
-          />
+        <div className="text-center max-w-md">
+          <Bot className="h-16 w-16 text-muted-foreground mx-auto mb-4" aria-hidden />
+          <h2 className="text-xl font-medium text-foreground mb-2">{copy[variant].title}</h2>
+          <p className="text-muted-foreground mb-4">{copy[variant].body}</p>
+          <div className="flex items-center justify-center gap-2">
+            {variant === "network" ? (
+              <button
+                type="button"
+                onClick={() => refetchAgent()}
+                className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg bg-purple-600 text-white hover:bg-purple-700 transition-colors focus-visible:ring-2 focus-visible:ring-purple-500"
+              >
+                Retry
+              </button>
+            ) : null}
+            <Breadcrumb
+              items={[{ label: "Agents", href: "/agents" }]}
+              className="justify-center"
+            />
+          </div>
         </div>
       </div>
     );
