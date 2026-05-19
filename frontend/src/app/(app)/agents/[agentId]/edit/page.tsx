@@ -462,7 +462,7 @@ export default function EditAgentPage() {
         return (
           <div className="space-y-6">
             {isSystemAgent && (
-              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 dark:text-amber-300 text-sm">
                 This is a system agent. Only LLM configuration (provider, model, temperature) can be modified.
               </div>
             )}
@@ -631,13 +631,13 @@ export default function EditAgentPage() {
         return (
           <div>
             {isSystemAgent && (
-              <div className="mb-4 p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+              <div className="mb-4 p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 dark:text-amber-300 text-sm">
                 This is a system agent. Tools cannot be modified.
               </div>
             )}
             {toolsLoading ? (
               <div className="text-center py-8">
-                <Loader2 className="h-8 w-8 text-purple-400 animate-spin mx-auto mb-4" />
+                <Loader2 className="h-8 w-8 text-purple-700 dark:text-purple-300 animate-spin mx-auto mb-4" />
                 <p className="text-muted-foreground">Loading tools...</p>
               </div>
             ) : (
@@ -659,7 +659,7 @@ export default function EditAgentPage() {
         return (
           <div className="space-y-8">
             {isSystemAgent && (
-              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 dark:text-amber-300 text-sm">
                 This is a system agent. Behavior settings cannot be modified.
               </div>
             )}
@@ -755,7 +755,7 @@ export default function EditAgentPage() {
         return (
           <div className="space-y-6">
             {isSystemAgent && (
-              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 dark:text-amber-300 text-sm">
                 This is a system agent. Prompts cannot be modified.
               </div>
             )}
@@ -791,7 +791,7 @@ export default function EditAgentPage() {
         return (
           <div className="space-y-6">
             {isSystemAgent && (
-              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 dark:text-amber-300 text-sm">
                 This is a system agent. Escalation settings cannot be modified.
               </div>
             )}
@@ -894,7 +894,7 @@ export default function EditAgentPage() {
         return (
           <div className="space-y-6">
             {isSystemAgent && (
-              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-sm">
+              <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 dark:text-amber-300 text-sm">
                 This is a system agent. Email settings cannot be modified.
               </div>
             )}
@@ -903,7 +903,7 @@ export default function EditAgentPage() {
               <div className="p-4 bg-purple-500/10 border border-purple-500/30 rounded-lg">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
                   <h3 className="font-medium text-foreground flex items-center gap-2">
-                    <AtSign className="h-4 w-4 text-purple-400" />
+                    <AtSign className="h-4 w-4 text-purple-700 dark:text-purple-300" />
                     Configure Email Address
                   </h3>
                   <button
@@ -1003,7 +1003,7 @@ export default function EditAgentPage() {
                     </h3>
                     {agent?.email_address ? (
                       <div className="flex items-center gap-2 mt-1">
-                        <code className="text-sm text-blue-400 bg-muted px-2 py-0.5 rounded">
+                        <code className="text-sm text-blue-700 dark:text-blue-400 bg-muted px-2 py-0.5 rounded">
                           {agent.email_address}
                         </code>
                         <button
@@ -1012,7 +1012,7 @@ export default function EditAgentPage() {
                           title="Copy email address"
                         >
                           {emailCopied ? (
-                            <Check className="h-4 w-4 text-green-400" />
+                            <Check className="h-4 w-4 text-green-700 dark:text-green-400" />
                           ) : (
                             <Copy className="h-4 w-4" />
                           )}
@@ -1213,7 +1213,7 @@ export default function EditAgentPage() {
 
       <main className="max-w-5xl mx-auto px-4 py-8">
         {error && (
-          <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400">
+          <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-600 dark:text-red-400">
             {error}
           </div>
         )}

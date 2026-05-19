@@ -90,6 +90,17 @@ const priorityConfig = {
 // so "3h ago" reads identically across surfaces.
 const formatDate = formatRelative;
 
+// Human-readable byte sizes for attachment chips. Keeps the chip
+// width tight ("128 KB" instead of "131072 bytes"). Falls back to
+// the raw byte count for sub-kilobyte sizes.
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
 function MessageCard({
   message,
   isSelected,
@@ -209,8 +220,8 @@ function MessageCard({
       </div>
       {message.confidence_score !== null && (
         <div className="flex items-center gap-2 mt-2">
-          <Sparkles className="h-3 w-3 text-purple-400" />
-          <span className="text-xs text-purple-400">
+          <Sparkles className="h-3 w-3 text-purple-600 dark:text-purple-400" aria-hidden />
+          <span className="text-xs text-purple-700 dark:text-purple-300">
             {Math.round(message.confidence_score * 100)}% confidence
           </span>
         </div>
@@ -421,6 +432,41 @@ function MessageDetail({
           )}
         </div>
 
+        {/* UX-INB-026: render attachments[] when present so the user
+            knows the sender included files even though we don't yet
+            expose a download endpoint. Chips show filename + type +
+            human-readable size. Click is a no-op (cursor: default) for
+            now — when the backend lands a /attachments/:id route the
+            anchor target can be wired in here without changing the
+            visual shape. */}
+        {message.attachments && message.attachments.length > 0 && (
+          <div className="mt-5 pt-4 border-t border-border">
+            <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+              Attachments ({message.attachments.length})
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {message.attachments.map((att, idx) => (
+                <div
+                  key={`${att.name}-${idx}`}
+                  className="inline-flex items-center gap-2 px-2.5 py-1.5 bg-accent/50 border border-border rounded-lg text-xs text-foreground max-w-[240px]"
+                  title={att.content_type ? `${att.content_type} - ${att.name}` : att.name}
+                >
+                  <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" aria-hidden />
+                  <span className="truncate">{att.name}</span>
+                  {typeof att.length === "number" && (
+                    <span className="text-muted-foreground shrink-0">
+                      {formatBytes(att.length)}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] text-muted-foreground/80">
+              Stored with the message. Download not available yet.
+            </p>
+          </div>
+        )}
+
         {/* Suggested Response — UX-INB-024: prior version was a one-click
             commit ("Send Suggested Response") with no edit step. Users
             who wanted to tweak the AI suggestion had to copy-paste it
@@ -564,8 +610,8 @@ function MessageDetail({
 
       {message.status === "responded" && (
         <div className="p-4 border-t border-border bg-green-500/10">
-          <div className="flex items-center gap-2 text-green-400">
-            <CheckCircle className="h-5 w-5" />
+          <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
+            <CheckCircle className="h-5 w-5" aria-hidden />
             <span className="text-sm font-medium">
               Response sent on {message.responded_at ? new Date(message.responded_at).toLocaleString() : "Unknown"}
             </span>
@@ -575,8 +621,8 @@ function MessageDetail({
 
       {message.status === "escalated" && (
         <div className="p-4 border-t border-border bg-orange-500/10">
-          <div className="flex items-center gap-2 text-orange-400">
-            <ArrowUpRight className="h-5 w-5" />
+          <div className="flex items-center gap-2 text-orange-700 dark:text-orange-400">
+            <ArrowUpRight className="h-5 w-5" aria-hidden />
             <span className="text-sm font-medium">
               Escalated on {message.escalated_at ? new Date(message.escalated_at).toLocaleString() : "Unknown"}
             </span>
@@ -1034,7 +1080,7 @@ export default function AgentInboxPage() {
             <div className="flex items-center gap-4">
               <div>
                 <div className="flex items-center gap-2">
-                  <Mail className="h-5 w-5 text-blue-400" />
+                  <Mail className="h-5 w-5 text-blue-600 dark:text-blue-400" aria-hidden />
                   <h1 className="text-xl font-bold text-foreground">
                     {agent?.name || "Agent"} Inbox
                   </h1>

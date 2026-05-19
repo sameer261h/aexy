@@ -365,7 +365,7 @@ function ExecutionDetail({ execution }: ExecutionDetailProps) {
                   <span className="text-foreground font-medium">
                     Step {step.step_number}
                     {step.tool_name && (
-                      <span className="ml-2 text-purple-400">{step.tool_name}</span>
+                      <span className="ml-2 text-purple-700 dark:text-purple-300">{step.tool_name}</span>
                     )}
                   </span>
                   {step.timestamp && (

@@ -179,41 +179,57 @@ function WorkflowCanvasInner({
     return map;
   }, [testResult]);
 
-  // Enhance nodes with error states, highlighting, and execution status
+  // UX-WFL-007: Per-node memo cache. React Flow reconciles by id; if
+  // we return the *same* enhanced object reference for an unchanged
+  // node, RF skips that node's rerender. The prior implementation
+  // produced new objects every render (since useMemo's `nodes`
+  // dependency changes on every position drag + every config keystroke
+  // in NodeConfigPanel), reflowing all 20+ nodes on each keystroke.
+  // Cache keyed by nodeId; invalidates when the per-node inputs
+  // actually change (deep-equal would be overkill — we compare the
+  // primitive inputs we use to build the augmentation).
+  const enhancedNodeCacheRef = useRef(new Map<string, { node: Node; key: string }>());
   const enhancedNodes = useMemo(() => {
-    return nodes.map((node) => {
+    const cache = enhancedNodeCacheRef.current;
+    const nextCache = new Map<string, { node: Node; key: string }>();
+    const result = nodes.map((node) => {
       const nodeErrors = getNodeErrors(node.id);
       const hasErrors = nodeErrors.length > 0;
       const errorMessage = hasErrors ? nodeErrors.map((e) => e.message).join(", ") : undefined;
       const isHighlighted = highlightedNodeIds.has(node.id);
-
-      // Get execution status from test results
       const nodeResult = nodeResultsMap.get(node.id);
       let executionStatus: ExecutionStatus = "idle";
       if (isTestRunning && !testResult) {
-        // Test is starting, mark trigger as running
-        if (node.type === "trigger") {
-          executionStatus = "running";
-        }
+        if (node.type === "trigger") executionStatus = "running";
       } else if (nodeResult) {
-        // Map node result status to execution status
         switch (nodeResult.status) {
-          case "success":
-            executionStatus = "success";
-            break;
-          case "failed":
-            executionStatus = "failed";
-            break;
-          case "skipped":
-            executionStatus = "skipped";
-            break;
-          case "waiting":
-            executionStatus = "running";
-            break;
+          case "success": executionStatus = "success"; break;
+          case "failed": executionStatus = "failed"; break;
+          case "skipped": executionStatus = "skipped"; break;
+          case "waiting": executionStatus = "running"; break;
         }
       }
 
-      return {
+      // Cache key encodes every input that affects the augmented data.
+      // `node` itself is part of identity — when its data changes
+      // (config edit), the upstream reducer hands us a new reference,
+      // and the cached entry below misses on `cached.node !== node`.
+      const augmentationKey = [
+        errorMessage ?? "",
+        isHighlighted ? "1" : "0",
+        executionStatus,
+        nodeResult?.duration_ms ?? "",
+        nodeResult?.condition_result ?? "",
+        nodeResult?.selected_branch ?? "",
+      ].join("|");
+
+      const cached = cache.get(node.id);
+      if (cached && cached.node === node && cached.key === augmentationKey) {
+        nextCache.set(node.id, cached);
+        return cached.node;
+      }
+
+      const enhanced: Node = {
         ...node,
         data: {
           ...node.data,
@@ -226,7 +242,11 @@ function WorkflowCanvasInner({
           selectedBranch: nodeResult?.selected_branch,
         },
       };
+      nextCache.set(node.id, { node: enhanced, key: augmentationKey });
+      return enhanced;
     });
+    enhancedNodeCacheRef.current = nextCache;
+    return result;
   }, [nodes, getNodeErrors, highlightedNodeIds, nodeResultsMap, isTestRunning, testResult]);
 
   // Enhance edges with execution status
