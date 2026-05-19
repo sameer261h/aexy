@@ -27,6 +27,7 @@ import { useAgentEmail, useEmailDomains } from "@/hooks/useAgentInbox";
 import { getAgentTypeConfig, AgentType, WorkingHoursConfig } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   AgentTypeBadge,
   ToolSelector,
@@ -76,6 +77,11 @@ export default function EditAgentPage() {
   const [hasChanges, setHasChanges] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Lifted to component scope so the ConfirmDialog can render at the
+  // page root (outside the per-tab render switch) — Disable Email is
+  // destructive (severs the agent's email address, orphans any
+  // pending inbox messages) and needs a confirm step. UX-EDT-017.
+  const [showDisableEmailConfirm, setShowDisableEmailConfirm] = useState(false);
 
   // Form state
   const [name, setName] = useState("");
@@ -832,9 +838,9 @@ export default function EditAgentPage() {
                 {!isSystemAgent && (
                   agent?.email_enabled ? (
                     <button
-                      onClick={handleDisableEmail}
+                      onClick={() => setShowDisableEmailConfirm(true)}
                       disabled={isDisabling}
-                      className="px-4 py-2 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30 transition-colors disabled:opacity-50"
+                      className="px-4 py-2 bg-red-500/20 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-500/30 transition-colors disabled:opacity-50"
                     >
                       {isDisabling ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
@@ -1057,6 +1063,40 @@ export default function EditAgentPage() {
           </div>
         </div>
       </main>
+
+      <ConfirmDialog
+        open={showDisableEmailConfirm}
+        onOpenChange={setShowDisableEmailConfirm}
+        title="Disable email for this agent?"
+        description={
+          agent?.email_address ? (
+            <>
+              The address{" "}
+              <span className="font-mono text-foreground">
+                {agent.email_address}
+              </span>{" "}
+              will be released. Any pending replies in the inbox stay archived
+              but the agent will no longer receive new messages. You can
+              re-enable email later, but the address may already be claimed
+              by another agent.
+            </>
+          ) : (
+            "The agent will stop receiving and replying to email. You can re-enable later."
+          )
+        }
+        confirmLabel="Disable email"
+        tone="danger"
+        isPending={isDisabling}
+        onConfirm={async () => {
+          try {
+            await disableEmail();
+            setEmailEnabled(false);
+          } catch (err) {
+            console.error("Failed to disable email:", err);
+            setError(err instanceof Error ? err.message : "Failed to disable email");
+          }
+        }}
+      />
     </div>
   );
 }

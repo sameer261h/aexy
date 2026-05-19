@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {
-  X,
   Clock,
   CheckCircle,
   XCircle,
@@ -15,6 +14,12 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { EXECUTION_STATUS_COLORS, getStatusColor } from "@/lib/statusColors";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 
 interface ExecutionStep {
   id: string;
@@ -172,29 +177,20 @@ export function ExecutionHistory({
     return `${(ms / 60000).toFixed(1)}m`;
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-y-0 right-0 w-96 bg-muted border-l border-border shadow-xl z-[100] flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-        <h2 className="text-lg font-semibold text-foreground">Execution History</h2>
-        <div className="flex items-center gap-2">
+    <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <SheetContent side="right" className="p-0 flex flex-col">
+        <SheetHeader className="flex-row items-center justify-between px-4 py-3 space-y-0">
+          <SheetTitle>Execution History</SheetTitle>
           <button
             onClick={loadExecutions}
-            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-colors"
+            aria-label="Refresh execution history"
+            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-colors mr-8"
             title="Refresh"
           >
             <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
           </button>
-          <button
-            onClick={onClose}
-            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-colors"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-      </div>
+        </SheetHeader>
 
       {/* Content */}
       <div className="flex-1 overflow-hidden flex flex-col">
@@ -402,6 +398,7 @@ export function ExecutionHistory({
           </div>
         )}
       </div>
-    </div>
+      </SheetContent>
+    </Sheet>
   );
 }
