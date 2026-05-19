@@ -35,6 +35,17 @@ export function useAgentInbox(
     queryKey: ["agentInbox", workspaceId, agentId, options],
     queryFn: () => agentsApi.listInboxMessages(workspaceId!, agentId!, options),
     enabled: !!workspaceId && !!agentId,
+    // Background poll so new messages show up without requiring the
+    // operator to mash the refresh button. Faster cadence when any
+    // message is still being processed by the agent.
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const inFlight = Array.isArray(data)
+        ? data.some((m) => m.status === "processing" || m.status === "pending")
+        : false;
+      return inFlight ? 5000 : 30000;
+    },
+    refetchIntervalInBackground: false,
   });
 
   const replyMutation = useMutation({

@@ -295,6 +295,18 @@ export function useAgentExecutions(
     queryFn: () =>
       agentsApi.listExecutions(workspaceId!, agentId!, { status }),
     enabled: !!workspaceId && !!agentId,
+    // Auto-refresh so the detail page's "live status" strip + execution
+    // history feel like an ops view instead of a snapshot. Tight 2s poll
+    // while any execution is in-flight (pending/running); falls back to a
+    // 15s background refresh otherwise so cost stays bounded.
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const hasActiveRun = Array.isArray(data)
+        ? data.some((exec) => exec.status === "pending" || exec.status === "running")
+        : false;
+      return hasActiveRun ? 2000 : 15000;
+    },
+    refetchIntervalInBackground: false,
   });
 
   return {
