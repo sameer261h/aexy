@@ -1125,9 +1125,6 @@ async def get_inbox_thread(
 
     Ordered by created_at ASC so the UI can render top→bottom.
     """
-    from sqlalchemy import or_
-    from aexy.models.agent_inbox import AgentInboxMessage
-
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
     await _assert_agent_in_workspace(db, workspace_id, agent_id)
 
@@ -1136,80 +1133,11 @@ async def get_inbox_thread(
     if not anchor or anchor.agent_id != agent_id:
         raise HTTPException(status_code=404, detail="Message not found")
 
-    # Common path: thread_id is set.
-    if anchor.thread_id:
-        stmt = (
-            select(AgentInboxMessage)
-            .where(
-                AgentInboxMessage.agent_id == agent_id,
-                AgentInboxMessage.workspace_id == workspace_id,
-                AgentInboxMessage.thread_id == anchor.thread_id,
-            )
-            .order_by(AgentInboxMessage.created_at.asc())
-        )
-        result = await db.execute(stmt)
-        return list(result.scalars().all())
-
-    # Fallback: chase in_reply_to_message_id chain. Two-step walk —
-    # follow parents up to a root, then pull anything pointing back
-    # at the collected message-ids. Bounded by a 50-step cap so a
-    # malicious sender can't make us walk forever.
-    visited_ids: set[str] = set()
-    visited_message_ids: set[str] = set()
-
-    def add(msg: AgentInboxMessage) -> None:
-        visited_ids.add(msg.id)
-        if msg.message_id:
-            visited_message_ids.add(msg.message_id)
-
-    add(anchor)
-
-    # Walk parents
-    cursor = anchor
-    for _ in range(50):
-        parent_ref = cursor.in_reply_to_message_id
-        if not parent_ref:
-            break
-        stmt = select(AgentInboxMessage).where(
-            AgentInboxMessage.agent_id == agent_id,
-            AgentInboxMessage.workspace_id == workspace_id,
-            AgentInboxMessage.message_id == parent_ref,
-        )
-        result = await db.execute(stmt)
-        parent = result.scalar_one_or_none()
-        if not parent or parent.id in visited_ids:
-            break
-        add(parent)
-        cursor = parent
-
-    # Walk forward: any message in this agent's inbox that replies to
-    # one we've already collected. Iterate until no new rows show up.
-    while True:
-        if not visited_message_ids:
-            break
-        stmt = (
-            select(AgentInboxMessage)
-            .where(
-                AgentInboxMessage.agent_id == agent_id,
-                AgentInboxMessage.workspace_id == workspace_id,
-                AgentInboxMessage.in_reply_to_message_id.in_(visited_message_ids),
-            )
-        )
-        result = await db.execute(stmt)
-        new_rows = [m for m in result.scalars().all() if m.id not in visited_ids]
-        if not new_rows:
-            break
-        for m in new_rows:
-            add(m)
-
-    # Return ordered.
-    stmt = (
-        select(AgentInboxMessage)
-        .where(AgentInboxMessage.id.in_(visited_ids))
-        .order_by(AgentInboxMessage.created_at.asc())
+    return await email_service.get_thread_for_message(
+        message_id=message_id,
+        agent_id=agent_id,
+        workspace_id=workspace_id,
     )
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
 
 
 @router.post("/{agent_id}/inbox/{message_id}/reply", response_model=InboxActionResponse)

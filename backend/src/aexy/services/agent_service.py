@@ -733,8 +733,13 @@ class AgentService:
         }
         prov = (provider or "").lower()
         mdl = (model or "").lower()
-        # Match by prefix so e.g. "claude-3-5-sonnet-20241022" resolves.
-        for (rp, rm), (rin, rout) in rates.items():
+        # Match by prefix so "claude-3-5-sonnet-20241022" resolves to
+        # "claude-3-5-sonnet". Sort by descending model-id length so a
+        # more specific prefix wins — without this, "gpt-4o" matches
+        # "gpt-4o-mini" first and the user gets billed at gpt-4o
+        # rates. (Caught by test_openai_gpt4o_mini_matches_rate_card.)
+        ordered = sorted(rates.items(), key=lambda kv: -len(kv[0][1]))
+        for (rp, rm), (rin, rout) in ordered:
             if prov == rp and mdl.startswith(rm):
                 return round((input_tokens * rin + output_tokens * rout) / 1_000_000, 6)
         return round((input_tokens * 1.0 + output_tokens * 3.0) / 1_000_000, 6)
