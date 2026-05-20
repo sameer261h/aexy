@@ -345,14 +345,32 @@ class ContributionService:
         )
         languages_result = await self.db.execute(languages_stmt)
 
-        # Aggregate language percentages
+        # Aggregate language counts. `Commit.languages` is a
+        # `JSONB`-stored `list[str]` per the model (e.g.
+        # `["python", "typescript"]`) — one entry per language seen
+        # in the commit. The earlier implementation assumed a dict
+        # shape ({"python": 5, ...}) and crashed with
+        # AttributeError: 'list' object has no attribute 'items'
+        # on every contributions/summary request. The list branch
+        # below is the prod path; the dict branch is kept as a
+        # tolerant fallback in case any legacy rows were written
+        # with the old shape (none in the current schema, but
+        # cheap to guard).
         language_counts: dict[str, int] = {}
         total_files = 0
         for row in languages_result:
-            if row.languages:
-                for lang, count in row.languages.items():
-                    language_counts[lang] = language_counts.get(lang, 0) + count
-                    total_files += count
+            langs = row.languages
+            if not langs:
+                continue
+            if isinstance(langs, list):
+                for lang in langs:
+                    language_counts[lang] = language_counts.get(lang, 0) + 1
+                    total_files += 1
+            elif isinstance(langs, dict):
+                for lang, count in langs.items():
+                    n = int(count) if isinstance(count, (int, float)) else 0
+                    language_counts[lang] = language_counts.get(lang, 0) + n
+                    total_files += n
 
         languages = {}
         if total_files > 0:
