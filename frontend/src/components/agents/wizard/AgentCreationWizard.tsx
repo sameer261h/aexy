@@ -17,6 +17,7 @@ import {
   ReviewStep,
 } from "./steps";
 import { useAgents } from "@/hooks/useAgents";
+import { useAgentDefaults } from "@/hooks/useAgentDefaults";
 import { AgentType, StandardAgentType, WorkingHoursConfig, AGENT_TYPE_CONFIG, agentsApi } from "@/lib/api";
 
 // UX-WIZ-001: persist the 8-step wizard form to localStorage so Cmd+R
@@ -88,6 +89,10 @@ export function AgentCreationWizard({
 }: AgentCreationWizardProps) {
   const router = useRouter();
   const { createAgent, isCreating } = useAgents(workspaceId);
+  // UX-EDT-024: pull server-side defaults instead of hardcoding
+  // gemini-2.0-flash. The hook keeps a hardcoded fallback so the
+  // first paint isn't blank if the call is in flight.
+  const { defaults } = useAgentDefaults(workspaceId);
   // Lazy initializer reads the saved draft once on mount so the user
   // resumes where they left off. Subsequent state changes write back
   // via the autosave effect below.

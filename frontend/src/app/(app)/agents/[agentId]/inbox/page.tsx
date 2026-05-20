@@ -878,6 +878,7 @@ export default function AgentInboxPage() {
     replyToMessage,
     escalateMessage,
     archiveMessage,
+    unarchiveMessage,
     processMessage,
     isReplying,
     isEscalating,
@@ -1098,14 +1099,13 @@ export default function AgentInboxPage() {
 
   const handleArchive = async () => {
     if (!selectedMessageId) return;
-    // Capture the subject before the row vanishes so the toast can
-    // reference it. UX-INB-022: the audit asked for a 5s undo toast,
-    // but the backend doesn't expose an unarchive endpoint yet — so
-    // this is a confirmation toast + "View archive" affordance until
-    // the inverse mutation lands. The Undo behavior is tracked in the
-    // tracker as a deferred bet that needs backend work.
+    // UX-INB-022: real undo via the inverse unarchive endpoint.
+    // Captures the subject + id locally because the row's about to
+    // vanish from the canonical list; the Undo action calls
+    // unarchiveMessage with the captured id.
     const archived = messages.find((m) => m.id === selectedMessageId);
-    await archiveMessage(selectedMessageId);
+    const archivedId = selectedMessageId;
+    await archiveMessage(archivedId);
     setSelectedMessageId(null);
     refetch();
     toast.success(
@@ -1113,10 +1113,21 @@ export default function AgentInboxPage() {
         ? `Archived "${archived.subject.slice(0, 60)}"`
         : "Message archived",
       {
-        duration: 4000,
+        duration: 6000,
         action: {
-          label: "View archive",
-          onClick: () => setStatusFilter("archived"),
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await unarchiveMessage(archivedId);
+              refetch();
+              setSelectedMessageId(archivedId);
+              toast.success("Message restored");
+            } catch (err) {
+              toast.error(
+                err instanceof Error ? err.message : "Failed to restore message",
+              );
+            }
+          },
         },
       },
     );

@@ -11116,6 +11116,52 @@ export const agentsApi = {
     return response.data;
   },
 
+  /**
+   * Preview the agent's response to a sample input WITHOUT persisting
+   * an execution and WITHOUT running tools (no side effects). Used by
+   * the Prompts/LLM tabs' "Test this" affordance (UX-EDT-018) so the
+   * user can sanity-check prompt + model changes in place.
+   */
+  previewAgentPrompt: async (
+    workspaceId: string,
+    agentId: string,
+    data: { input: string },
+  ): Promise<{
+    content: string;
+    duration_ms: number;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    cost_usd: number | null;
+  }> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/crm/agents/${agentId}/test/prompt`,
+      data,
+    );
+    return response.data;
+  },
+
+  /**
+   * Server-side defaults for new agents (UX-EDT-024). Centralizes
+   * what used to be hardcoded `gemini-2.0-flash` across 4 frontend
+   * call-sites — wizard, edit page, and two creation paths.
+   */
+  getAgentDefaults: async (
+    workspaceId: string,
+  ): Promise<{
+    default_provider: "claude" | "gemini" | "openai" | "ollama" | "openrouter";
+    default_model: string;
+    provider_models: Record<string, string>;
+    default_temperature: number;
+    default_max_tokens: number;
+    default_confidence_threshold: number;
+    default_require_approval_below: number;
+    default_max_daily_responses: number;
+    default_response_delay_minutes: number;
+  }> => {
+    const response = await api.get(`/workspaces/${workspaceId}/crm/agents/defaults`);
+    return response.data;
+  },
+
   sendMessage: async (
     workspaceId: string,
     agentId: string,
@@ -11291,6 +11337,20 @@ export const agentsApi = {
   ): Promise<InboxActionResponse> => {
     const response = await api.post(
       `/workspaces/${workspaceId}/crm/agents/${agentId}/inbox/${messageId}/archive`
+    );
+    return response.data;
+  },
+
+  /** UX-INB-022: inverse of archive. Restores an archived message to
+   *  pending status so the AI queue picks it back up. Used by the
+   *  archive toast's "Undo" action. */
+  unarchiveInboxMessage: async (
+    workspaceId: string,
+    agentId: string,
+    messageId: string
+  ): Promise<InboxActionResponse> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/crm/agents/${agentId}/inbox/${messageId}/unarchive`
     );
     return response.data;
   },

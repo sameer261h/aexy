@@ -321,6 +321,19 @@ class AgentEmailService:
             status="archived",
         )
 
+    async def unarchive_message(self, message_id: str) -> AgentInboxMessage | None:
+        """Restore an archived inbox message (UX-INB-022 inverse).
+
+        Resets status to `pending` so the next AI processing run picks
+        it back up. If the message was responded to/escalated before
+        archive, those audit fields are preserved — un-archiving just
+        un-hides the row.
+        """
+        return await self.update_inbox_message(
+            message_id,
+            status="pending",
+        )
+
     # =========================================================================
     # AI PROCESSING
     # =========================================================================

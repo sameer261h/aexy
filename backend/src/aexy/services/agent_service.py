@@ -329,6 +329,91 @@ class AgentService:
     # AGENT EXECUTION
     # =========================================================================
 
+    async def preview_prompt(
+        self,
+        agent_id: str,
+        sample_input: str,
+        user_id: str | None = None,
+    ) -> dict:
+        """Run the agent's prompt against a sample input WITHOUT
+        persisting an execution.
+
+        UX-EDT-018: Test-this affordance for the Prompts + LLM tabs.
+        Lets users preview what the agent would say to a given input
+        before committing system prompt / model changes. Read-only —
+        no inbox messages, no execution rows, no tool calls (tools
+        could have side effects).
+
+        Returns:
+            {"content": str, "duration_ms": int, "input_tokens": int|None,
+             "output_tokens": int|None, "cost_usd": float|None}
+        """
+        from datetime import datetime, timezone
+
+        agent = await self.get_agent(agent_id)
+        if not agent:
+            raise ValueError(f"Agent {agent_id} not found")
+
+        # System agents have non-editable prompts but their LLM config
+        # can be tweaked, so the preview is still useful. We don't
+        # gate on is_active — operators want to preview before un-
+        # pausing an agent.
+
+        builder = AgentBuilder(
+            workspace_id=agent.workspace_id,
+            user_id=user_id,
+            db=self.db,
+        )
+        agent_instance = builder.build_from_config(
+            name=agent.name,
+            agent_type=agent.agent_type,
+            goal=agent.goal,
+            system_prompt=agent.system_prompt,
+            # NO tools for the preview — they may have side effects.
+            tools=[],
+            model=agent.model,
+            llm_provider=agent.llm_provider,
+            max_iterations=1,
+            timeout_seconds=30,
+        )
+
+        # Run via the streaming pipeline so we capture usage_metadata
+        # cheaply, but accumulate to a single response.
+        start = datetime.now(timezone.utc)
+        content = ""
+        usage: dict | None = None
+        async for event in agent_instance.astream(
+            context={"preview": True, "input": sample_input},
+            conversation_history=[
+                __import__("langchain_core.messages", fromlist=["HumanMessage"]).HumanMessage(content=sample_input),
+            ],
+        ):
+            if event.get("type") == "text_delta":
+                content += event.get("text", "")
+            elif event.get("type") == "assistant_end":
+                content = event.get("content", content)
+                usage = event.get("usage_metadata")
+            elif event.get("type") == "error":
+                raise RuntimeError(event.get("message", "preview failed"))
+
+        duration_ms = int((datetime.now(timezone.utc) - start).total_seconds() * 1000)
+
+        input_tokens = usage.get("input_tokens") if usage else None
+        output_tokens = usage.get("output_tokens") if usage else None
+        cost_usd: float | None = None
+        if input_tokens is not None and output_tokens is not None:
+            cost_usd = self._estimate_cost_usd(
+                agent.llm_provider, agent.model, input_tokens, output_tokens
+            )
+
+        return {
+            "content": content,
+            "duration_ms": duration_ms,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": cost_usd,
+        }
+
     async def execute_agent(
         self,
         agent_id: str,

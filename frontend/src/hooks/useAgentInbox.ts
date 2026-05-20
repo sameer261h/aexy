@@ -97,6 +97,18 @@ export function useAgentInbox(
     },
   });
 
+  // UX-INB-022: inverse mutation backing the archive toast's Undo
+  // button. Restores `pending` status so the AI queue picks it back
+  // up. Cache invalidation is the same as archive — the row shows up
+  // again in the unfiltered list.
+  const unarchiveMutation = useMutation({
+    mutationFn: (messageId: string) =>
+      agentsApi.unarchiveInboxMessage(workspaceId!, agentId!, messageId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agentInbox", workspaceId, agentId] });
+    },
+  });
+
   const processMutation = useMutation({
     mutationFn: (messageId: string) =>
       agentsApi.processInboxMessage(workspaceId!, agentId!, messageId),
@@ -113,10 +125,12 @@ export function useAgentInbox(
     replyToMessage: replyMutation.mutateAsync,
     escalateMessage: escalateMutation.mutateAsync,
     archiveMessage: archiveMutation.mutateAsync,
+    unarchiveMessage: unarchiveMutation.mutateAsync,
     processMessage: processMutation.mutateAsync,
     isReplying: replyMutation.isPending,
     isEscalating: escalateMutation.isPending,
     isArchiving: archiveMutation.isPending,
+    isUnarchiving: unarchiveMutation.isPending,
     isProcessing: processMutation.isPending,
   };
 }

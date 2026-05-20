@@ -5,6 +5,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -194,6 +195,49 @@ async def list_available_tools(
     """List all available tools for agent configuration."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
     return AgentService.get_available_tools()
+
+
+@router.get("/defaults")
+async def get_agent_defaults(
+    workspace_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Server-side defaults for new agents (UX-EDT-024).
+
+    Centralizes what was previously hardcoded as `gemini-2.0-flash` in
+    four frontend call-sites. Reads from `LLMSettings` so deploys can
+    flip the default provider without a frontend ship.
+
+    Returns the provider + its current default model, plus the
+    project-wide defaults for temperature / max_tokens / behavior
+    knobs. Frontend creation flows (wizard, edit page) read from
+    this on mount instead of carrying their own defaults.
+    """
+    from aexy.core.config import settings
+
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+
+    # Resolve the default model per provider so the wizard's LLM step
+    # can pre-fill correctly when the operator switches providers.
+    provider_models = {
+        "claude": settings.llm.llm_model if settings.llm.llm_provider == "claude" else "claude-sonnet-4-20250514",
+        "gemini": getattr(settings.llm, "gemini_model", "gemini-2.0-flash"),
+        "openai": getattr(settings.llm, "openai_model", "gpt-4o-mini"),
+        "ollama": getattr(settings.llm, "ollama_model", "codellama:13b"),
+    }
+    default_provider = settings.llm.llm_provider
+    return {
+        "default_provider": default_provider,
+        "default_model": provider_models.get(default_provider, settings.llm.llm_model),
+        "provider_models": provider_models,
+        "default_temperature": 0.7,
+        "default_max_tokens": 2000,
+        "default_confidence_threshold": 0.7,
+        "default_require_approval_below": 0.8,
+        "default_max_daily_responses": 100,
+        "default_response_delay_minutes": 5,
+    }
 
 
 @router.get("/check-handle", response_model=HandleAvailabilityResponse)
@@ -604,6 +648,50 @@ async def send_message(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class PreviewPromptRequest(BaseModel):
+    """Sample input for the prompt preview affordance (UX-EDT-018)."""
+
+    input: str = Field(..., min_length=1, max_length=4000)
+
+
+@router.post("/{agent_id}/test/prompt")
+async def test_prompt(
+    workspace_id: str,
+    agent_id: str,
+    data: PreviewPromptRequest,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Preview what the agent would respond to a sample input.
+
+    Runs the agent's system prompt + LLM config but WITHOUT tools, so
+    nothing the user previews can have side effects. No execution row
+    is persisted. UX-EDT-018.
+
+    Returns the full assistant content + duration + token usage so the
+    Prompts/LLM tabs can render an in-place preview before the user
+    commits config changes.
+    """
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    service = AgentService(db)
+    agent = await service.get_agent(agent_id)
+    if not agent or agent.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    try:
+        result = await service.preview_prompt(
+            agent_id=agent_id,
+            sample_input=data.input,
+            user_id=str(current_developer.id),
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Prompt preview failed: %s", e)
+        raise HTTPException(status_code=500, detail="Preview failed. Check your LLM config.")
 
 
 @router.post("/{agent_id}/conversations/{conversation_id}/messages/stream")
@@ -1218,6 +1306,39 @@ async def archive_inbox_message(
     return InboxActionResponse(
         success=True,
         message="Message archived",
+        inbox_message_id=message_id,
+    )
+
+
+@router.post("/{agent_id}/inbox/{message_id}/unarchive", response_model=InboxActionResponse)
+async def unarchive_inbox_message(
+    workspace_id: str,
+    agent_id: str,
+    message_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Restore an archived inbox message (UX-INB-022).
+
+    Inverse of archive — flips status back to `pending` so the AI
+    processing queue picks it up again. Preserves the responded /
+    escalated audit fields if they were set before archive.
+    """
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
+
+    email_service = AgentEmailService(db)
+    message = await email_service.get_inbox_message(message_id)
+
+    if not message or message.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    await email_service.unarchive_message(message_id)
+    await db.commit()
+
+    return InboxActionResponse(
+        success=True,
+        message="Message restored",
         inbox_message_id=message_id,
     )
 
