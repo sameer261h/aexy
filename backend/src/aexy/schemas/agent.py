@@ -287,6 +287,16 @@ class ToolCallInfo(BaseModel):
     args: dict
 
 
+class CitationInfo(BaseModel):
+    """One source the agent referenced. Loose by design — the LLM may
+    omit snippet/title; only url is conceptually required, and even
+    that we let through optional so partial citations don't crash."""
+
+    title: str | None = None
+    url: str | None = None
+    snippet: str | None = None
+
+
 class MessageResponse(BaseModel):
     """Schema for a conversation message."""
 
@@ -299,6 +309,10 @@ class MessageResponse(BaseModel):
     tool_name: str | None = None
     tool_output: dict | None = None
     message_index: int
+    citations: list[CitationInfo] | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -383,6 +397,9 @@ class InboxMessageResponse(BaseModel):
     workspace_id: str
     message_id: str
     thread_id: str | None
+    # RFC 5322 In-Reply-To header. Frontend uses this to render a
+    # "View parent" jump on the message detail.
+    in_reply_to_message_id: str | None = None
     from_email: str
     from_name: str | None
     to_email: str

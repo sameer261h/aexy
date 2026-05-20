@@ -26,7 +26,7 @@ import { useWorkspace } from "@/hooks/useWorkspace";
 import { useAgent, useAgentTools } from "@/hooks/useAgents";
 import { useAgentEmail, useEmailDomains } from "@/hooks/useAgentInbox";
 import { useRouteGuard } from "@/hooks/useRouteGuard";
-import { getAgentTypeConfig, AgentType, WorkingHoursConfig } from "@/lib/api";
+import { agentsApi, getAgentTypeConfig, AgentType, WorkingHoursConfig } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -784,6 +784,18 @@ export default function EditAgentPage() {
                 disabled={isSystemAgent}
               />
             </div>
+
+            {/* UX-EDT-018: Test-this. Lets the user sanity-check the
+                prompt + model against a sample input WITHOUT saving
+                first and WITHOUT running tools (no side effects).
+                Uses the most recent saved prompt — unsaved edits stay
+                local until the user clicks Save. */}
+            {currentWorkspaceId && agentId ? (
+              <PromptPreviewPanel
+                workspaceId={currentWorkspaceId}
+                agentId={agentId}
+              />
+            ) : null}
           </div>
         );
 
@@ -1405,6 +1417,118 @@ export default function EditAgentPage() {
         tone="warning"
         onConfirm={confirmPending}
       />
+    </div>
+  );
+}
+
+// ===========================================================================
+// PromptPreviewPanel — inline "Test this" affordance for the Prompts tab.
+// UX-EDT-018. Runs the agent's saved prompt + LLM config against a sample
+// input via /agents/{id}/test/prompt, which deliberately doesn't run tools
+// (no side effects) and doesn't persist an execution row.
+//
+// Uses the SAVED prompt rather than the in-progress edit — the user has to
+// click Save first to test their changes. Could be relaxed later by POSTing
+// the in-progress prompt as a body field, but that means duplicating prompt
+// state on the server.
+// ===========================================================================
+function PromptPreviewPanel({
+  workspaceId,
+  agentId,
+}: {
+  workspaceId: string;
+  agentId: string;
+}) {
+  const [input, setInput] = useState("");
+  const [response, setResponse] = useState<{
+    content: string;
+    duration_ms: number;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    cost_usd: number | null;
+  } | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleTest = async () => {
+    const trimmed = input.trim();
+    if (!trimmed || isRunning) return;
+    setIsRunning(true);
+    setError(null);
+    setResponse(null);
+    try {
+      const result = await agentsApi.previewAgentPrompt(workspaceId, agentId, {
+        input: trimmed,
+      });
+      setResponse(result);
+    } catch (err) {
+      // The preview endpoint surfaces both 400 (bad input) and 500
+      // (LLM misconfig / provider error). Either way the user needs
+      // the message so they can fix config + retry.
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
+        (err instanceof Error ? err.message : "Preview failed");
+      setError(detail);
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-medium text-foreground">Test this prompt</span>
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+          read-only · no tools
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Runs the saved prompt + LLM config against a sample input. Tool
+        execution is disabled so previewing can&apos;t send email, mutate CRM
+        records, or trigger side effects. Save your edits first if you
+        want to test them.
+      </p>
+      <textarea
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        placeholder="e.g. Hi, I'm interested in the enterprise plan, can you share pricing?"
+        rows={3}
+        aria-label="Sample input"
+        disabled={isRunning}
+        className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/50 disabled:opacity-50"
+      />
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={handleTest}
+          disabled={!input.trim() || isRunning}
+          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus-visible:ring-2 focus-visible:ring-purple-500"
+        >
+          {isRunning ? "Running…" : "Run preview"}
+        </button>
+        {response ? (
+          <span className="text-[11px] tabular-nums text-muted-foreground">
+            {response.duration_ms}ms
+            {response.output_tokens != null ? ` · ${response.output_tokens}t` : ""}
+            {response.cost_usd != null ? ` · $${response.cost_usd.toFixed(4)}` : ""}
+          </span>
+        ) : null}
+      </div>
+      {error ? (
+        <div className="rounded-lg border border-red-500/40 bg-red-500/5 px-3 py-2 text-sm text-red-700 dark:text-red-300">
+          {error}
+        </div>
+      ) : null}
+      {response ? (
+        <div className="rounded-lg border border-border bg-background p-3">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+            Response
+          </div>
+          <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
+            {response.content || <span className="italic text-muted-foreground">(empty)</span>}
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

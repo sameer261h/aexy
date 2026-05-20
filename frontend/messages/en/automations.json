@@ -105,6 +105,13 @@
         "subtitle": "Empty canvas",
         "description": "Drop in your own trigger and actions. Best when no template matches what you're building.",
         "cta": "Open a blank canvas"
+      },
+      "generate": {
+        "heading": "Describe it, we'll draft it",
+        "badge": "AI · beta",
+        "subtitle": "Describe the automation in one or two sentences. We'll draft a starting workflow you can edit on the canvas.",
+        "placeholder": "e.g. When a new deal closes in CRM, post to #sales-wins and create a follow-up task in 7 days",
+        "describeAriaLabel": "Describe the automation"
       }
     }
   }

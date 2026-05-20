@@ -105,6 +105,13 @@
         "subtitle": "खाली canvas",
         "description": "अपना खुद का trigger और actions जोड़ें। तब सबसे अच्छा जब कोई template मेल न खाए।",
         "cta": "खाली canvas खोलें"
+      },
+      "generate": {
+        "heading": "वर्णन करें, हम draft बनाएंगे",
+        "badge": "AI · beta",
+        "subtitle": "एक या दो वाक्यों में automation का वर्णन करें। हम एक starting workflow draft करेंगे जिसे आप canvas पर edit कर सकते हैं।",
+        "placeholder": "उदा. जब CRM में नया deal close हो, तो #sales-wins पर post करें और 7 दिन में एक follow-up task बनाएं",
+        "describeAriaLabel": "Automation का वर्णन करें"
       }
     }
   }

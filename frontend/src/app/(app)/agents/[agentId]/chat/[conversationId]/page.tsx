@@ -17,8 +17,8 @@ import { useAgent } from "@/hooks/useAgents";
 import {
   useAgentConversations,
   useAgentConversation,
-  useSendMessage,
 } from "@/hooks/useAgentChat";
+import { useAgentChatStream } from "@/hooks/useAgentChatStream";
 import { getAgentTypeConfig } from "@/lib/api";
 import { ChatInterface, ConversationSidebar } from "@/components/agents/chat";
 import { AgentStatusBadge } from "@/components/agents/shared";
@@ -42,15 +42,27 @@ export default function ConversationPage() {
   } = useAgentConversations(currentWorkspaceId, agentId);
   const {
     conversation,
-    messages,
+    messages: canonicalMessages,
     isLoading: conversationLoading,
     updateConversation,
   } = useAgentConversation(currentWorkspaceId, agentId, conversationId);
-  const { sendMessage, isSending } = useSendMessage(
-    currentWorkspaceId,
-    agentId,
-    conversationId
+
+  // UX-CHAT-001/002/003/009: streaming chat with optimistic message,
+  // Stop button, and live token meter. The hook holds the pending
+  // optimistic pair; mergeMessages overlays them on the canonical
+  // server list so we render the union without dedupe races.
+  const {
+    mergeMessages,
+    isStreaming,
+    send: streamSend,
+    stop: streamStop,
+    currentTokens,
+    currentCostUsd,
+  } = useAgentChatStream(currentWorkspaceId, agentId, conversationId);
+  const messages = mergeMessages(
+    conversation ? { ...conversation, messages: canonicalMessages } : undefined,
   );
+  const isSending = isStreaming;
 
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -58,7 +70,7 @@ export default function ConversationPage() {
 
   const handleSendMessage = async (message: string) => {
     try {
-      await sendMessage(message);
+      await streamSend(message);
     } catch (error) {
       console.error("Failed to send message:", error);
     }
@@ -253,6 +265,9 @@ export default function ConversationPage() {
             onSend={handleSendMessage}
             isSending={isSending}
             isLoading={conversationLoading}
+            onStop={streamStop}
+            streamingTokens={currentTokens}
+            streamingCostUsd={currentCostUsd}
           />
         </div>
       </div>

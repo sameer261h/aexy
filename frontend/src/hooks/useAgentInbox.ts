@@ -97,6 +97,18 @@ export function useAgentInbox(
     },
   });
 
+  // UX-INB-022: inverse mutation backing the archive toast's Undo
+  // button. Restores `pending` status so the AI queue picks it back
+  // up. Cache invalidation is the same as archive — the row shows up
+  // again in the unfiltered list.
+  const unarchiveMutation = useMutation({
+    mutationFn: (messageId: string) =>
+      agentsApi.unarchiveInboxMessage(workspaceId!, agentId!, messageId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agentInbox", workspaceId, agentId] });
+    },
+  });
+
   const processMutation = useMutation({
     mutationFn: (messageId: string) =>
       agentsApi.processInboxMessage(workspaceId!, agentId!, messageId),
@@ -113,10 +125,12 @@ export function useAgentInbox(
     replyToMessage: replyMutation.mutateAsync,
     escalateMessage: escalateMutation.mutateAsync,
     archiveMessage: archiveMutation.mutateAsync,
+    unarchiveMessage: unarchiveMutation.mutateAsync,
     processMessage: processMutation.mutateAsync,
     isReplying: replyMutation.isPending,
     isEscalating: escalateMutation.isPending,
     isArchiving: archiveMutation.isPending,
+    isUnarchiving: unarchiveMutation.isPending,
     isProcessing: processMutation.isPending,
   };
 }
@@ -145,6 +159,35 @@ export function useAgentInboxMessage(
     isLoading,
     error,
     refetch,
+  };
+}
+
+/**
+ * Fetch every message in the same thread as `messageId`.
+ * Returns the messages ordered by created_at ASC, suitable for the
+ * inbox thread strip. Empty array means the message is an orphan
+ * (no thread_id and no in_reply_to chain). UX-INB-027 / UX-DEF-007.
+ */
+export function useAgentInboxThread(
+  workspaceId: string | null,
+  agentId: string | null,
+  messageId: string | null,
+  enabled = true,
+) {
+  const {
+    data: thread,
+    isLoading,
+    error,
+  } = useQuery<AgentInboxMessage[]>({
+    queryKey: ["agentInboxThread", workspaceId, agentId, messageId],
+    queryFn: () => agentsApi.getInboxThread(workspaceId!, agentId!, messageId!),
+    enabled: enabled && !!workspaceId && !!agentId && !!messageId,
+  });
+
+  return {
+    thread: thread ?? [],
+    isLoading,
+    error,
   };
 }
 

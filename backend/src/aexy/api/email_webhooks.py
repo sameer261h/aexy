@@ -751,6 +751,20 @@ def _parse_inbound_json(payload: dict) -> dict | None:
             from_data = payload.get("FromFull", {})
             to_data = payload.get("ToFull", [{}])[0] if isinstance(payload.get("ToFull"), list) else payload.get("ToFull", {})
 
+            # Postmark sends Headers as a list of {Name, Value} dicts,
+            # not a flat header→value mapping. Build a name-keyed
+            # lookup once and use it for both the thread_id resolution
+            # and the in_reply_to pointer below. The prior code
+            # called `.get("In-Reply-To")` on Headers[0] directly,
+            # which never matched because Headers[0] is shaped
+            # {"Name": "X", "Value": "Y"}.
+            headers_dict = {
+                h.get("Name"): h.get("Value")
+                for h in payload.get("Headers", [])
+                if isinstance(h, dict)
+            }
+            in_reply_to = headers_dict.get("In-Reply-To")
+
             return {
                 "to": to_data.get("Email", payload.get("To", "")),
                 "from": from_data.get("Email", payload.get("From", "")),
@@ -759,8 +773,9 @@ def _parse_inbound_json(payload: dict) -> dict | None:
                 "body": payload.get("TextBody", ""),
                 "body_html": payload.get("HtmlBody", ""),
                 "message_id": payload.get("MessageID", ""),
-                "thread_id": payload.get("Headers", [{}])[0].get("In-Reply-To") if payload.get("Headers") else None,
-                "headers": {h.get("Name"): h.get("Value") for h in payload.get("Headers", [])},
+                "thread_id": in_reply_to,
+                "in_reply_to_message_id": in_reply_to,
+                "headers": headers_dict,
                 "attachments": [
                     {"name": a.get("Name"), "content_type": a.get("ContentType"), "length": a.get("ContentLength")}
                     for a in payload.get("Attachments", [])
@@ -777,6 +792,15 @@ def _parse_inbound_json(payload: dict) -> dict | None:
             "body_html": payload.get("body_html", payload.get("html", "")),
             "message_id": payload.get("message_id", ""),
             "thread_id": payload.get("thread_id", payload.get("in_reply_to")),
+            # UX-INB-027 / UX-DEF-007: explicit parent pointer so the
+            # inbox UI can render "View parent" without walking the
+            # full thread. RFC 5322 In-Reply-To header — when the
+            # generic format omits it, fall back to thread_id which
+            # most providers already populate.
+            "in_reply_to_message_id": payload.get(
+                "in_reply_to",
+                payload.get("in_reply_to_message_id"),
+            ),
             "headers": payload.get("headers", {}),
             "attachments": payload.get("attachments", []),
         }
@@ -821,6 +845,9 @@ def process_inbound_email(email_data: dict):
                 workspace_id=agent.workspace_id,
                 message_id=email_data.get("message_id") or str(uuid4()),
                 thread_id=email_data.get("thread_id"),
+                # Direct parent — RFC 5322 In-Reply-To. Frontend uses
+                # this for the "View parent" jump in MessageDetail.
+                in_reply_to_message_id=email_data.get("in_reply_to_message_id"),
                 from_email=from_email,
                 from_name=email_data.get("from_name"),
                 to_email=to_email,

@@ -7,14 +7,16 @@ import { useTranslations } from "next-intl";
 import {
   ArrowRight,
   ChevronLeft,
+  Loader2,
   Plus,
   Search,
   Sparkles,
   Wand2,
   Zap,
 } from "lucide-react";
+import { toast } from "sonner";
 
-import { AutomationModule } from "@/lib/api";
+import { automationsApi, AutomationModule, GeneratedWorkflow } from "@/lib/api";
 import {
   ALL_MODULES,
   AUTOMATION_TEMPLATES,
@@ -31,10 +33,17 @@ import { SearchInput } from "@/components/ui/search-input";
 interface TemplateGalleryProps {
   /** When set, the gallery pre-filters to this module's templates. */
   initialModule?: AutomationModule | null;
+  /** Workspace context for the generate-from-prompt call. Optional so
+   *  the component can render in storybooks without an active workspace. */
+  workspaceId?: string | null;
   /** Triggered when the user picks a ready-made template. */
   onUseTemplate: (template: AutomationTemplate) => void;
   /** Triggered when the user opts to skip the gallery entirely. */
   onStartBlank: () => void;
+  /** Triggered when the LLM returns a valid generated workflow. The
+   *  parent typically flips into canvas mode and seeds the nodes/edges
+   *  from the payload. UX-DEF-004. */
+  onUseGenerated?: (workflow: GeneratedWorkflow) => void;
   /** Optional "back" affordance — typically returns to /automations. */
   onBack?: () => void;
 }
@@ -54,8 +63,10 @@ interface TemplateGalleryProps {
  */
 export function TemplateGallery({
   initialModule,
+  workspaceId,
   onUseTemplate,
   onStartBlank,
+  onUseGenerated,
   onBack,
 }: TemplateGalleryProps) {
   const t = useTranslations("automations.gallery");
@@ -64,6 +75,42 @@ export function TemplateGallery({
   const [moduleFilter, setModuleFilter] = useState<AutomationModule | "all">(
     initialModule ?? "all",
   );
+
+  // UX-DEF-004: prompt-to-workflow state. Lives in this component
+  // because the whole flow (input + LLM call + handoff) is gallery-
+  // local — the only thing that escapes is the resolved workflow,
+  // which fires through onUseGenerated.
+  const [prompt, setPrompt] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  const canGenerate = !!onUseGenerated && !!workspaceId;
+
+  const handleGenerate = async () => {
+    if (!canGenerate || !workspaceId) return;
+    const trimmed = prompt.trim();
+    if (trimmed.length < 8) {
+      toast.error("Describe what the automation should do (at least one sentence)");
+      return;
+    }
+    setIsGenerating(true);
+    try {
+      const workflow = await automationsApi.generateWorkflowFromPrompt(workspaceId, {
+        prompt: trimmed,
+        module: moduleFilter === "all" ? undefined : moduleFilter,
+      });
+      onUseGenerated?.(workflow);
+    } catch (err: unknown) {
+      // 422 = LLM returned an unusable shape; 500 = generation failed.
+      // Either way the user retries with a clearer prompt or falls
+      // back to a template.
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
+        (err instanceof Error ? err.message : "Generation failed");
+      toast.error(detail);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
   const filtered = useMemo<AutomationTemplate[]>(() => {
     const term = search.trim().toLowerCase();
@@ -120,6 +167,71 @@ export function TemplateGallery({
             {t("startBlank")}
           </button>
         </div>
+
+        {/* UX-DEF-004: Generate-from-prompt panel. Sits between the
+            header lockup and the curated template grid so it reads as
+            a third creation path, peer to "pick a template" and
+            "start blank". Hidden if no onUseGenerated handler is
+            provided (storybook / disabled workspaces). */}
+        {canGenerate ? (
+          <div className="mb-8 rounded-2xl border border-border bg-gradient-to-br from-purple-500/5 via-background to-blue-500/5 p-5 sm:p-6">
+            <div className="flex items-center gap-2 mb-3">
+              <Wand2 className="h-4 w-4 text-purple-600 dark:text-purple-300" aria-hidden />
+              <h2 className="text-sm font-semibold text-foreground">
+                {t("generate.heading")}
+              </h2>
+              <span className="ml-2 text-[10px] uppercase tracking-wider text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                {t("generate.badge")}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground mb-3 max-w-2xl">
+              {t("generate.subtitle")}
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    void handleGenerate();
+                  }
+                }}
+                placeholder={t("generate.placeholder")}
+                rows={2}
+                aria-label={t("generate.describeAriaLabel")}
+                disabled={isGenerating}
+                className={cn(
+                  "flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground resize-none",
+                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/50",
+                  "disabled:opacity-60",
+                )}
+              />
+              <button
+                type="button"
+                onClick={() => void handleGenerate()}
+                disabled={isGenerating || prompt.trim().length < 8}
+                className={cn(
+                  "shrink-0 inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors",
+                  "bg-purple-600 text-white hover:bg-purple-700",
+                  "disabled:opacity-50 disabled:cursor-not-allowed",
+                )}
+              >
+                {isGenerating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 motion-safe:animate-spin" aria-hidden />
+                    Drafting…
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4" aria-hidden />
+                    Generate workflow
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {/* Search + module filter row */}
         <div className="flex flex-col sm:flex-row gap-3 mb-6">

@@ -10043,6 +10043,12 @@ export const crmAutomationApi = {
 // PLATFORM-WIDE AUTOMATIONS API
 // =============================================================================
 
+export interface GeneratedWorkflow {
+  nodes: Array<{ id: string; type: string; data: Record<string, unknown>; position?: { x: number; y: number } }>;
+  edges: Array<{ id?: string; source: string; target: string; sourceHandle?: string }>;
+  _meta?: { source?: string; module?: string };
+}
+
 export const automationsApi = {
   // List automations (optionally filter by module)
   list: async (
@@ -10050,6 +10056,25 @@ export const automationsApi = {
     params?: { module?: AutomationModule; object_id?: string; is_active?: boolean; skip?: number; limit?: number }
   ): Promise<Automation[]> => {
     const response = await api.get(`/workspaces/${workspaceId}/automations`, { params });
+    return response.data;
+  },
+
+  /**
+   * UX-DEF-004: Ask the LLM to draft a workflow from a one-line
+   * description. Returns ReactFlow-shaped {nodes, edges}; the caller
+   * drops it onto the canvas as if the user picked a template. The
+   * canvas validates the shape — bad input falls back to TemplateGallery.
+   * Throws on 422 (LLM returned invalid shape, surface to user) or
+   * 500 (generation failed, fall back).
+   */
+  generateWorkflowFromPrompt: async (
+    workspaceId: string,
+    data: { prompt: string; module?: string },
+  ): Promise<GeneratedWorkflow> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/automations/generate-workflow`,
+      data,
+    );
     return response.data;
   },
 
@@ -10622,6 +10647,11 @@ export interface AgentInboxMessage {
   workspace_id: string;
   message_id: string;
   thread_id: string | null;
+  /** RFC 5322 In-Reply-To header — populated by the inbound webhook
+   *  when the sender's mail client included a parent reference.
+   *  Frontend uses it to render a "View parent" jump in the detail
+   *  pane. UX-INB-027 / UX-DEF-007. */
+  in_reply_to_message_id?: string | null;
   from_email: string;
   from_name: string | null;
   to_email: string;
@@ -10704,6 +10734,12 @@ export interface ToolCallInfo {
   args: Record<string, unknown>;
 }
 
+export interface AgentMessageCitation {
+  title?: string | null;
+  url?: string | null;
+  snippet?: string | null;
+}
+
 export interface AgentMessage {
   id: string;
   conversation_id: string;
@@ -10714,8 +10750,21 @@ export interface AgentMessage {
   tool_name?: string | null;
   tool_output?: Record<string, unknown> | null;
   message_index: number;
+  citations?: AgentMessageCitation[] | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cost_usd?: number | null;
   created_at: string;
 }
+
+export type ChatStreamEvent =
+  | { type: "user_message"; id: string; content: string; created_at?: string | null }
+  | { type: "text_delta"; text: string }
+  | { type: "tool_use_start"; tool: string; id: string; input?: Record<string, unknown> }
+  | { type: "tool_result"; tool: string; id: string; output?: unknown }
+  | { type: "usage"; input_tokens?: number | null; output_tokens?: number | null; cost_usd?: number | null }
+  | { type: "done"; assistant_message_id: string; execution_id: string; duration_ms: number }
+  | { type: "error"; message: string };
 
 export interface AgentConversationWithMessages extends AgentConversation {
   messages: AgentMessage[];
@@ -11067,6 +11116,99 @@ export const agentsApi = {
     return response.data;
   },
 
+  /**
+   * Server-side wizard draft (UX-DEF-003). One draft per
+   * (workspace, developer). The wizard's `useAgentDraft` hook uses
+   * these three endpoints to hydrate on mount, save debounced as
+   * the user types, and clear on successful agent creation.
+   */
+  getAgentDraft: async (
+    workspaceId: string,
+  ): Promise<{
+    id: string;
+    payload: Record<string, unknown>;
+    created_at: string | null;
+    updated_at: string | null;
+  } | null> => {
+    try {
+      const response = await api.get(`/workspaces/${workspaceId}/crm/agents/drafts/me`);
+      return response.data;
+    } catch (err) {
+      // 404 = no draft. The caller treats that as "fresh wizard"
+      // rather than an error condition.
+      if ((err as { response?: { status?: number } })?.response?.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  },
+
+  saveAgentDraft: async (
+    workspaceId: string,
+    payload: Record<string, unknown>,
+  ): Promise<{
+    id: string;
+    payload: Record<string, unknown>;
+    created_at: string | null;
+    updated_at: string | null;
+  }> => {
+    const response = await api.put(
+      `/workspaces/${workspaceId}/crm/agents/drafts/me`,
+      { payload },
+    );
+    return response.data;
+  },
+
+  deleteAgentDraft: async (workspaceId: string): Promise<void> => {
+    await api.delete(`/workspaces/${workspaceId}/crm/agents/drafts/me`);
+  },
+
+  /**
+   * Preview the agent's response to a sample input WITHOUT persisting
+   * an execution and WITHOUT running tools (no side effects). Used by
+   * the Prompts/LLM tabs' "Test this" affordance (UX-EDT-018) so the
+   * user can sanity-check prompt + model changes in place.
+   */
+  previewAgentPrompt: async (
+    workspaceId: string,
+    agentId: string,
+    data: { input: string },
+  ): Promise<{
+    content: string;
+    duration_ms: number;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    cost_usd: number | null;
+  }> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/crm/agents/${agentId}/test/prompt`,
+      data,
+    );
+    return response.data;
+  },
+
+  /**
+   * Server-side defaults for new agents (UX-EDT-024). Centralizes
+   * what used to be hardcoded `gemini-2.0-flash` across 4 frontend
+   * call-sites — wizard, edit page, and two creation paths.
+   */
+  getAgentDefaults: async (
+    workspaceId: string,
+  ): Promise<{
+    default_provider: "claude" | "gemini" | "openai" | "ollama" | "openrouter";
+    default_model: string;
+    provider_models: Record<string, string>;
+    default_temperature: number;
+    default_max_tokens: number;
+    default_confidence_threshold: number;
+    default_require_approval_below: number;
+    default_max_daily_responses: number;
+    default_response_delay_minutes: number;
+  }> => {
+    const response = await api.get(`/workspaces/${workspaceId}/crm/agents/defaults`);
+    return response.data;
+  },
+
   sendMessage: async (
     workspaceId: string,
     agentId: string,
@@ -11078,6 +11220,50 @@ export const agentsApi = {
       data
     );
     return response.data;
+  },
+
+  /**
+   * Stream a chat message via SSE. Returns a Response so the caller
+   * can consume `response.body` as a ReadableStream and parse the
+   * `data: {...}\n\n` events incrementally.
+   *
+   * Pass an AbortSignal to wire the chat's Stop button — when aborted
+   * the fetch closes the connection mid-stream and the backend
+   * detects the cancellation, marks the execution as `cancelled`,
+   * persists any partial content, then unwinds.
+   *
+   * Event payloads (mirrored from agent_service.stream_message):
+   *   user_message    {type, id, content, created_at}
+   *   text_delta      {type, text}
+   *   tool_use_start  {type, tool, id, input}
+   *   tool_result     {type, tool, id, output}
+   *   usage           {type, input_tokens, output_tokens, cost_usd}
+   *   done            {type, assistant_message_id, execution_id, duration_ms}
+   *   error           {type, message}
+   */
+  streamMessage: async (
+    workspaceId: string,
+    agentId: string,
+    conversationId: string,
+    data: { content: string },
+    signal?: AbortSignal,
+  ): Promise<Response> => {
+    const token = typeof window !== "undefined" ? window.localStorage.getItem("token") : null;
+    const url = `${api.defaults.baseURL ?? ""}/workspaces/${workspaceId}/crm/agents/${agentId}/conversations/${conversationId}/messages/stream`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(data),
+      signal,
+      credentials: "include",
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`Stream failed: ${response.status} ${response.statusText}`);
+    }
+    return response;
   },
 
   updateConversation: async (
@@ -11148,6 +11334,23 @@ export const agentsApi = {
     return response.data;
   },
 
+  /**
+   * Fetch every message in the thread containing this one. Returns
+   * an ordered list (created_at ASC) so the inbox detail can render
+   * a thread strip with the parent + sibling replies. Empty for
+   * orphan messages. UX-INB-027 / UX-DEF-007.
+   */
+  getInboxThread: async (
+    workspaceId: string,
+    agentId: string,
+    messageId: string
+  ): Promise<AgentInboxMessage[]> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/crm/agents/${agentId}/inbox/${messageId}/thread`,
+    );
+    return response.data;
+  },
+
   replyToInboxMessage: async (
     workspaceId: string,
     agentId: string,
@@ -11181,6 +11384,20 @@ export const agentsApi = {
   ): Promise<InboxActionResponse> => {
     const response = await api.post(
       `/workspaces/${workspaceId}/crm/agents/${agentId}/inbox/${messageId}/archive`
+    );
+    return response.data;
+  },
+
+  /** UX-INB-022: inverse of archive. Restores an archived message to
+   *  pending status so the AI queue picks it back up. Used by the
+   *  archive toast's "Undo" action. */
+  unarchiveInboxMessage: async (
+    workspaceId: string,
+    agentId: string,
+    messageId: string
+  ): Promise<InboxActionResponse> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/crm/agents/${agentId}/inbox/${messageId}/unarchive`
     );
     return response.data;
   },

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo, KeyboardEvent } from "react";
-import { Send, Loader2 } from "lucide-react";
+import { Send, Loader2, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface ChatInputProps {
@@ -9,6 +9,9 @@ interface ChatInputProps {
   disabled?: boolean;
   isSending?: boolean;
   placeholder?: string;
+  /** When provided + isSending is true, the Send button becomes a
+   *  Stop button that calls this callback. UX-CHAT-003. */
+  onStop?: () => void;
 }
 
 // UX-CHAT-010: surface the keyboard contract. Users coming from Slack
@@ -25,6 +28,7 @@ export function ChatInput({
   disabled = false,
   isSending = false,
   placeholder = "Type a message...",
+  onStop,
 }: ChatInputProps) {
   const [message, setMessage] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -88,22 +92,42 @@ export function ChatInput({
           )}
         />
       </div>
-      <button
-        onClick={handleSubmit}
-        disabled={!message.trim() || disabled || isSending}
-        aria-label={isSending ? "Sending message" : "Send message"}
-        className={cn(
-          "flex items-center justify-center p-3 rounded-xl transition",
-          "bg-purple-600 text-white hover:bg-purple-700",
-          "disabled:opacity-50 disabled:cursor-not-allowed"
-        )}
-      >
-        {isSending ? (
-          <Loader2 className="h-5 w-5 motion-safe:animate-spin" aria-hidden />
-        ) : (
-          <Send className="h-5 w-5" aria-hidden />
-        )}
-      </button>
+      {isSending && onStop ? (
+        // UX-CHAT-003: during streaming, the Send button morphs into
+        // a Stop button so users can cancel a long-running response
+        // without waiting it out. The backend persists whatever was
+        // streamed up to the abort and marks the execution as
+        // cancelled, so the partial reply isn't lost.
+        <button
+          onClick={onStop}
+          aria-label="Stop generating"
+          title="Stop generating"
+          className={cn(
+            "flex items-center justify-center p-3 rounded-xl transition",
+            "bg-foreground text-background hover:bg-foreground/90",
+            "focus-visible:ring-2 focus-visible:ring-purple-500"
+          )}
+        >
+          <Square className="h-4 w-4 fill-current" aria-hidden />
+        </button>
+      ) : (
+        <button
+          onClick={handleSubmit}
+          disabled={!message.trim() || disabled || isSending}
+          aria-label={isSending ? "Sending message" : "Send message"}
+          className={cn(
+            "flex items-center justify-center p-3 rounded-xl transition",
+            "bg-purple-600 text-white hover:bg-purple-700",
+            "disabled:opacity-50 disabled:cursor-not-allowed"
+          )}
+        >
+          {isSending ? (
+            <Loader2 className="h-5 w-5 motion-safe:animate-spin" aria-hidden />
+          ) : (
+            <Send className="h-5 w-5" aria-hidden />
+          )}
+        </button>
+      )}
       </div>
       <p
         id="chat-input-hint"

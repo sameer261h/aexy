@@ -17,6 +17,8 @@ import {
   ReviewStep,
 } from "./steps";
 import { useAgents } from "@/hooks/useAgents";
+import { useAgentDefaults } from "@/hooks/useAgentDefaults";
+import { useAgentDraft } from "@/hooks/useAgentDraft";
 import { AgentType, StandardAgentType, WorkingHoursConfig, AGENT_TYPE_CONFIG, agentsApi } from "@/lib/api";
 
 // UX-WIZ-001: persist the 8-step wizard form to localStorage so Cmd+R
@@ -88,6 +90,15 @@ export function AgentCreationWizard({
 }: AgentCreationWizardProps) {
   const router = useRouter();
   const { createAgent, isCreating } = useAgents(workspaceId);
+  // UX-EDT-024: pull server-side defaults instead of hardcoding
+  // gemini-2.0-flash. The hook keeps a hardcoded fallback so the
+  // first paint isn't blank if the call is in flight.
+  const { defaults } = useAgentDefaults(workspaceId);
+  // UX-DEF-003: server-side wizard draft for cross-device resume.
+  // Layered on top of the localStorage path — localStorage covers
+  // same-browser Cmd+R; this covers picking the wizard back up on
+  // a different machine.
+  const serverDraftHook = useAgentDraft(workspaceId);
   // Lazy initializer reads the saved draft once on mount so the user
   // resumes where they left off. Subsequent state changes write back
   // via the autosave effect below.
@@ -142,6 +153,10 @@ export function AgentCreationWizard({
           if (typeof window !== "undefined") {
             window.localStorage.removeItem(draftKey(workspaceId));
           }
+          // Also drop the server-side draft so a discard on this
+          // device doesn't leave the wizard re-appearing on the
+          // next one.
+          void serverDraftHook.clear();
           // Reload the page to reset every piece of state cleanly —
           // a manual setX(default) call for every field is fragile.
           if (typeof window !== "undefined") window.location.reload();
@@ -192,6 +207,11 @@ export function AgentCreationWizard({
       // localStorage can throw under private-browsing / quota limits;
       // autosave failing isn't worth a user-facing toast.
     }
+    // UX-DEF-003: also sync to the server (debounced inside the
+    // hook). localStorage keeps working as the same-browser fast
+    // path — the server call layers cross-device on top.
+    // `snapshot` is already a plain object — pass it through.
+    serverDraftHook.save(snapshot as unknown as Record<string, unknown>);
   }, [
     workspaceId,
     currentStep,
@@ -217,6 +237,10 @@ export function AgentCreationWizard({
     emailDomain,
     autoReplyEnabled,
     emailSignature,
+    // serverDraftHook is intentionally NOT a dep — the hook's
+    // `save` reference is stable, and adding it would trigger this
+    // effect on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   ]);
 
   // When agent type is selected, initialize with defaults
@@ -343,10 +367,14 @@ export function AgentCreationWizard({
 
       // Clear the autosaved draft now that creation succeeded.
       // Failed submissions keep the draft so the user can retry without
-      // re-typing.
+      // re-typing. Both local + server paths are cleared — failed
+      // creates leave both intact.
       if (typeof window !== "undefined") {
         window.localStorage.removeItem(draftKey(workspaceId));
       }
+      // Server-side draft is fire-and-forget — a network error
+      // here doesn't change the fact that the agent was created.
+      void serverDraftHook.clear();
 
       // Redirect to the new agent's page
       router.push(`/agents/${newAgent.id}`);

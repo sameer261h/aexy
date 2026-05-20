@@ -31,7 +31,7 @@ import { toast } from "sonner";
 
 import { useWorkspace, useWorkspaceMembers } from "@/hooks/useWorkspace";
 import { useAgent } from "@/hooks/useAgents";
-import { useAgentInbox, useAgentInboxMessage } from "@/hooks/useAgentInbox";
+import { useAgentInbox, useAgentInboxMessage, useAgentInboxThread } from "@/hooks/useAgentInbox";
 import { AgentInboxMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { formatRelative } from "@/lib/datetime";
@@ -238,6 +238,7 @@ function MessageDetail({
   onEscalate,
   onArchive,
   onProcess,
+  onSelectMessage,
   isReplying,
   isEscalating,
   isArchiving,
@@ -250,11 +251,23 @@ function MessageDetail({
   onEscalate: (escalateTo: string, note?: string) => void;
   onArchive: () => void;
   onProcess: () => void;
+  onSelectMessage: (id: string) => void;
   isReplying: boolean;
   isEscalating: boolean;
   isArchiving: boolean;
   isProcessing: boolean;
 }) {
+  // UX-INB-027 / UX-DEF-007: thread fetch. Only fires when there's
+  // actually a thread hint (thread_id or in_reply_to) so orphan
+  // messages don't trigger a useless network round-trip.
+  const hasThreadHint = Boolean(message.thread_id || message.in_reply_to_message_id);
+  const { thread } = useAgentInboxThread(
+    workspaceId,
+    agentId,
+    message.id,
+    hasThreadHint,
+  );
+
   // Draft persistence — keyed per message so switching threads doesn't
   // lose what the user typed. sessionStorage so the draft survives a
   // page refresh but not a new browser session (matches the audit
@@ -347,6 +360,60 @@ function MessageDetail({
           <span>{message.to_email}</span>
         </div>
       </div>
+
+      {/* UX-INB-027: thread strip. Renders when this message has a
+          parent OR sibling rows in the same thread. Each pill scrolls
+          its target message into view by setting selectedMessageId
+          via the embedded data attribute. Excludes the current
+          message from the strip; the current one is already on
+          screen below. */}
+      {thread.length > 1 && (
+        <div className="px-4 py-2 border-b border-border bg-muted/30">
+          <div className="flex items-center gap-2 overflow-x-auto">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground/80 shrink-0">
+              Thread ({thread.length})
+            </span>
+            <div className="flex items-center gap-1 flex-1">
+              {thread.map((t, idx) => {
+                const isCurrent = t.id === message.id;
+                const label = t.from_name || t.from_email.split("@")[0];
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    disabled={isCurrent}
+                    onClick={() => {
+                      // Drive selection through page-level state — the
+                      // list pane's row is virtualized via data-message-id
+                      // for the keyboard handler, but selection itself
+                      // belongs to React state, not a DOM .click().
+                      onSelectMessage(t.id);
+                      // Best-effort scroll the row into view if it
+                      // happens to be in the visible list; harmless when
+                      // it isn't (mobile, hidden behind detail pane).
+                      requestAnimationFrame(() => {
+                        const node = document.querySelector<HTMLElement>(
+                          `[data-message-id="${t.id}"]`,
+                        );
+                        node?.scrollIntoView({ block: "nearest" });
+                      });
+                    }}
+                    className={cn(
+                      "px-2 py-1 rounded text-[11px] whitespace-nowrap transition-colors",
+                      isCurrent
+                        ? "bg-purple-500/20 text-purple-700 dark:text-purple-300 cursor-default"
+                        : "text-muted-foreground hover:text-foreground hover:bg-accent",
+                    )}
+                    title={`${t.from_email}\n${new Date(t.created_at).toLocaleString()}`}
+                  >
+                    {idx + 1}. {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto p-4">
@@ -818,6 +885,7 @@ export default function AgentInboxPage() {
     replyToMessage,
     escalateMessage,
     archiveMessage,
+    unarchiveMessage,
     processMessage,
     isReplying,
     isEscalating,
@@ -1038,14 +1106,13 @@ export default function AgentInboxPage() {
 
   const handleArchive = async () => {
     if (!selectedMessageId) return;
-    // Capture the subject before the row vanishes so the toast can
-    // reference it. UX-INB-022: the audit asked for a 5s undo toast,
-    // but the backend doesn't expose an unarchive endpoint yet — so
-    // this is a confirmation toast + "View archive" affordance until
-    // the inverse mutation lands. The Undo behavior is tracked in the
-    // tracker as a deferred bet that needs backend work.
+    // UX-INB-022: real undo via the inverse unarchive endpoint.
+    // Captures the subject + id locally because the row's about to
+    // vanish from the canonical list; the Undo action calls
+    // unarchiveMessage with the captured id.
     const archived = messages.find((m) => m.id === selectedMessageId);
-    await archiveMessage(selectedMessageId);
+    const archivedId = selectedMessageId;
+    await archiveMessage(archivedId);
     setSelectedMessageId(null);
     refetch();
     toast.success(
@@ -1053,10 +1120,21 @@ export default function AgentInboxPage() {
         ? `Archived "${archived.subject.slice(0, 60)}"`
         : "Message archived",
       {
-        duration: 4000,
+        duration: 6000,
         action: {
-          label: "View archive",
-          onClick: () => setStatusFilter("archived"),
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await unarchiveMessage(archivedId);
+              refetch();
+              setSelectedMessageId(archivedId);
+              toast.success("Message restored");
+            } catch (err) {
+              toast.error(
+                err instanceof Error ? err.message : "Failed to restore message",
+              );
+            }
+          },
         },
       },
     );
@@ -1387,6 +1465,7 @@ export default function AgentInboxPage() {
                       onEscalate={handleEscalate}
                       onArchive={handleArchive}
                       onProcess={handleProcess}
+                      onSelectMessage={setSelectedMessageId}
                       isReplying={isReplying}
                       isEscalating={isEscalating}
                       isArchiving={isArchiving}

@@ -5,6 +5,237 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-05-20
+
+UX overhaul of the agents + automations surface, plus a four-week
+accessibility sweep across the workspace shell. Nineteen commits since
+`0.8.01` consolidate three workstreams: a unified Operations IA, an
+inbox triage rewrite, and a long polish tail that migrates the last raw
+modals/drawers off ad-hoc divs onto Radix `Dialog` / `Sheet` primitives.
+Closes with four follow-ups from the PR #148 review.
+
+### Operations IA + agents UX
+
+- **Unified Operations page** (`/operations`, new). Single entry for
+  agents *and* automations — replaces the two separate `/agents` and
+  `/automations` landings, which the audit flagged as the #1 user
+  confusion ("am I building an agent, or wiring a workflow?"). New
+  `frontend/src/app/(app)/operations/page.tsx` (534 lines) plus
+  sidebar layout updates and `messages/{en,hi}/operations.json`
+  translations.
+- **Agent inbox triage v2** (`/agents/[id]/inbox`). Multi-select with
+  shift-click range, bulk-action toolbar (approve / dismiss / mark
+  read), and full keyboard navigation (j/k row movement,
+  x = toggle-select, enter = open). Inbox detail polish adds five
+  follow-up wins (HTML email rendering via DOMPurify, sender chip,
+  read-state indicator, optimistic toggles, skeleton during refetch).
+- **Per-tab dirty state on the edit page** (`/agents/[id]/edit`).
+  Replaces the prior single `hasChanges` boolean — each of the seven
+  tabs (General / LLM / Tools / Behavior / Prompts / Escalation /
+  Email) reports its own dirty bit so users switching tabs see which
+  sections still have pending edits. Help text and the
+  system-agent-locks-non-LLM-tabs disable are part of the same pass.
+- **`useRouteGuard` hook** (`frontend/src/hooks/useRouteGuard.ts`,
+  new). Anchor-click intercept + `beforeunload` for unsaved-changes
+  prompting; companion `requestConfirm(href)` API for programmatic
+  navigations (toolbar shortcuts, form-success redirects). Wired into
+  the edit page; ready for reuse on automation builder and CRM detail
+  forms.
+- **Live-streamed executions + inbox**. React Query polling on the
+  agent detail page so executions and inbox counts refresh without a
+  manual reload. Pauses on hidden tabs (default RQ behavior); no extra
+  socket plumbing.
+- **Automation builder onboarding via template gallery**. New
+  `frontend/src/components/automations/TemplateGallery.tsx` and
+  `frontend/src/lib/automationTemplates.ts` — the automation `/new`
+  page now opens to a curated gallery (standup digest, blocker
+  escalation, sprint kickoff, etc.) instead of a blank canvas.
+
+### Accessibility + polish (Weeks 1–4)
+
+- **Modal/drawer primitives**. Migrated the last raw `<div role="dialog">`
+  surfaces (delete-agent confirm, email-disable confirm, multi-select
+  bulk confirm, automation-version pick) to `components/ui/dialog.tsx`
+  (Radix `DialogPrimitive` — focus trap, escape, restored focus on
+  close). Drawers (workflow Test Results, Execution History, Version
+  History) moved to `components/ui/sheet.tsx`. New
+  `components/ui/confirm-dialog.tsx` for the destructive-action pattern.
+- **Chat surfaces**. Markdown rendering in `MessageBubble` with safe
+  link handling, `aria-live="polite"` execution-status region in
+  workflow nodes, `prefers-reduced-motion` respected on the chat
+  thinking-indicator and the workflow canvas pan/zoom transitions.
+- **Light-theme contrast + focus-visible**. ARIA labels on every
+  icon-only button across agents/automations/inbox; `focus-visible`
+  outlines added to all interactive surfaces; light-theme contrast
+  bumps on placeholder text and disabled-state buttons.
+- **Optimistic toggles + inbox skeleton**. Enable/disable agent + mark-
+  read/unread now flip instantly with rollback on error; inbox shows
+  skeleton rows during the first fetch instead of an empty state.
+- **`lib/datetime.ts`**. Centralized relative-time + locale-aware
+  date helpers; replaced ~20 ad-hoc `Intl.DateTimeFormat` callsites.
+- **ICU plurals on counters**. "1 task" / "N tasks" etc. now driven by
+  `next-intl` ICU patterns so the Hindi locale gets correct plural
+  forms without per-callsite branching.
+- **`messages/{en,hi}` additions** — `automations`, `inbox`,
+  `insights`, `operations` namespaces (full parity between locales).
+
+### Frontend
+
+- **Per-tab dirty indicators on `agents/[id]/edit/page.tsx`**. Each
+  tab carries its own `dirtyByTab[id]` so the tab strip can dot-mark
+  which sections have unsaved edits. Form-init effect skips re-sync
+  when the user has local changes (UX-EDT-021) — a refetch from
+  background polling or another mutation won't clobber in-flight
+  typing.
+- **`auth/callback/page.tsx` + `lib/oauth.ts`**. Refactored the OAuth
+  inflight tagging into a shared `OAuthInflightTagger` component;
+  callback page no longer touches localStorage directly.
+
+### Review followups (PR #148)
+
+- **`middleware.ts`** — `AUTH_REQUIRED_PREFIXES` matched `/docs/` but
+  not bare `/docs`, leaving the docs root unprotected by the auth
+  gate. Now matches both, consistent with every other entry in the
+  list.
+- **`api/app_access.py`** — extracted `_load_template_for_workspace`
+  helper. `update_member_access` and `apply_template_to_member` had
+  inlined the identical "template belongs to this workspace (or is a
+  system template)" check; both now call the helper.
+- **`useRouteGuard.ts`** — wrapped `new URL(anchor.href, ...)` in
+  try/catch. A page with a malformed anchor href would have thrown
+  inside the captured click handler.
+- **`agents/[id]/edit/page.tsx`** — added a rationale comment next to
+  the `react-hooks/exhaustive-deps` suppression: `hasChanges` and
+  `name` are read inside the form-init effect but intentionally
+  excluded from deps to avoid re-syncing the form mid-edit.
+
+### Streaming chat + agent runtime
+
+- **SSE streaming on the agent chat surface** (`/agents/[id]/chat/...`).
+  New `AgentService.stream_message` emits tokens, tool-call markers,
+  and citations as Server-Sent Events; the frontend `useAgentChatStream`
+  hook wires them into the message bubble incrementally with an
+  optimistic placeholder, mid-stream stop, and a token-cost meter.
+  Migration `migrate_agent_message_streaming.sql` adds the supporting
+  columns on `agent_messages` (stream state, token deltas, citations).
+- **`agents/base.py` + `services/agent_service.py`** — the agent base
+  class gained a `stream()` co-routine alongside the existing
+  request/response shape; the service routes streaming-capable agents
+  through it and falls back to a single-shot completion for the rest.
+- **MessageBubble citations**. Inline numbered footnotes link back to
+  the cited tool-call output; renders even after the stream completes.
+
+### Inbox thread chain + generate-from-prompt
+
+- **Inbox thread chain**. Inbox replies are now stitched together via
+  `parent_message_id`, so the detail pane renders the full back-and-
+  forth (incoming → agent reply → reply-to-reply, etc.) instead of a
+  flat list. New `test_inbox_thread_chain.py` (316 lines) pins the
+  resolver against forked threads and missing parents.
+- **Generate workflow from prompt**. The automation `/new` page can
+  now seed a workflow from a natural-language description. New
+  `services/workflow_generator.py` calls the LLM, validates the
+  produced node graph, and hands it to the existing builder. Wired
+  into `TemplateGallery` as a "Describe your workflow" entry.
+- **Inbox unarchive** + Postmark parser fix in `api/email_webhooks.py`
+  (Postmark's `MessageStream` field was being dropped on rebound
+  events, breaking attribution for unarchived items).
+
+### Agent edit + wizard
+
+- **Defaults endpoint** (`GET /agents/defaults`) returns the system
+  prompt / tools / behavior defaults for a given agent type so the
+  wizard and edit page render preview state without hardcoding.
+  Backed by `useAgentDefaults` on the frontend.
+- **Prompt preview** on the edit page — substitutes a sample
+  `{{variable}}` payload through the system prompt and renders the
+  result inline so users see what the agent will actually see at
+  runtime.
+- **Server-side wizard drafts** (UX-DEF-003). New `agent_drafts` table
+  (`migrate_agent_drafts.sql`), `AgentDraftService`,
+  `GET/PUT/DELETE /agents/drafts` endpoints, and the `useAgentDraft`
+  hook. Replaces the localStorage-only draft that vanished on
+  cross-device switches; drafts auto-restore on wizard re-entry and
+  garbage-collect on completion.
+
+### Frontend reliability
+
+- **`lib/reportError.ts`**. Centralized error reporter — forwards to
+  Sentry when `NEXT_PUBLIC_SENTRY_DSN` is set, falls back to a
+  structured console log otherwise. `ModuleError.tsx` boundary now
+  reports through it instead of swallowing. 156-line test suite covers
+  both branches.
+- **Misc UX-close batch**: status counts on inbox tabs, accessible
+  Save button (`aria-busy` during inflight, error-region announcement
+  on failure), email-cancel resets the form to persisted values
+  instead of leaving stale local edits, NodeConfigPanel layout fix.
+
+### Tests
+
+- **~120 new vitest + pytest cases** across:
+  - `reportError.test.ts` (156 lines) — Sentry / console branches.
+  - `useAgentDraft.test.tsx` (326 lines), `useAgentChatStream.test.tsx`
+    (430 lines) — hook lifecycle, abort, error paths.
+  - `test_agent_stream_message.py` (510 lines) — five SSE flows
+    including mid-stream cancellation and tool-call interleaving.
+  - `test_agent_draft_service.py` (226 lines) — CRUD + workspace-
+    scope assertions.
+  - `test_workflow_generator.py` (233 lines) — graph validation +
+    LLM error fallback.
+  - `test_agent_cost_estimation.py` (125 lines), `test_agent_preview_prompt.py`
+    (340 lines), `test_inbox_thread_chain.py` (316 lines),
+    `test_inbox_unarchive.py` (193 lines),
+    `test_email_webhook_parse.py` (117 lines).
+
+### Review followups (agents-big-features)
+
+Post-merge audit of the streaming-chat + agent-runtime branch surfaced
+one Critical cross-workspace gap on the new SSE endpoint plus a
+cluster of Highs around partial state, citation XSS, and an SSE chunk-
+buffering blind spot. Fixed in place; tests added for each.
+
+- **Security (Critical):** `POST /workspaces/{ws}/crm/agents/{aid}/
+  conversations/{cid}/messages/stream` now calls
+  `_assert_agent_in_workspace` and rejects conversations whose
+  `workspace_id` doesn't match the URL. Previously the endpoint only
+  checked `conversation.agent_id == agent_id`, so a developer in
+  workspace A who knew a foreign workspace's (agent_id, conversation_id)
+  pair could stream user messages into that foreign conversation.
+- **Backend:** SSE stream commits the user message + execution shell
+  in a single transaction so a flush failure can't strand a user
+  message without a paired execution row. Inbox thread forward walk
+  now queries only the new frontier per round (was O(n²) on long
+  threads); capped at 50 rounds matching the backward walk. Workflow
+  generator caps generated graphs at 100 nodes / 200 edges so a runaway
+  LLM response can't spawn thousands of canvas nodes.
+- **AgentDraft persistence:** `save_draft` now uses
+  `attributes.flag_modified(...)` to force the JSONB UPDATE (previously
+  relied on assigning a new dict, which worked but was fragile under
+  in-place mutation). Documented the pattern on the model field.
+- **Frontend (chat surface):** Citations + markdown anchors now drop
+  back to plain text for non-`http(s)` schemes, blocking
+  `javascript:` / `data:` URL XSS at the source. Live token meter +
+  per-message meter + "Sources" + "Processing…" + generate-prompt
+  placeholder all flow through `useTranslations` (`messages/en/agents.json`,
+  `messages/hi/agents.json`, `messages/{en,hi}/automations.json`). Per-
+  message meter stacks under the timestamp on narrow screens. Optimistic
+  message ids use `crypto.randomUUID()` instead of `Date.now()` so two
+  sends in the same millisecond can't collide React keys.
+- **Frontend (state hardening):** `useAgentChatStream` awaits
+  `refetchQueries` then clears pending in the same tick (was
+  `invalidateQueries` + 80 ms setTimeout, which caused a one-paint
+  flicker when the refetch resolved fast). `useAgentDraft` tracks a
+  save-sequence + mountedRef so a slow in-flight save can't overwrite
+  newer state and unmount races don't trigger React's "set state on
+  unmounted component" warning. Inbox thread strip drives selection
+  through a state callback instead of `document.querySelector(...).click()`.
+- **Tests:** Added gpt-4o vs gpt-4o-mini and dated-pin regression
+  cases to `test_agent_cost_estimation.py` (the longest-prefix-wins
+  sort would silently bill the wrong rate if reversed). Added a
+  `useAgentChatStream` test that tears a frame across two stream
+  chunks (mid-JSON + across `\n\n`) to lock in the buffer-reassembly
+  behavior. 77 backend + 82 frontend tests passing.
+
 ## [0.8.01] - 2026-05-19
 
 Post-review hardening of the 0.8.0 workspace-scope authz pass. Four

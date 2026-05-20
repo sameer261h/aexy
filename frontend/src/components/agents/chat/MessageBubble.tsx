@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Bot, Check, Copy, RotateCw, User } from "lucide-react";
-import { useLocale } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -28,6 +28,18 @@ function formatTime(dateString: string, locale: string): string {
   });
 }
 
+// URLs in assistant output (markdown links + citations) come from a
+// model that may have been instructed by sender-controlled content, so
+// gate the href on http(s). Blocks `javascript:` / `data:` / `vbscript:`
+// at the source — rel="noopener noreferrer" doesn't help against
+// non-http schemes. mailto: and tel: would be safe too but are not
+// expected here; we'd rather render as text than guess intent.
+function isSafeUrl(href: string | undefined | null): href is string {
+  if (!href) return false;
+  const trimmed = href.trim();
+  return /^https?:\/\//i.test(trimmed);
+}
+
 // Minimal markdown component overrides — render assistant outputs as
 // real prose (headings, lists, code, links) rather than as a single
 // whitespace-preserved paragraph. We deliberately keep the surface
@@ -47,19 +59,26 @@ const MARKDOWN_COMPONENTS = {
   li: ({ children }: { children?: React.ReactNode }) => (
     <li className="leading-relaxed">{children}</li>
   ),
-  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
+  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => {
     // External by default — react-markdown only sees what the model
     // emitted, never a same-origin internal route, so noopener is the
-    // right default.
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-indigo-400 hover:text-indigo-300 underline"
-    >
-      {children}
-    </a>
-  ),
+    // right default. Non-http(s) schemes (javascript:/data:/...) are
+    // dropped back to plain text since rel="noopener" doesn't protect
+    // against URL-scheme XSS.
+    if (!isSafeUrl(href)) {
+      return <span>{children}</span>;
+    }
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-indigo-400 hover:text-indigo-300 underline"
+      >
+        {children}
+      </a>
+    );
+  },
   code: ({
     inline,
     className,
@@ -146,6 +165,7 @@ function CopyButton({ content }: { content: string }) {
 
 export function MessageBubble({ message, onResend }: MessageBubbleProps) {
   const locale = useLocale();
+  const t = useTranslations("agents.chat");
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
   const isTool = message.role === "tool";
@@ -218,6 +238,11 @@ export function MessageBubble({ message, onResend }: MessageBubbleProps) {
 
   // Assistant message
   if (isAssistant) {
+    const citations = message.citations ?? [];
+    const hasUsage =
+      message.input_tokens != null ||
+      message.output_tokens != null ||
+      message.cost_usd != null;
     return (
       <div className="flex justify-start group">
         <div className="flex items-start gap-3 max-w-3xl">
@@ -229,7 +254,7 @@ export function MessageBubble({ message, onResend }: MessageBubbleProps) {
               {message.content ? (
                 <MessageContent content={message.content} />
               ) : (
-                <p className="text-muted-foreground italic">Processing...</p>
+                <p className="text-muted-foreground italic">{t("processing")}</p>
               )}
 
               {/* Display tool calls if present */}
@@ -245,14 +270,80 @@ export function MessageBubble({ message, onResend }: MessageBubbleProps) {
                   ))}
                 </div>
               )}
+
+              {/* UX-CHAT-008: citations strip — sources the agent
+                  referenced. Real <a> with rel=noopener so middle-
+                  click + cmd-click work and sender-controlled URLs
+                  can't hijack the opener. */}
+              {citations.length > 0 ? (
+                <div className="mt-3 pt-3 border-t border-border/60">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground/80 mb-2">
+                    {t("sources")}
+                  </div>
+                  <ol className="space-y-1.5 list-decimal pl-4">
+                    {citations.map((c, i) => {
+                      const href = c.url ?? "";
+                      const safe = isSafeUrl(href);
+                      let host = "";
+                      if (safe) {
+                        try {
+                          host = new URL(href).hostname.replace(/^www\./, "");
+                        } catch {
+                          host = "";
+                        }
+                      }
+                      return (
+                        <li key={`${i}-${href}`} className="text-xs">
+                          {safe ? (
+                            <a
+                              href={href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-indigo-600 dark:text-indigo-400 hover:underline break-all"
+                            >
+                              {c.title || host || href}
+                            </a>
+                          ) : (
+                            <span>{c.title || t("untitledSource")}</span>
+                          )}
+                          {host && c.title ? (
+                            <span className="ml-1.5 text-muted-foreground">· {host}</span>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </div>
+              ) : null}
             </div>
-            <div className="flex items-center gap-1 mt-1">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-1 mt-1">
               {message.content ? (
                 <CopyButton content={message.content} />
               ) : null}
               <span className="text-xs text-muted-foreground">
                 {formatTime(message.created_at, locale)}
               </span>
+              {/* UX-CHAT-009: post-stream token + cost meter. Lives
+                  in the message footer (the live meter above the
+                  input handles the streaming phase). title= carries
+                  the breakdown so power users can audit. Stacks under
+                  the timestamp on narrow screens so the meter doesn't
+                  push the timestamp off-screen on phones. */}
+              {hasUsage ? (
+                <span
+                  className="sm:ml-1 text-[10px] tabular-nums text-muted-foreground/70"
+                  title={[
+                    message.input_tokens != null ? `${message.input_tokens} ${t("tokensIn")}` : null,
+                    message.output_tokens != null ? `${message.output_tokens} ${t("tokensOut")}` : null,
+                    message.cost_usd != null ? `$${message.cost_usd.toFixed(4)}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                >
+                  {message.output_tokens != null ? `${message.output_tokens}t` : ""}
+                  {message.cost_usd != null ? ` · $${message.cost_usd.toFixed(4)}` : ""}
+                </span>
+              ) : null}
             </div>
           </div>
         </div>
