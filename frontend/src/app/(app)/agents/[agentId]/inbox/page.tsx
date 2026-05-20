@@ -238,6 +238,7 @@ function MessageDetail({
   onEscalate,
   onArchive,
   onProcess,
+  onSelectMessage,
   isReplying,
   isEscalating,
   isArchiving,
@@ -250,6 +251,7 @@ function MessageDetail({
   onEscalate: (escalateTo: string, note?: string) => void;
   onArchive: () => void;
   onProcess: () => void;
+  onSelectMessage: (id: string) => void;
   isReplying: boolean;
   isEscalating: boolean;
   isArchiving: boolean;
@@ -381,15 +383,20 @@ function MessageDetail({
                     type="button"
                     disabled={isCurrent}
                     onClick={() => {
-                      // Page-level state. Nudge selection up to the
-                      // surrounding list via a data-message-id click
-                      // simulation; the keyboard handler also keys
-                      // off this attribute.
-                      const node = document.querySelector<HTMLElement>(
-                        `[data-message-id="${t.id}"]`,
-                      );
-                      node?.click();
-                      node?.scrollIntoView({ block: "nearest" });
+                      // Drive selection through page-level state — the
+                      // list pane's row is virtualized via data-message-id
+                      // for the keyboard handler, but selection itself
+                      // belongs to React state, not a DOM .click().
+                      onSelectMessage(t.id);
+                      // Best-effort scroll the row into view if it
+                      // happens to be in the visible list; harmless when
+                      // it isn't (mobile, hidden behind detail pane).
+                      requestAnimationFrame(() => {
+                        const node = document.querySelector<HTMLElement>(
+                          `[data-message-id="${t.id}"]`,
+                        );
+                        node?.scrollIntoView({ block: "nearest" });
+                      });
                     }}
                     className={cn(
                       "px-2 py-1 rounded text-[11px] whitespace-nowrap transition-colors",
@@ -1458,6 +1465,7 @@ export default function AgentInboxPage() {
                       onEscalate={handleEscalate}
                       onArchive={handleArchive}
                       onProcess={handleProcess}
+                      onSelectMessage={setSelectedMessageId}
                       isReplying={isReplying}
                       isEscalating={isEscalating}
                       isArchiving={isArchiving}

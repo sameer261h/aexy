@@ -187,6 +187,55 @@ Closes with four follow-ups from the PR #148 review.
     `test_inbox_unarchive.py` (193 lines),
     `test_email_webhook_parse.py` (117 lines).
 
+### Review followups (agents-big-features)
+
+Post-merge audit of the streaming-chat + agent-runtime branch surfaced
+one Critical cross-workspace gap on the new SSE endpoint plus a
+cluster of Highs around partial state, citation XSS, and an SSE chunk-
+buffering blind spot. Fixed in place; tests added for each.
+
+- **Security (Critical):** `POST /workspaces/{ws}/crm/agents/{aid}/
+  conversations/{cid}/messages/stream` now calls
+  `_assert_agent_in_workspace` and rejects conversations whose
+  `workspace_id` doesn't match the URL. Previously the endpoint only
+  checked `conversation.agent_id == agent_id`, so a developer in
+  workspace A who knew a foreign workspace's (agent_id, conversation_id)
+  pair could stream user messages into that foreign conversation.
+- **Backend:** SSE stream commits the user message + execution shell
+  in a single transaction so a flush failure can't strand a user
+  message without a paired execution row. Inbox thread forward walk
+  now queries only the new frontier per round (was O(n²) on long
+  threads); capped at 50 rounds matching the backward walk. Workflow
+  generator caps generated graphs at 100 nodes / 200 edges so a runaway
+  LLM response can't spawn thousands of canvas nodes.
+- **AgentDraft persistence:** `save_draft` now uses
+  `attributes.flag_modified(...)` to force the JSONB UPDATE (previously
+  relied on assigning a new dict, which worked but was fragile under
+  in-place mutation). Documented the pattern on the model field.
+- **Frontend (chat surface):** Citations + markdown anchors now drop
+  back to plain text for non-`http(s)` schemes, blocking
+  `javascript:` / `data:` URL XSS at the source. Live token meter +
+  per-message meter + "Sources" + "Processing…" + generate-prompt
+  placeholder all flow through `useTranslations` (`messages/en/agents.json`,
+  `messages/hi/agents.json`, `messages/{en,hi}/automations.json`). Per-
+  message meter stacks under the timestamp on narrow screens. Optimistic
+  message ids use `crypto.randomUUID()` instead of `Date.now()` so two
+  sends in the same millisecond can't collide React keys.
+- **Frontend (state hardening):** `useAgentChatStream` awaits
+  `refetchQueries` then clears pending in the same tick (was
+  `invalidateQueries` + 80 ms setTimeout, which caused a one-paint
+  flicker when the refetch resolved fast). `useAgentDraft` tracks a
+  save-sequence + mountedRef so a slow in-flight save can't overwrite
+  newer state and unmount races don't trigger React's "set state on
+  unmounted component" warning. Inbox thread strip drives selection
+  through a state callback instead of `document.querySelector(...).click()`.
+- **Tests:** Added gpt-4o vs gpt-4o-mini and dated-pin regression
+  cases to `test_agent_cost_estimation.py` (the longest-prefix-wins
+  sort would silently bill the wrong rate if reversed). Added a
+  `useAgentChatStream` test that tears a frame across two stream
+  chunks (mid-JSON + across `\n\n`) to lock in the buffer-reassembly
+  behavior. 77 backend + 82 frontend tests passing.
+
 ## [0.8.01] - 2026-05-19
 
 Post-review hardening of the 0.8.0 workspace-scope authz pass. Four

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Bot, Loader2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { AgentMessage, CRMAgent } from "@/lib/api";
 import { MessageBubble } from "./MessageBubble";
@@ -32,6 +33,7 @@ export function ChatInterface({
   streamingTokens,
   streamingCostUsd,
 }: ChatInterfaceProps) {
+  const t = useTranslations("agents.chat");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
@@ -165,10 +167,10 @@ export function ChatInterface({
           className="px-4 pt-2 text-[11px] text-muted-foreground/80 flex items-center gap-3 tabular-nums"
         >
           {streamingTokens?.input != null ? (
-            <span>{streamingTokens.input} in</span>
+            <span>{streamingTokens.input} {t("tokensIn")}</span>
           ) : null}
           {streamingTokens?.output != null ? (
-            <span>{streamingTokens.output} out</span>
+            <span>{streamingTokens.output} {t("tokensOut")}</span>
           ) : null}
           {streamingCostUsd != null ? (
             <span>${streamingCostUsd.toFixed(4)}</span>

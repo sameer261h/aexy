@@ -159,6 +159,15 @@
       "pending": "लंबित",
       "running": "चल रहा है",
       "cancelled": "रद्द"
+    },
+
+    "chat": {
+      "tokensIn": "इनपुट",
+      "tokensOut": "आउटपुट",
+      "sources": "स्रोत",
+      "untitledSource": "अनाम स्रोत",
+      "processing": "प्रोसेस हो रहा है...",
+      "generatePromptPlaceholder": "उदा. जब CRM में नया डील बंद हो, तो Slack पर पोस्ट करें और एक follow-up task बनाएं"
     }
   }
 }

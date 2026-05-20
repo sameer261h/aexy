@@ -797,10 +797,15 @@ async def stream_message(
     stays in place for non-UI callers (mobile webview, etc).
     """
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
     service = AgentService(db)
 
     conversation = await service.get_conversation(conversation_id)
-    if not conversation or conversation.agent_id != agent_id:
+    if (
+        not conversation
+        or conversation.agent_id != agent_id
+        or str(conversation.workspace_id) != workspace_id
+    ):
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     async def generate():

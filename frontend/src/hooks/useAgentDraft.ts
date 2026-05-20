@@ -79,6 +79,18 @@ export function useAgentDraft(
   // without re-creating the debounce timer.
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingPayloadRef = useRef<Record<string, unknown> | null>(null);
+  // Tracks the most recently issued save so a slow in-flight request
+  // can't overwrite state after a faster newer one finished — and so
+  // saves that resolve after unmount silently no-op instead of
+  // triggering React's "set state on unmounted component" warning.
+  const saveSeqRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Initial fetch.
   useEffect(() => {
@@ -106,15 +118,21 @@ export function useAgentDraft(
   }, [enabled, workspaceId]);
 
   // Clean up the debounce timer on unmount + flush any pending save
-  // so a navigation away doesn't lose the most recent keystroke.
+  // so a navigation away doesn't lose the most recent keystroke. The
+  // saveSeqRef bump invalidates any in-flight non-flushed save so its
+  // late-arriving result can't fight the flush we're about to issue.
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current);
         const pending = pendingPayloadRef.current;
+        pendingPayloadRef.current = null;
         if (pending && workspaceId) {
+          saveSeqRef.current++;
           // Fire-and-forget — we're unmounting, can't surface the
-          // result anywhere useful.
+          // result anywhere useful. The bumped seq makes sure if the
+          // hook remounts before this resolves, its save() calls
+          // override this one.
           agentsApi.saveAgentDraft(workspaceId, pending).catch(() => {
             // Silent — user's already left.
           });
@@ -133,16 +151,24 @@ export function useAgentDraft(
         const next = pendingPayloadRef.current;
         if (!next) return;
         pendingPayloadRef.current = null;
+        const seq = ++saveSeqRef.current;
         setIsSaving(true);
         try {
           const draft = await agentsApi.saveAgentDraft(workspaceId, next);
+          // Discard stale results: a newer save (or unmount) makes
+          // this one obsolete and applying it would flicker the UI
+          // back to older state.
+          if (!mountedRef.current || seq !== saveSeqRef.current) return;
           setServerDraft(draft);
           if (draft.updated_at) setLastSavedAt(draft.updated_at);
           setError(null);
         } catch (err) {
+          if (!mountedRef.current || seq !== saveSeqRef.current) return;
           setError(err instanceof Error ? err.message : "Save failed");
         } finally {
-          setIsSaving(false);
+          if (mountedRef.current && seq === saveSeqRef.current) {
+            setIsSaving(false);
+          }
         }
       }, SAVE_DEBOUNCE_MS);
     },

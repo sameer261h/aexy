@@ -429,18 +429,32 @@ class AgentEmailService:
             cursor = parent
 
         # Walk forward: anything pointing back at our collected set.
-        while visited_message_ids:
+        # Each round only queries for the *new* frontier (message ids we
+        # haven't already searched for children) so total work is O(n)
+        # rather than O(n²). Capped at 50 rounds for the same reason as
+        # the backward walk — a poisoned dataset shouldn't loop forever.
+        searched_message_ids: set[str] = set()
+        frontier = set(visited_message_ids)
+        for _ in range(50):
+            frontier -= searched_message_ids
+            if not frontier:
+                break
             stmt = _select(_Msg).options(*_no_rel).where(
                 _Msg.agent_id == agent_id,
                 _Msg.workspace_id == workspace_id,
-                _Msg.in_reply_to_message_id.in_(visited_message_ids),
+                _Msg.in_reply_to_message_id.in_(frontier),
             )
             result = await self.db.execute(stmt)
             new_rows = [m for m in result.scalars().all() if m.id not in visited_ids]
+            searched_message_ids |= frontier
             if not new_rows:
                 break
+            next_frontier: set[str] = set()
             for m in new_rows:
                 _add(m)
+                if m.message_id:
+                    next_frontier.add(m.message_id)
+            frontier = next_frontier
 
         if not visited_ids:
             return []

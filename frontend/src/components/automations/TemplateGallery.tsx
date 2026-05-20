@@ -178,15 +178,14 @@ export function TemplateGallery({
             <div className="flex items-center gap-2 mb-3">
               <Wand2 className="h-4 w-4 text-purple-600 dark:text-purple-300" aria-hidden />
               <h2 className="text-sm font-semibold text-foreground">
-                Describe it, we&apos;ll draft it
+                {t("generate.heading")}
               </h2>
               <span className="ml-2 text-[10px] uppercase tracking-wider text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
-                AI · beta
+                {t("generate.badge")}
               </span>
             </div>
             <p className="text-xs text-muted-foreground mb-3 max-w-2xl">
-              Describe the automation in one or two sentences. We&apos;ll
-              draft a starting workflow you can edit on the canvas.
+              {t("generate.subtitle")}
             </p>
             <div className="flex flex-col sm:flex-row gap-2">
               <textarea
@@ -198,9 +197,9 @@ export function TemplateGallery({
                     void handleGenerate();
                   }
                 }}
-                placeholder="e.g. When a new deal closes in CRM, post to #sales-wins and create a follow-up task in 7 days"
+                placeholder={t("generate.placeholder")}
                 rows={2}
-                aria-label="Describe the automation"
+                aria-label={t("generate.describeAriaLabel")}
                 disabled={isGenerating}
                 className={cn(
                   "flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground resize-none",

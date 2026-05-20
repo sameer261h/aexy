@@ -64,8 +64,15 @@ export function useAgentChatStream(
       setCurrentCostUsd(null);
       setCurrentTokens(null);
 
-      const optimisticUserId = `optimistic-user-${Date.now()}`;
-      const optimisticAssistantId = `optimistic-assistant-${Date.now()}`;
+      // crypto.randomUUID over Date.now() so two sends in the same
+      // millisecond (resend button mashed twice, automation firing
+      // back-to-back) still produce unique ids — Date.now() can
+      // collide and a duplicate key crashes React's reconciler.
+      const uid = typeof crypto !== "undefined" && crypto.randomUUID
+        ? () => crypto.randomUUID()
+        : () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const optimisticUserId = `optimistic-user-${uid()}`;
+      const optimisticAssistantId = `optimistic-assistant-${uid()}`;
       pendingIdsRef.current = { user: optimisticUserId, assistant: optimisticAssistantId };
 
       const now = new Date().toISOString();
@@ -204,15 +211,23 @@ export function useAgentChatStream(
                       : m,
                   ),
                 );
-                await queryClient.invalidateQueries({
-                  queryKey: ["conversation", workspaceId, agentId, conversationId],
-                });
-                // Brief delay: keep pendingMessages around until the
-                // canonical fetch resolves so we don't flicker.
-                setTimeout(() => {
-                  setPendingMessages([]);
-                  pendingIdsRef.current = null;
-                }, 80);
+                // Refetch then clear in the same tick. The prior version
+                // used invalidate + 80ms setTimeout, but if the refetch
+                // resolved faster than 80ms the canonical + optimistic
+                // bubble both rendered for one paint, producing flicker.
+                // refetchQueries awaits the network, so by the time we
+                // clear pending the React Query cache already has the
+                // canonical row that mergeMessages will dedupe against.
+                try {
+                  await queryClient.refetchQueries({
+                    queryKey: ["conversation", workspaceId, agentId, conversationId],
+                  });
+                } catch {
+                  // Swallow — failing the refetch shouldn't strand the
+                  // stream; the user can refresh if needed.
+                }
+                setPendingMessages([]);
+                pendingIdsRef.current = null;
                 setIsStreaming(false);
                 return;
               case "error":

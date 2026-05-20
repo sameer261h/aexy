@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from aexy.models.agent_draft import AgentDraft
 
@@ -59,11 +60,13 @@ class AgentDraftService:
         )
         if existing:
             existing.payload = payload
-            # Bump updated_at explicitly — onupdate doesn't fire when
-            # only JSON fields change (SQLAlchemy detects column-level
-            # changes, not deep-equality on a dict). The frontend
-            # uses this for "last saved Xs ago" so missing the bump
-            # would freeze the indicator.
+            # flag_modified guarantees the UPDATE fires even when the
+            # caller passes the same dict object back unchanged — which
+            # in turn fires the model's `onupdate=func.now()` so the
+            # "last saved Xs ago" indicator on the wizard moves. Also
+            # set updated_at directly so the in-memory `existing`
+            # object reflects the new time without a roundtrip.
+            flag_modified(existing, "payload")
             existing.updated_at = datetime.now(timezone.utc)
             await self.db.flush()
             await self.db.refresh(existing)

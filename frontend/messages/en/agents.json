@@ -159,6 +159,15 @@
       "pending": "Pending",
       "running": "Running",
       "cancelled": "Cancelled"
+    },
+
+    "chat": {
+      "tokensIn": "in",
+      "tokensOut": "out",
+      "sources": "Sources",
+      "untitledSource": "Untitled source",
+      "processing": "Processing...",
+      "generatePromptPlaceholder": "e.g. When a new deal closes in CRM, post to Slack and create a follow-up task"
     }
   }
 }

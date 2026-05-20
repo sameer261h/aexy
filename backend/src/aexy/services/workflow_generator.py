@@ -96,6 +96,13 @@ def _validate_workflow(payload: dict) -> tuple[bool, str | None]:
         return False, "nodes missing or empty"
     if not isinstance(edges, list):
         return False, "edges must be an array"
+    # Hard ceiling on graph size — a runaway LLM response shouldn't be
+    # able to spawn thousands of canvas nodes. These caps are well
+    # above any legitimate user-built workflow.
+    if len(nodes) > 100:
+        return False, f"too many nodes ({len(nodes)}); cap is 100"
+    if len(edges) > 200:
+        return False, f"too many edges ({len(edges)}); cap is 200"
 
     ids: set[str] = set()
     triggers = 0

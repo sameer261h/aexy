@@ -65,6 +65,10 @@ class AgentDraft(Base):
     )
     # Opaque to the server — whatever shape the wizard wants. JSONB
     # so future shape evolution doesn't need a migration.
+    # NOTE: mutating this dict in place won't trigger SQLAlchemy's
+    # dirty-attribute tracking. AgentDraftService.save_draft uses
+    # `flag_modified(...)` to force the UPDATE; if you write a new
+    # mutation site, do the same.
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(

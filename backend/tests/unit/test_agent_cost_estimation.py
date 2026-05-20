@@ -70,6 +70,31 @@ class TestEstimateCostUsd:
         )
         assert without_suffix == with_suffix
 
+    def test_gpt4o_does_not_shadow_gpt4o_mini(self):
+        """Regression for the longest-prefix-wins sort: 'gpt-4o-mini'
+        starts with 'gpt-4o', so without the explicit length sort the
+        cheaper model would silently bill at the full-fat rate.
+        gpt-4o = ($5 / $15), gpt-4o-mini = ($0.15 / $0.60).
+        For 1k+1k tokens that's $0.020 vs $0.00075 — ~26x off."""
+        full = AgentService._estimate_cost_usd("openai", "gpt-4o", 1000, 1000)
+        mini = AgentService._estimate_cost_usd("openai", "gpt-4o-mini", 1000, 1000)
+        # 1000 * 5 + 1000 * 15 = 20_000 / 1M
+        assert full == pytest.approx(0.020, abs=1e-6)
+        # 1000 * 0.15 + 1000 * 0.6 = 750 / 1M
+        assert mini == pytest.approx(0.00075, abs=1e-6)
+        # The whole point: they must not collapse to the same number.
+        assert full != mini
+
+    def test_gpt4o_dated_pin_matches_gpt4o_rate(self):
+        """A dated OpenAI pin like 'gpt-4o-2024-08-06' is still gpt-4o,
+        NOT gpt-4o-mini (which starts the same 6 chars). Verifies the
+        prefix walk picks the right rate for vendor-pinned model ids."""
+        dated = AgentService._estimate_cost_usd(
+            "openai", "gpt-4o-2024-08-06", 1000, 1000,
+        )
+        base = AgentService._estimate_cost_usd("openai", "gpt-4o", 1000, 1000)
+        assert dated == base
+
     def test_unknown_model_falls_back_to_midrange(self):
         """Unknown provider/model should still return a non-zero cost
         — the chat UI's token meter should never read $0 just because

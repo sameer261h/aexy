@@ -58,6 +58,27 @@ function sse(payload: unknown): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
+/** Like sseResponse but enqueues arbitrary string chunks — used to
+ *  simulate a real network where a single SSE frame can be split
+ *  across two TCP reads (the `\n\n` separator landing in the second
+ *  chunk, or even the JSON body itself being torn in half). */
+function rawChunkResponse(chunks: string[], opts: { dangling?: boolean } = {}): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      if (!opts.dangling) controller.close();
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
 function makeWrapper() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -174,6 +195,47 @@ describe("useAgentChatStream — happy path", () => {
     });
   });
 
+  it("reassembles frames split across stream chunks", async () => {
+    // Real-world SSE will frequently split frames mid-payload — TCP
+    // gives the reader whatever's in the kernel buffer, not whole
+    // events. Tear a text_delta in half (across the JSON body) and a
+    // user_message across the trailing "\n\n" separator to make sure
+    // the hook's buffer reassembles both correctly.
+    const userFrame = sse({ type: "user_message", id: "real-user", content: "hi" });
+    const deltaFrame = sse({ type: "text_delta", text: "Hello world!" });
+    const userMid = Math.floor(userFrame.length - 1); // split inside the trailing "\n\n"
+    const deltaMid = Math.floor(deltaFrame.length / 2); // mid-JSON
+    const chunks = [
+      userFrame.slice(0, userMid),
+      userFrame.slice(userMid) + deltaFrame.slice(0, deltaMid),
+      deltaFrame.slice(deltaMid),
+    ];
+    // Dangling so the stream stays open while we assert mid-flight —
+    // a clean close would trigger the "stream closed without done"
+    // path which clears pendingMessages.
+    const fetchMock = vi.fn().mockResolvedValue(rawChunkResponse(chunks, { dangling: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { Wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () => useAgentChatStream(WORKSPACE, AGENT, CONVERSATION),
+      { wrapper: Wrapper },
+    );
+
+    void act(() => {
+      result.current.send("hi");
+    });
+
+    // Both halves of the user_message should have re-joined, and the
+    // delta should have parsed as a single event.
+    await waitFor(() => {
+      const assistant = result.current.pendingMessages.find((m) => m.role === "assistant");
+      expect(assistant?.content).toBe("Hello world!");
+    });
+    const user = result.current.pendingMessages.find((m) => m.role === "user");
+    expect(user?.id).toBe("real-user");
+  });
+
   it("surfaces usage as currentTokens + currentCostUsd", async () => {
     const fetchMock = vi.fn().mockResolvedValue(sseResponse([
       sse({ type: "user_message", id: "u-1", content: "hi" }),
@@ -210,7 +272,11 @@ describe("useAgentChatStream — happy path", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { client, Wrapper } = makeWrapper();
-    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+    // After UX-CHAT-009 hardening the hook awaits a refetch (instead
+    // of fire-and-forget invalidate + setTimeout) so the pending and
+    // canonical message can't both render for a paint. The spy here
+    // tracks that the refetch was awaited before pending cleared.
+    const refetchSpy = vi.spyOn(client, "refetchQueries");
     const { result } = renderHook(
       () => useAgentChatStream(WORKSPACE, AGENT, CONVERSATION),
       { wrapper: Wrapper },
@@ -223,15 +289,15 @@ describe("useAgentChatStream — happy path", () => {
       result.current.send("hi");
     });
 
-    // `done` triggers cache invalidation immediately + pending
-    // clears after a brief delay.
+    // `done` triggers a refetch then clears pending in the same tick
+    // (no setTimeout race).
     await waitFor(() => {
       expect(result.current.isStreaming).toBe(false);
     });
     await waitFor(() => {
       expect(result.current.pendingMessages.length).toBe(0);
     });
-    expect(invalidateSpy).toHaveBeenCalled();
+    expect(refetchSpy).toHaveBeenCalled();
   });
 });
 

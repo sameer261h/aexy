@@ -795,16 +795,6 @@ class AgentService:
             content=content,
             message_index=message_count,
         )
-        self.db.add(user_message)
-        await self.db.flush()
-        await self.db.commit()  # Commit user msg + start streaming
-        yield self._sse({
-            "type": "user_message",
-            "id": user_message.id,
-            "content": content,
-            "created_at": user_message.created_at.isoformat() if user_message.created_at else None,
-        })
-
         execution = CRMAgentExecution(
             id=str(uuid4()),
             agent_id=agent.id,
@@ -814,9 +804,18 @@ class AgentService:
             status="running",
             started_at=datetime.now(timezone.utc),
         )
+        # Persist both rows in one transaction so a failure here cannot
+        # leave a user message without a matching execution shell.
+        self.db.add(user_message)
         self.db.add(execution)
         await self.db.flush()
         await self.db.commit()
+        yield self._sse({
+            "type": "user_message",
+            "id": user_message.id,
+            "content": content,
+            "created_at": user_message.created_at.isoformat() if user_message.created_at else None,
+        })
 
         # Rebuild conversation history for the LLM
         from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
