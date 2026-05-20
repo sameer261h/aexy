@@ -114,6 +114,7 @@ from aexy.models.agent_policy import (
     PolicyDecisionType,
     ConfigChangeType,
 )
+from aexy.models.agent_draft import AgentDraft
 from aexy.models.oncall import (
     OnCallConfig,
     OnCallSchedule,
@@ -653,6 +654,7 @@ __all__ = [
     "NOTIFICATION_CATEGORIES",
     "EVENT_TYPE_TO_CATEGORY",
     # Agent Policies
+    "AgentDraft",
     "AgentPolicy",
     "AgentPolicyDecision",
     "AgentConfigAudit",

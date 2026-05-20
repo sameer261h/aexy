@@ -11117,6 +11117,53 @@ export const agentsApi = {
   },
 
   /**
+   * Server-side wizard draft (UX-DEF-003). One draft per
+   * (workspace, developer). The wizard's `useAgentDraft` hook uses
+   * these three endpoints to hydrate on mount, save debounced as
+   * the user types, and clear on successful agent creation.
+   */
+  getAgentDraft: async (
+    workspaceId: string,
+  ): Promise<{
+    id: string;
+    payload: Record<string, unknown>;
+    created_at: string | null;
+    updated_at: string | null;
+  } | null> => {
+    try {
+      const response = await api.get(`/workspaces/${workspaceId}/crm/agents/drafts/me`);
+      return response.data;
+    } catch (err) {
+      // 404 = no draft. The caller treats that as "fresh wizard"
+      // rather than an error condition.
+      if ((err as { response?: { status?: number } })?.response?.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  },
+
+  saveAgentDraft: async (
+    workspaceId: string,
+    payload: Record<string, unknown>,
+  ): Promise<{
+    id: string;
+    payload: Record<string, unknown>;
+    created_at: string | null;
+    updated_at: string | null;
+  }> => {
+    const response = await api.put(
+      `/workspaces/${workspaceId}/crm/agents/drafts/me`,
+      { payload },
+    );
+    return response.data;
+  },
+
+  deleteAgentDraft: async (workspaceId: string): Promise<void> => {
+    await api.delete(`/workspaces/${workspaceId}/crm/agents/drafts/me`);
+  },
+
+  /**
    * Preview the agent's response to a sample input WITHOUT persisting
    * an execution and WITHOUT running tools (no side effects). Used by
    * the Prompts/LLM tabs' "Test this" affordance (UX-EDT-018) so the

@@ -15,6 +15,7 @@ from aexy.api.developers import get_current_developer
 from aexy.models.developer import Developer
 from aexy.services.workspace_service import WorkspaceService
 from aexy.services.agent_service import AgentService
+from aexy.services.agent_draft_service import AgentDraftService
 from aexy.services.writing_style_service import WritingStyleService
 from aexy.services.agent_email_service import AgentEmailService
 from aexy.services.activity_logger import log_activity
@@ -195,6 +196,91 @@ async def list_available_tools(
     """List all available tools for agent configuration."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
     return AgentService.get_available_tools()
+
+
+class AgentDraftPayload(BaseModel):
+    """Opaque wizard payload (UX-DEF-003). Whatever shape the
+    frontend's wizard state has — we don't validate contents."""
+
+    payload: dict
+
+
+@router.get("/drafts/me")
+async def get_my_agent_draft(
+    workspace_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Return the current developer's in-progress wizard draft for
+    this workspace, or 404 if none. UX-DEF-003.
+
+    Returning a 404 (not a 200 with `null`) so the frontend hook can
+    cleanly distinguish "no draft" from "draft is the literal null
+    payload" — the latter would be a frontend bug but we'd rather
+    not have the API encode it.
+    """
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    service = AgentDraftService(db)
+    draft = await service.get_draft(
+        workspace_id=workspace_id,
+        developer_id=str(current_developer.id),
+    )
+    if not draft:
+        raise HTTPException(status_code=404, detail="No draft")
+    return {
+        "id": draft.id,
+        "payload": draft.payload,
+        "created_at": draft.created_at.isoformat() if draft.created_at else None,
+        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+    }
+
+
+@router.put("/drafts/me")
+async def upsert_my_agent_draft(
+    workspace_id: str,
+    data: AgentDraftPayload,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Save (or overwrite) the developer's draft for this workspace.
+
+    PUT semantics — one save fully replaces the prior payload.
+    Frontend calls this debounced as the user types. Returns the
+    persisted updated_at so the UI can render "last saved Xs ago".
+    """
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    service = AgentDraftService(db)
+    draft = await service.save_draft(
+        workspace_id=workspace_id,
+        developer_id=str(current_developer.id),
+        payload=data.payload,
+    )
+    await db.commit()
+    return {
+        "id": draft.id,
+        "payload": draft.payload,
+        "created_at": draft.created_at.isoformat() if draft.created_at else None,
+        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+    }
+
+
+@router.delete("/drafts/me", status_code=204)
+async def delete_my_agent_draft(
+    workspace_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Drop the developer's draft. Idempotent — fires from the
+    frontend after a successful agent creation; the response is
+    always 204 even when nothing was there to delete."""
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    service = AgentDraftService(db)
+    await service.delete_draft(
+        workspace_id=workspace_id,
+        developer_id=str(current_developer.id),
+    )
+    await db.commit()
+    return None
 
 
 @router.get("/defaults")
