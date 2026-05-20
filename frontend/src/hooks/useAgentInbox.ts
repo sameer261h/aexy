@@ -148,6 +148,35 @@ export function useAgentInboxMessage(
   };
 }
 
+/**
+ * Fetch every message in the same thread as `messageId`.
+ * Returns the messages ordered by created_at ASC, suitable for the
+ * inbox thread strip. Empty array means the message is an orphan
+ * (no thread_id and no in_reply_to chain). UX-INB-027 / UX-DEF-007.
+ */
+export function useAgentInboxThread(
+  workspaceId: string | null,
+  agentId: string | null,
+  messageId: string | null,
+  enabled = true,
+) {
+  const {
+    data: thread,
+    isLoading,
+    error,
+  } = useQuery<AgentInboxMessage[]>({
+    queryKey: ["agentInboxThread", workspaceId, agentId, messageId],
+    queryFn: () => agentsApi.getInboxThread(workspaceId!, agentId!, messageId!),
+    enabled: enabled && !!workspaceId && !!agentId && !!messageId,
+  });
+
+  return {
+    thread: thread ?? [],
+    isLoading,
+    error,
+  };
+}
+
 // ==================== Agent Email Hooks ====================
 
 /**

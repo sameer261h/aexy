@@ -10043,6 +10043,12 @@ export const crmAutomationApi = {
 // PLATFORM-WIDE AUTOMATIONS API
 // =============================================================================
 
+export interface GeneratedWorkflow {
+  nodes: Array<{ id: string; type: string; data: Record<string, unknown>; position?: { x: number; y: number } }>;
+  edges: Array<{ id?: string; source: string; target: string; sourceHandle?: string }>;
+  _meta?: { source?: string; module?: string };
+}
+
 export const automationsApi = {
   // List automations (optionally filter by module)
   list: async (
@@ -10050,6 +10056,25 @@ export const automationsApi = {
     params?: { module?: AutomationModule; object_id?: string; is_active?: boolean; skip?: number; limit?: number }
   ): Promise<Automation[]> => {
     const response = await api.get(`/workspaces/${workspaceId}/automations`, { params });
+    return response.data;
+  },
+
+  /**
+   * UX-DEF-004: Ask the LLM to draft a workflow from a one-line
+   * description. Returns ReactFlow-shaped {nodes, edges}; the caller
+   * drops it onto the canvas as if the user picked a template. The
+   * canvas validates the shape — bad input falls back to TemplateGallery.
+   * Throws on 422 (LLM returned invalid shape, surface to user) or
+   * 500 (generation failed, fall back).
+   */
+  generateWorkflowFromPrompt: async (
+    workspaceId: string,
+    data: { prompt: string; module?: string },
+  ): Promise<GeneratedWorkflow> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/automations/generate-workflow`,
+      data,
+    );
     return response.data;
   },
 
@@ -10622,6 +10647,11 @@ export interface AgentInboxMessage {
   workspace_id: string;
   message_id: string;
   thread_id: string | null;
+  /** RFC 5322 In-Reply-To header — populated by the inbound webhook
+   *  when the sender's mail client included a parent reference.
+   *  Frontend uses it to render a "View parent" jump in the detail
+   *  pane. UX-INB-027 / UX-DEF-007. */
+  in_reply_to_message_id?: string | null;
   from_email: string;
   from_name: string | null;
   to_email: string;
@@ -11208,6 +11238,23 @@ export const agentsApi = {
     messageId: string
   ): Promise<AgentInboxMessage> => {
     const response = await api.get(`/workspaces/${workspaceId}/crm/agents/${agentId}/inbox/${messageId}`);
+    return response.data;
+  },
+
+  /**
+   * Fetch every message in the thread containing this one. Returns
+   * an ordered list (created_at ASC) so the inbox detail can render
+   * a thread strip with the parent + sibling replies. Empty for
+   * orphan messages. UX-INB-027 / UX-DEF-007.
+   */
+  getInboxThread: async (
+    workspaceId: string,
+    agentId: string,
+    messageId: string
+  ): Promise<AgentInboxMessage[]> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/crm/agents/${agentId}/inbox/${messageId}/thread`,
+    );
     return response.data;
   },
 

@@ -397,6 +397,9 @@ class InboxMessageResponse(BaseModel):
     workspace_id: str
     message_id: str
     thread_id: str | None
+    # RFC 5322 In-Reply-To header. Frontend uses this to render a
+    # "View parent" jump on the message detail.
+    in_reply_to_message_id: str | None = None
     from_email: str
     from_name: str | None
     to_email: str

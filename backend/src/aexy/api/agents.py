@@ -1014,6 +1014,116 @@ async def get_inbox_message(
     return message
 
 
+@router.get("/{agent_id}/inbox/{message_id}/thread", response_model=list[InboxMessageResponse])
+async def get_inbox_thread(
+    workspace_id: str,
+    agent_id: str,
+    message_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Get every message in the same thread as the given message.
+
+    UX-INB-027 / UX-DEF-007: surfaces parent + sibling history so the
+    inbox detail can render a thread strip. Resolution order:
+
+      1. If the message has a `thread_id`, return all rows in that
+         thread (this is the common path — most mail providers set
+         the thread id on every reply).
+      2. Otherwise fall back to RFC 5322 in_reply_to chasing: walk
+         up via in_reply_to_message_id until we hit a root, then
+         return that root + every message that points back to any
+         message we collected.
+
+    Ordered by created_at ASC so the UI can render top→bottom.
+    """
+    from sqlalchemy import or_
+    from aexy.models.agent_inbox import AgentInboxMessage
+
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
+
+    email_service = AgentEmailService(db)
+    anchor = await email_service.get_inbox_message(message_id)
+    if not anchor or anchor.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    # Common path: thread_id is set.
+    if anchor.thread_id:
+        stmt = (
+            select(AgentInboxMessage)
+            .where(
+                AgentInboxMessage.agent_id == agent_id,
+                AgentInboxMessage.workspace_id == workspace_id,
+                AgentInboxMessage.thread_id == anchor.thread_id,
+            )
+            .order_by(AgentInboxMessage.created_at.asc())
+        )
+        result = await db.execute(stmt)
+        return list(result.scalars().all())
+
+    # Fallback: chase in_reply_to_message_id chain. Two-step walk —
+    # follow parents up to a root, then pull anything pointing back
+    # at the collected message-ids. Bounded by a 50-step cap so a
+    # malicious sender can't make us walk forever.
+    visited_ids: set[str] = set()
+    visited_message_ids: set[str] = set()
+
+    def add(msg: AgentInboxMessage) -> None:
+        visited_ids.add(msg.id)
+        if msg.message_id:
+            visited_message_ids.add(msg.message_id)
+
+    add(anchor)
+
+    # Walk parents
+    cursor = anchor
+    for _ in range(50):
+        parent_ref = cursor.in_reply_to_message_id
+        if not parent_ref:
+            break
+        stmt = select(AgentInboxMessage).where(
+            AgentInboxMessage.agent_id == agent_id,
+            AgentInboxMessage.workspace_id == workspace_id,
+            AgentInboxMessage.message_id == parent_ref,
+        )
+        result = await db.execute(stmt)
+        parent = result.scalar_one_or_none()
+        if not parent or parent.id in visited_ids:
+            break
+        add(parent)
+        cursor = parent
+
+    # Walk forward: any message in this agent's inbox that replies to
+    # one we've already collected. Iterate until no new rows show up.
+    while True:
+        if not visited_message_ids:
+            break
+        stmt = (
+            select(AgentInboxMessage)
+            .where(
+                AgentInboxMessage.agent_id == agent_id,
+                AgentInboxMessage.workspace_id == workspace_id,
+                AgentInboxMessage.in_reply_to_message_id.in_(visited_message_ids),
+            )
+        )
+        result = await db.execute(stmt)
+        new_rows = [m for m in result.scalars().all() if m.id not in visited_ids]
+        if not new_rows:
+            break
+        for m in new_rows:
+            add(m)
+
+    # Return ordered.
+    stmt = (
+        select(AgentInboxMessage)
+        .where(AgentInboxMessage.id.in_(visited_ids))
+        .order_by(AgentInboxMessage.created_at.asc())
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
 @router.post("/{agent_id}/inbox/{message_id}/reply", response_model=InboxActionResponse)
 async def reply_to_inbox_message(
     workspace_id: str,

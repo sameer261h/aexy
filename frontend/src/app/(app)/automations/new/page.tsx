@@ -9,7 +9,7 @@ import { ChevronLeft, Loader2, Sparkles } from "lucide-react";
 import { Node, Edge } from "@xyflow/react";
 
 import { useWorkspace } from "@/hooks/useWorkspace";
-import { api, AutomationModule } from "@/lib/api";
+import { api, AutomationModule, GeneratedWorkflow } from "@/lib/api";
 import {
   AUTOMATION_TEMPLATES,
   AutomationTemplate,
@@ -50,12 +50,19 @@ export default function NewAutomationPage() {
   const startBlank = searchParams.get("blank") === "1";
   const template = templateParam ? AUTOMATION_TEMPLATES[templateParam] : null;
 
+  // UX-DEF-004: LLM-generated workflow lives in component state (not
+  // URL, since the payload can be large). When the gallery's generate
+  // dialog succeeds, we stash the workflow here + flip into canvas
+  // mode. The canvas reads from `generatedWorkflow` to seed initial
+  // nodes/edges, identical to the template path.
+  const [generatedWorkflow, setGeneratedWorkflow] = useState<GeneratedWorkflow | null>(null);
+
   // Decide whether to show the gallery or the canvas. The audit flagged
   // the blank-canvas cold-start as a major UX cliff; we now route
   // first-time creators through a template picker unless they
-  // explicitly opted to skip (?blank=1) or arrived with a template
-  // already picked.
-  const showCanvas = !!template || startBlank;
+  // explicitly opted to skip (?blank=1), arrived with a template
+  // already picked, or generated one from a prompt.
+  const showCanvas = !!template || startBlank || !!generatedWorkflow;
 
   const [module, setModule] = useState<AutomationModule>(
     template?.module || moduleParam || "crm"
@@ -82,6 +89,17 @@ export default function NewAutomationPage() {
     params.set("blank", "1");
     if (moduleParam) params.set("module", moduleParam);
     router.replace(`/automations/new?${params.toString()}`);
+  };
+
+  const handleUseGenerated = (workflow: GeneratedWorkflow) => {
+    // Generated workflows always start as drafts in the user's
+    // chosen module (or "crm" by default). The user can rename +
+    // tweak before save, same as templates.
+    const generatedModule = (workflow._meta?.module as AutomationModule) || moduleParam || "crm";
+    setModule(generatedModule);
+    setName("Generated Automation");
+    setDescription("");
+    setGeneratedWorkflow(workflow);
   };
 
   const workspaceId = currentWorkspace?.id;
@@ -252,8 +270,10 @@ export default function NewAutomationPage() {
     return (
       <TemplateGallery
         initialModule={moduleParam}
+        workspaceId={workspaceId ?? null}
         onUseTemplate={handleUseTemplate}
         onStartBlank={handleStartBlank}
+        onUseGenerated={handleUseGenerated}
         onBack={handleBack}
       />
     );
@@ -334,12 +354,27 @@ export default function NewAutomationPage() {
         {/* Workflow Canvas */}
         <div className="flex-1">
           <WorkflowCanvas
-            key={module}  // Force re-render when module changes
+            // Force-remount when the seed source changes so initial
+            // nodes/edges are re-read. Generated workflows get their
+            // own key so editing one and then generating another
+            // doesn't bleed nodes from the first into the second.
+            key={generatedWorkflow ? "generated" : module}
             automationId={automationId || "new"}
             workspaceId={workspaceId}
             module={module}
-            initialNodes={getDefaultNodes(module, template)}
-            initialEdges={getDefaultEdges(template)}
+            // Generated workflows seed nodes/edges directly. The
+            // generator already validated the shape; the canvas
+            // applies its usual validation rules on top.
+            initialNodes={
+              generatedWorkflow
+                ? (generatedWorkflow.nodes as unknown as Node[])
+                : getDefaultNodes(module, template)
+            }
+            initialEdges={
+              generatedWorkflow
+                ? (generatedWorkflow.edges as unknown as Edge[])
+                : getDefaultEdges(template)
+            }
             onSave={handleSave}
             onPublish={handlePublish}
             onUnpublish={handleUnpublish}

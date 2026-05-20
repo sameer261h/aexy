@@ -31,7 +31,7 @@ import { toast } from "sonner";
 
 import { useWorkspace, useWorkspaceMembers } from "@/hooks/useWorkspace";
 import { useAgent } from "@/hooks/useAgents";
-import { useAgentInbox, useAgentInboxMessage } from "@/hooks/useAgentInbox";
+import { useAgentInbox, useAgentInboxMessage, useAgentInboxThread } from "@/hooks/useAgentInbox";
 import { AgentInboxMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { formatRelative } from "@/lib/datetime";
@@ -255,6 +255,17 @@ function MessageDetail({
   isArchiving: boolean;
   isProcessing: boolean;
 }) {
+  // UX-INB-027 / UX-DEF-007: thread fetch. Only fires when there's
+  // actually a thread hint (thread_id or in_reply_to) so orphan
+  // messages don't trigger a useless network round-trip.
+  const hasThreadHint = Boolean(message.thread_id || message.in_reply_to_message_id);
+  const { thread } = useAgentInboxThread(
+    workspaceId,
+    agentId,
+    message.id,
+    hasThreadHint,
+  );
+
   // Draft persistence — keyed per message so switching threads doesn't
   // lose what the user typed. sessionStorage so the draft survives a
   // page refresh but not a new browser session (matches the audit
@@ -347,6 +358,55 @@ function MessageDetail({
           <span>{message.to_email}</span>
         </div>
       </div>
+
+      {/* UX-INB-027: thread strip. Renders when this message has a
+          parent OR sibling rows in the same thread. Each pill scrolls
+          its target message into view by setting selectedMessageId
+          via the embedded data attribute. Excludes the current
+          message from the strip; the current one is already on
+          screen below. */}
+      {thread.length > 1 && (
+        <div className="px-4 py-2 border-b border-border bg-muted/30">
+          <div className="flex items-center gap-2 overflow-x-auto">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground/80 shrink-0">
+              Thread ({thread.length})
+            </span>
+            <div className="flex items-center gap-1 flex-1">
+              {thread.map((t, idx) => {
+                const isCurrent = t.id === message.id;
+                const label = t.from_name || t.from_email.split("@")[0];
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    disabled={isCurrent}
+                    onClick={() => {
+                      // Page-level state. Nudge selection up to the
+                      // surrounding list via a data-message-id click
+                      // simulation; the keyboard handler also keys
+                      // off this attribute.
+                      const node = document.querySelector<HTMLElement>(
+                        `[data-message-id="${t.id}"]`,
+                      );
+                      node?.click();
+                      node?.scrollIntoView({ block: "nearest" });
+                    }}
+                    className={cn(
+                      "px-2 py-1 rounded text-[11px] whitespace-nowrap transition-colors",
+                      isCurrent
+                        ? "bg-purple-500/20 text-purple-700 dark:text-purple-300 cursor-default"
+                        : "text-muted-foreground hover:text-foreground hover:bg-accent",
+                    )}
+                    title={`${t.from_email}\n${new Date(t.created_at).toLocaleString()}`}
+                  >
+                    {idx + 1}. {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto p-4">

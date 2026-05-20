@@ -777,6 +777,15 @@ def _parse_inbound_json(payload: dict) -> dict | None:
             "body_html": payload.get("body_html", payload.get("html", "")),
             "message_id": payload.get("message_id", ""),
             "thread_id": payload.get("thread_id", payload.get("in_reply_to")),
+            # UX-INB-027 / UX-DEF-007: explicit parent pointer so the
+            # inbox UI can render "View parent" without walking the
+            # full thread. RFC 5322 In-Reply-To header — when the
+            # generic format omits it, fall back to thread_id which
+            # most providers already populate.
+            "in_reply_to_message_id": payload.get(
+                "in_reply_to",
+                payload.get("in_reply_to_message_id"),
+            ),
             "headers": payload.get("headers", {}),
             "attachments": payload.get("attachments", []),
         }
@@ -821,6 +830,9 @@ def process_inbound_email(email_data: dict):
                 workspace_id=agent.workspace_id,
                 message_id=email_data.get("message_id") or str(uuid4()),
                 thread_id=email_data.get("thread_id"),
+                # Direct parent — RFC 5322 In-Reply-To. Frontend uses
+                # this for the "View parent" jump in MessageDetail.
+                in_reply_to_message_id=email_data.get("in_reply_to_message_id"),
                 from_email=from_email,
                 from_name=email_data.get("from_name"),
                 to_email=to_email,
