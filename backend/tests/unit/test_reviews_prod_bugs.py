@@ -103,3 +103,62 @@ the service issues 6+ DB queries and the fake-session surface would
 duplicate the real code. The local-helper tests above pin the same
 logic without that duplication, and the fix's call site uses the
 helper-shaped aggregation directly."""
+
+
+# ---------------------------------------------------------------------------
+# Bug 3 — PullRequest.html_url doesn't exist on the model
+# ---------------------------------------------------------------------------
+
+
+def _build_pr_url(pr: Any) -> str | None:
+    """Mirror of the fix: build the GitHub PR URL from the
+    `repository` + `number` columns the model actually carries.
+    `repository` is stored as "owner/repo"; `number` is the
+    GitHub PR number."""
+    if not getattr(pr, "repository", None) or not getattr(pr, "number", None):
+        return None
+    return f"https://github.com/{pr.repository}/pull/{pr.number}"
+
+
+class _StubPR:
+    def __init__(self, repository: str | None = None, number: int | None = None):
+        self.repository = repository
+        self.number = number
+
+
+class TestPullRequestUrlConstruction:
+    """The contributions/summary endpoint highlights merged PRs. The
+    earlier code accessed `pr.html_url` but the PullRequest model
+    has no such column — only `repository` ("owner/repo") and
+    `number`. Every contributions highlight request crashed with:
+
+        AttributeError: 'PullRequest' object has no attribute 'html_url'
+
+    The fix constructs the URL from the columns that DO exist."""
+
+    def test_builds_canonical_github_url(self):
+        pr = _StubPR(repository="aexy/web", number=148)
+        assert _build_pr_url(pr) == "https://github.com/aexy/web/pull/148"
+
+    def test_handles_org_with_dots_and_hyphens(self):
+        """Repo names support arbitrary characters in the org slug;
+        URL construction must not encode them."""
+        pr = _StubPR(repository="my-org.io/some.repo", number=1)
+        assert _build_pr_url(pr) == "https://github.com/my-org.io/some.repo/pull/1"
+
+    def test_missing_repository_returns_none(self):
+        pr = _StubPR(repository=None, number=1)
+        assert _build_pr_url(pr) is None
+
+    def test_missing_number_returns_none(self):
+        """Zero / None number shouldn't render an invalid URL — pr/0
+        is a 404 on GitHub."""
+        pr = _StubPR(repository="aexy/web", number=None)
+        assert _build_pr_url(pr) is None
+
+    def test_does_not_raise_on_unrelated_attribute_access(self):
+        """The earlier crash was specifically `AttributeError: 'PR'
+        object has no attribute 'html_url'`. The fix path uses
+        getattr with a default so the same shape stays graceful."""
+        # No html_url anywhere — must not raise.
+        _build_pr_url(_StubPR(repository="a/b", number=1))
