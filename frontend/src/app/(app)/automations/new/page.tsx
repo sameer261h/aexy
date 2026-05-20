@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -72,6 +72,17 @@ export default function NewAutomationPage() {
   const [isCreating, setIsCreating] = useState(false);
   const [automationId, setAutomationId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Synchronous mirror of `automationId` so handlers that fire
+  // RIGHT AFTER an auto-create (e.g. canvas's handleTest → onSave
+  // → onTest) can read the freshly minted id without waiting for
+  // React's re-render to update closures. setAutomationId triggers
+  // a re-render but the `onTest` closure already captured by the
+  // canvas still sees the old null value — the ref bypasses that.
+  const automationIdRef = useRef<string | null>(null);
+  const updateAutomationId = useCallback((id: string | null) => {
+    automationIdRef.current = id;
+    setAutomationId(id);
+  }, []);
 
   const handleUseTemplate = (picked: AutomationTemplate) => {
     const params = new URLSearchParams();
@@ -121,7 +132,7 @@ export default function NewAutomationPage() {
         trigger_config: {},
         actions: [], // Start with empty actions, user will add via workflow canvas
       });
-      setAutomationId(response.data.id);
+      updateAutomationId(response.data.id);
       return response.data.id;
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "Failed to create automation";
@@ -202,11 +213,16 @@ export default function NewAutomationPage() {
 
   const handleTest = useCallback(
     async (recordId?: string) => {
-      if (!workspaceId || !automationId) return;
+      // Read from the ref so we pick up an id minted by a just-
+      // completed handleSave in the same await chain. The state-
+      // backed `automationId` would still be the old value at this
+      // closure capture — see updateAutomationId for the rationale.
+      const id = automationIdRef.current ?? automationId;
+      if (!workspaceId || !id) return;
 
       try {
         const response = await api.post(
-          `/workspaces/${workspaceId}/crm/automations/${automationId}/workflow/execute`,
+          `/workspaces/${workspaceId}/crm/automations/${id}/workflow/execute`,
           {
             dry_run: true,
             // Only include record_id if provided and non-empty
