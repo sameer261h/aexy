@@ -446,6 +446,16 @@ class ContributionService:
         )
         prs_result = await self.db.execute(prs_stmt)
         for pr in prs_result.scalars():
+            # PullRequest has `repository` ("owner/repo") + `number`
+            # columns, NOT an `html_url` field. Constructing the URL
+            # here matches the canonical GitHub format. The earlier
+            # `pr.html_url` access crashed every contributions/summary
+            # call with AttributeError.
+            url = (
+                f"https://github.com/{pr.repository}/pull/{pr.number}"
+                if pr.repository and pr.number
+                else None
+            )
             highlights.append(ContributionHighlight(
                 type="pr",
                 id=str(pr.id),
@@ -453,7 +463,7 @@ class ContributionService:
                 impact=f"Merged PR with {pr.additions}+ / {pr.deletions}- lines",
                 additions=pr.additions,
                 deletions=pr.deletions,
-                url=pr.html_url,
+                url=url,
             ))
 
         # Get significant reviews
