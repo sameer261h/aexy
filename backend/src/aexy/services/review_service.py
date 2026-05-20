@@ -807,9 +807,23 @@ class ReviewService:
         self,
         reviewer_id: str,
     ) -> list[ReviewRequest]:
-        """Get pending peer review requests for a reviewer."""
+        """Get pending peer review requests for a reviewer.
+
+        Eager-loads `requester` + `reviewer` via selectinload — the
+        route handler reads `r.requester.name` to populate the
+        response's requester_name, and lazy-loading from an async
+        session under SQLAlchemy 2 throws MissingGreenlet ("Was IO
+        attempted in an unexpected place?"). Pinning the load
+        strategy at query time is the canonical fix.
+        """
+        from sqlalchemy.orm import selectinload
+
         stmt = (
             select(ReviewRequest)
+            .options(
+                selectinload(ReviewRequest.requester),
+                selectinload(ReviewRequest.reviewer),
+            )
             .where(
                 and_(
                     ReviewRequest.reviewer_id == reviewer_id,

@@ -165,6 +165,12 @@ function WorkflowCanvasInner({
     return () => observer.disconnect();
   }, []);
 
+  // Hoisted above the callbacks that need it. The original placement
+  // was below the test/save flows, which created a TDZ trap when
+  // handleTest's auto-save path tried to capture getViewport in
+  // useCallback deps.
+  const { getViewport, fitView, setViewport, screenToFlowPosition } = useReactFlow();
+
   // Workflow validation
   const { validationResult, getNodeErrors, hasNodeErrors } = useWorkflowValidation(nodes, edges);
 
@@ -326,6 +332,25 @@ function WorkflowCanvasInner({
     setTestResult(null);
 
     try {
+      // Auto-save before testing. On /automations/new the parent's
+      // onTest bails when automationId is still "new" — the user
+      // would click "Run Test", a record ID would be generated, and
+      // nothing would fire. Force a save first so the automation
+      // exists server-side and the workflow nodes are persisted.
+      // Same gate as Export/Import/Restore — the test endpoint needs
+      // a real automation to execute against.
+      const isUnsaved = !automationId || automationId === "new";
+      if (isUnsaved || hasChanges) {
+        try {
+          const viewport = getViewport();
+          await onSave(nodes, edges, viewport);
+          setHasChanges(false);
+        } catch (saveErr) {
+          console.error("Auto-save before test failed:", saveErr);
+          toast.error("Couldn't save the workflow before testing");
+          return;
+        }
+      }
       const result = await onTest(recordId);
       if (result) {
         setTestResult(result);
@@ -339,9 +364,8 @@ function WorkflowCanvasInner({
     } finally {
       setIsTestRunning(false);
     }
-  }, [onTest]);
+  }, [onTest, onSave, automationId, hasChanges, nodes, edges, getViewport]);
 
-  const { getViewport, fitView, setViewport, screenToFlowPosition } = useReactFlow();
 
   // Track if initial viewport has been applied
   const viewportInitialized = useRef(false);
