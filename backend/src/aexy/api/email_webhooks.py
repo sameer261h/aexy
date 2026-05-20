@@ -751,6 +751,20 @@ def _parse_inbound_json(payload: dict) -> dict | None:
             from_data = payload.get("FromFull", {})
             to_data = payload.get("ToFull", [{}])[0] if isinstance(payload.get("ToFull"), list) else payload.get("ToFull", {})
 
+            # Postmark sends Headers as a list of {Name, Value} dicts,
+            # not a flat header→value mapping. Build a name-keyed
+            # lookup once and use it for both the thread_id resolution
+            # and the in_reply_to pointer below. The prior code
+            # called `.get("In-Reply-To")` on Headers[0] directly,
+            # which never matched because Headers[0] is shaped
+            # {"Name": "X", "Value": "Y"}.
+            headers_dict = {
+                h.get("Name"): h.get("Value")
+                for h in payload.get("Headers", [])
+                if isinstance(h, dict)
+            }
+            in_reply_to = headers_dict.get("In-Reply-To")
+
             return {
                 "to": to_data.get("Email", payload.get("To", "")),
                 "from": from_data.get("Email", payload.get("From", "")),
@@ -759,8 +773,9 @@ def _parse_inbound_json(payload: dict) -> dict | None:
                 "body": payload.get("TextBody", ""),
                 "body_html": payload.get("HtmlBody", ""),
                 "message_id": payload.get("MessageID", ""),
-                "thread_id": payload.get("Headers", [{}])[0].get("In-Reply-To") if payload.get("Headers") else None,
-                "headers": {h.get("Name"): h.get("Value") for h in payload.get("Headers", [])},
+                "thread_id": in_reply_to,
+                "in_reply_to_message_id": in_reply_to,
+                "headers": headers_dict,
                 "attachments": [
                     {"name": a.get("Name"), "content_type": a.get("ContentType"), "length": a.get("ContentLength")}
                     for a in payload.get("Attachments", [])
