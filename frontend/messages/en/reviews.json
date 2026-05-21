@@ -179,7 +179,12 @@
         "self_review": "Self review",
         "peer_review": "Peer review",
         "manager_review": "Manager review",
-        "completed": "Completed"
+        "completed": "Completed",
+        "pending": "Pending",
+        "self_review_submitted": "Self review submitted",
+        "peer_review_in_progress": "Peer review in progress",
+        "manager_review_in_progress": "Manager review in progress",
+        "acknowledged": "Acknowledged"
       },
       "requestStatus": {
         "pending": "Awaiting response",
