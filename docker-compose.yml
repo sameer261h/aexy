@@ -155,6 +155,13 @@ services:
       - NEXT_PUBLIC_GTM_WORKSPACE_ID=${NEXT_PUBLIC_GTM_WORKSPACE_ID:-}
       - NEXT_PUBLIC_GTM_API_URL=${NEXT_PUBLIC_GTM_API_URL:-http://localhost:8000/api/v1}
       - NEXT_PUBLIC_STRIPE_ENABLED=${NEXT_PUBLIC_STRIPE_ENABLED:-false}
+      # Turbopack + many lazy-compiled routes can OOM the default
+      # Node heap during E2E runs that touch /agents, /automations,
+      # /chat, /compliance, … in quick succession. 6 GiB for the
+      # V8 heap; Turbopack's native (Rust) allocations live on top
+      # of that. Pair with `mem_limit: 7g` so Docker doesn't
+      # SIGKILL the process before Node has a chance to GC.
+      - NODE_OPTIONS=--max-old-space-size=6144
     depends_on:
       - backend
     volumes:
@@ -162,6 +169,7 @@ services:
       - /app/node_modules
       - /app/.next
     command: npm run dev
+    mem_limit: 7g
 
   mailagent:
     build:

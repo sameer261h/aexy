@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import deque
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -199,4 +200,85 @@ async def generate_workflow_from_prompt(
     payload["_meta"]["source"] = "llm_generated"
     if module:
         payload["_meta"]["module"] = module
+
+    _assign_positions(payload)
     return payload
+
+
+def _assign_positions(payload: dict[str, Any]) -> None:
+    """Assign `position: {x, y}` to every generated node.
+
+    The LLM returns nodes without coordinates, but ReactFlow on the
+    frontend requires `position` on every node — otherwise the
+    canvas component throws and the /automations route hits its
+    error boundary. We compute longest-path depth via topological
+    order so triggers sit at the leftmost column and downstream
+    actions cascade to the right, with sibling branches stacked
+    vertically.
+
+    Mutates `payload` in place; matches the same one-shot
+    auto-layout the canvas's "Auto-layout" button would produce, so
+    the user sees a sensible starting grid.
+    """
+    nodes = payload.get("nodes") or []
+    edges = payload.get("edges") or []
+
+    HORIZONTAL_GAP = 280
+    VERTICAL_GAP = 140
+    ORIGIN_X = 80
+    ORIGIN_Y = 80
+
+    node_ids: list[str] = [n["id"] for n in nodes if isinstance(n.get("id"), str)]
+    in_degree: dict[str, int] = {nid: 0 for nid in node_ids}
+    outgoing: dict[str, list[str]] = {nid: [] for nid in node_ids}
+    for e in edges:
+        src, tgt = e.get("source"), e.get("target")
+        if src in outgoing and tgt in in_degree:
+            outgoing[src].append(tgt)
+            in_degree[tgt] += 1
+
+    # Longest-path depth via Kahn's topological order: when a node is
+    # dequeued, every predecessor has already settled its depth, so
+    # `depth[child] = max(depth[child], depth[parent] + 1)` over all
+    # parents converges in one pass. The earlier BFS variant was
+    # wrong on diamonds (A→B→C→D plus A→D): if A→D was walked first,
+    # D's descendants kept the shallower depth even after the longer
+    # path arrived.
+    depth: dict[str, int] = {nid: 0 for nid in node_ids}
+    queue: deque[str] = deque(sorted(nid for nid, d in in_degree.items() if d == 0))
+    while queue:
+        nid = queue.popleft()
+        for tgt in outgoing[nid]:
+            if depth[nid] + 1 > depth[tgt]:
+                depth[tgt] = depth[nid] + 1
+            in_degree[tgt] -= 1
+            if in_degree[tgt] == 0:
+                queue.append(tgt)
+
+    # Nodes still with in_degree > 0 are stuck in a cycle (Kahn never
+    # drained them). Leave them at depth 0 — the cycle is a bug the
+    # validator should reject upstream, but we still need to render
+    # something rather than crash.
+
+    # Group by depth → lane index for vertical stacking.
+    by_depth: dict[int, list[str]] = {}
+    for nid in node_ids:
+        by_depth.setdefault(depth[nid], []).append(nid)
+
+    lane: dict[str, int] = {}
+    for d, ids in by_depth.items():
+        for i, nid in enumerate(sorted(ids)):
+            lane[nid] = i
+
+    for n in nodes:
+        nid = n.get("id")
+        if not isinstance(nid, str):
+            continue
+        # Don't clobber an existing position — preserves
+        # round-tripping if the LLM ever starts emitting them.
+        if isinstance(n.get("position"), dict):
+            continue
+        n["position"] = {
+            "x": ORIGIN_X + depth.get(nid, 0) * HORIZONTAL_GAP,
+            "y": ORIGIN_Y + lane.get(nid, 0) * VERTICAL_GAP,
+        }

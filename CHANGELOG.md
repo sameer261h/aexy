@@ -5,6 +5,78 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.21] - 2026-05-22
+
+AI surface hardening: the `/automations` canvas no longer crashes on
+LLM-generated workflows, the agent provider list catches up with the
+backend, the frontend dev container has the headroom to run the new
+live AI E2E suite, and a small layout bug in the workflow generator
+is fixed before it ships.
+
+### Workflow generator — layout fix
+
+- **LLM-generated workflows now render reliably.** The
+  `POST /automations/generate-workflow` response had no `position`
+  on its nodes, so ReactFlow crashed the `/automations` canvas and
+  bounced the user to the route's error boundary. Backend now
+  assigns `{x, y}` to every generated node via a one-shot
+  auto-layout pass before responding
+  (`backend/src/aexy/services/workflow_generator.py`).
+- **Layout uses longest-path topological depth.** Diamonds and
+  fan-in graphs (`A→B→C→D` plus `A→D`) now place the merge node at
+  the depth of the longer path, with descendants cascading correctly.
+  The earlier BFS variant settled the merge node at the shallower
+  depth if the short edge was walked first. Five new unit tests in
+  `tests/unit/test_workflow_generator.py` pin the contract: every
+  node gets a position, linear chains cascade right, the diamond
+  case settles on longest-path depth, existing positions are
+  preserved, and cycles render rather than crash.
+
+### Agent LLM provider list — FE/BE parity
+
+- **DeepSeek and LM Studio show up in the provider picker.** The
+  backend has accepted `"deepseek"` and `"lmstudio"` as
+  `AgentCreate.llm_provider` values for a while; the frontend
+  selector only knew the four originals, so any agent created with
+  one of the new providers crashed the agent detail page when
+  `LLMConfigDisplay` tried `PROVIDERS[provider].models.find(...)`.
+  Selector now lists DeepSeek (Chat + Reasoner) and LM Studio
+  (Qwen 3.5 9B), and `LLMConfigDisplay` falls back to a generic
+  render for any future unknown provider rather than throwing.
+  (`frontend/src/components/agents/shared/LLMProviderSelector.tsx`)
+
+### Frontend dev container — heap headroom
+
+- **No more silent OOM kills during AI E2E runs.** Turbopack's
+  lazy compilation across `/agents`, `/automations`, `/chat`,
+  `/compliance`, … in quick succession was exhausting the default
+  Node heap and getting SIGKILL'd by Docker. Frontend service now
+  sets `NODE_OPTIONS=--max-old-space-size=6144` (6 GiB V8 heap)
+  with a matching `mem_limit: 7g` so Docker doesn't kill the
+  process before V8 has a chance to GC (`docker-compose.yml`).
+
+### AI E2E test suite — new live tier
+
+- **15 new `frontend/e2e/ai-*.spec.ts` specs** drive every AI
+  surface (agent chat + conversation create + prompt preview +
+  test run, /ask, workflow generation, automation test run, code
+  analysis, developer insights, email draft, file
+  metadata/sidecar, file search, hiring re-evaluate, learning
+  path, review-cycle generate) against the **live** stack — real
+  frontend, real backend, real LM Studio. Mocked AI responses
+  defeat the point of this tier; the existing `*.spec.ts` files
+  cover UI-only behaviour.
+- Auto-skips the whole file when LM Studio is unreachable, exactly
+  like the backend `tests/ai/` suite.
+- Shared helpers in `frontend/e2e/fixtures/ai-env.ts` (env +
+  LM Studio probe + auth bootstrap) and
+  `frontend/e2e/fixtures/ai-helpers.ts` (seeders, long-timeout
+  response waiters, fatal-error collectors).
+- Default LLM wait per request is 3 minutes (`AI_E2E_LLM_WAIT_MS`).
+  A spec that times out is signalling that the model is genuinely
+  slow, not flaky — don't lower it. See the new
+  "AI E2E tests" section in `CLAUDE.md` for setup.
+
 ## [0.8.2] - 2026-05-21
 
 `/reviews` surface UX overhaul, prod-bug fixes, and a tighter
