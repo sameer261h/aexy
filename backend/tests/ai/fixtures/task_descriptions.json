@@ -1,0 +1,20 @@
+{
+  "stripe_integration": {
+    "source": "github",
+    "title": "Add Stripe subscription billing",
+    "description": "We need to integrate Stripe to handle monthly subscriptions. This should support webhook events for payment success/failure, send confirmation emails via SendGrid, and persist invoice records in PostgreSQL. The integration should also handle subscription upgrades/downgrades with prorated billing. Frontend needs a checkout component that uses Stripe Elements.",
+    "labels": ["backend", "payments", "high-priority"]
+  },
+  "performance_bug": {
+    "source": "linear",
+    "title": "Dashboard loads in 8s — investigate N+1",
+    "description": "Engineering dashboard /api/v1/dashboard/team is timing out for orgs with >50 developers. Profiler shows ~1200 queries per request, almost all of them fetching commit counts per developer in a loop. We need to switch to a single aggregated query (probably a CTE) and add a Redis cache with a 60s TTL.",
+    "labels": ["performance", "backend", "postgresql"]
+  },
+  "frontend_only": {
+    "source": "figma",
+    "title": "Redesign the contributions heatmap",
+    "description": "The current contributions heatmap uses recharts and feels dated. Move it to visx, add per-month tooltips with PR/commit/review breakdowns, and make it responsive on mobile. Should match the new design tokens in the Figma file.",
+    "labels": ["frontend", "design"]
+  }
+}

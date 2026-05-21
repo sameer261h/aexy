@@ -49,6 +49,39 @@ cd backend && ruff check src/
 cd backend && mypy src/
 ```
 
+#### AI test suite (`tests/ai/`)
+
+End-to-end coverage of every AI feature (provider, gateway, ~30
+services, prebuilt LangGraph agents, AI APIs) against a real LLM.
+Defaults to a local LM Studio server so it doesn't burn cloud-LLM
+budget.
+
+```bash
+# Prereq: LM Studio running with qwen/qwen3.5-9b loaded
+#         (download via LM Studio app, then "Start Server" on :1234)
+
+# Fast unit tier (no LLM required) — skips everything marked local_llm
+cd backend && pytest -m "not local_llm"
+
+# Full AI suite against the local LM Studio
+cd backend && pytest tests/ai -m local_llm -v
+
+# Single AI test file
+cd backend && pytest tests/ai/services/test_code_analyzer.py -v
+
+# Refresh golden JSON outputs in tests/ai/goldens/
+cd backend && UPDATE_GOLDENS=1 pytest tests/ai -m local_llm
+
+# Print per-test recorder summary
+cd backend && pytest tests/ai -m local_llm --ai-verbose
+```
+
+Per-test LLM transcripts land in `backend/tests/ai/.logs/<nodeid>.jsonl`
+— useful when a test fails and you need to see the exact prompt and
+completion. Override defaults with `LMSTUDIO_BASE_URL`,
+`LMSTUDIO_MODEL`, or `LMSTUDIO_API_KEY` (only if fronting LM Studio
+with an auth proxy).
+
 ### Frontend
 
 ```bash

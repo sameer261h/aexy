@@ -796,6 +796,11 @@ def create_provider(config: LLMConfig) -> LLMProvider:
 
         return DeepSeekProvider(config)
 
+    elif config.provider == "lmstudio":
+        from aexy.llm.lmstudio_provider import LMStudioProvider
+
+        return LMStudioProvider(config)
+
     else:
         raise ValueError(f"Unsupported LLM provider: {config.provider}")
 
@@ -858,6 +863,11 @@ def get_llm_gateway() -> LLMGateway | None:
         if not api_key:
             logger.warning("DeepSeek API key not configured for DeepSeek provider")
             return None
+    elif provider_name == "lmstudio":
+        # LM Studio is local — no key required. `lmstudio_api_key` is only
+        # honored if the user fronted LM Studio with an auth proxy.
+        api_key = llm_settings.lmstudio_api_key or None
+        base_url = llm_settings.lmstudio_base_url
     else:
         logger.warning(f"Unknown LLM provider: {provider_name}")
         return None
@@ -875,9 +885,13 @@ def get_llm_gateway() -> LLMGateway | None:
             if m.strip()
         ]
 
+    model = llm_settings.llm_model
+    if provider_name == "lmstudio":
+        model = llm_settings.lmstudio_model
+
     config = LLMConfig(
         provider=provider_name,
-        model=llm_settings.llm_model,
+        model=model,
         api_key=api_key,
         base_url=base_url,
         max_tokens=llm_settings.max_tokens_per_request,

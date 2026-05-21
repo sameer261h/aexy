@@ -1,0 +1,19 @@
+{
+  "developer_id": "dev-test-001",
+  "languages": [
+    {"name": "Python", "confidence": 0.95},
+    {"name": "TypeScript", "confidence": 0.85},
+    {"name": "SQL", "confidence": 0.80}
+  ],
+  "frameworks": [
+    {"name": "FastAPI", "category": "web", "usage_depth": "advanced", "confidence": 0.92},
+    {"name": "SQLAlchemy", "category": "orm", "usage_depth": "advanced", "confidence": 0.90},
+    {"name": "React", "category": "frontend", "usage_depth": "intermediate", "confidence": 0.75}
+  ],
+  "domains": [
+    {"name": "backend", "confidence": 0.93},
+    {"name": "payments", "confidence": 0.70},
+    {"name": "data-engineering", "confidence": 0.60}
+  ],
+  "recent_activity": "Last 30 days: 24 PRs merged, 12 reviews, primarily backend changes touching API + database layers"
+}

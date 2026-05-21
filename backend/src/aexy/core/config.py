@@ -136,6 +136,26 @@ class LLMSettings(BaseSettings):
         validation_alias="DEEPSEEK_FALLBACK_MODELS",
     )
 
+    # LM Studio settings (local OpenAI-compatible server, no API key needed).
+    # Used by `tests/ai/` to run the full AI test suite against a local model
+    # without spending cloud-LLM budget. Set LLM_PROVIDER=lmstudio to route
+    # production traffic here as well.
+    lmstudio_base_url: str = Field(
+        default="http://localhost:1234/v1",
+        description="LM Studio OpenAI-compatible base URL",
+        validation_alias="LMSTUDIO_BASE_URL",
+    )
+    lmstudio_model: str = Field(
+        default="qwen/qwen3.5-9b",
+        description="LM Studio model id (must be loaded in LM Studio)",
+        validation_alias="LMSTUDIO_MODEL",
+    )
+    lmstudio_api_key: str = Field(
+        default="",
+        description="Optional bearer token if LM Studio is fronted by a proxy",
+        validation_alias="LMSTUDIO_API_KEY",
+    )
+
     # Vision provider — used for image captioning + Qwen-VL video annotations.
     # `openrouter` routes to qwen/qwen2.5-vl-72b-instruct via OpenRouter; `ollama`
     # uses a local Ollama instance running a Qwen-VL tag (e.g. qwen2.5vl:7b).
@@ -325,6 +345,11 @@ class LLMSettings(BaseSettings):
                 requests_per_minute=self.deepseek_requests_per_minute,
                 requests_per_day=self.deepseek_requests_per_day,
                 tokens_per_minute=self.deepseek_tokens_per_minute,
+            ),
+            "lmstudio": ProviderRateLimitSettings(
+                requests_per_minute=-1,
+                requests_per_day=-1,
+                tokens_per_minute=-1,
             ),
         }
         return limits_map.get(provider, ProviderRateLimitSettings())
