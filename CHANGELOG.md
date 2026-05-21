@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-05-21
+
+`/reviews` surface UX overhaul, prod-bug fixes, and a tighter
+contract between the frontend and the manager-review backend. One
+hard 422 (manager Save Draft) is fixed via a backend schema relax
++ matching client change; the rest is i18n parity, draft-hydration
+correctness, and accessibility nits.
+
+### Reviews — bug fixes
+
+- **Manager Save Draft no longer 422s.** The frontend used to send
+  `overall_rating: 0` as a sentinel against `ManagerReviewSubmission`
+  which is `Field(ge=1, le=5)` — every draft save before the manager
+  had settled on a rating was rejected. `overall_rating` is now
+  `Optional[float]` on the submission schema (the hard constraint
+  stays on `FinalReviewData` where it actually matters), the service
+  preserves any prior rating when `None` is passed, and the client
+  drops the `?? 0` fallback. Three new regression tests pin the
+  contract: null accepted, missing accepted, finalize still rejects
+  out of range (`backend/tests/unit/test_reviews_prod_bugs.py`).
+- **Discarded suggestions no longer leak across workspaces.** The
+  hydration `useEffect` on `/reviews/manage` only wrote
+  `discardedIds` when the new workspace key had data; switching to a
+  workspace with no entry kept the previous team's discard list in
+  state. Now always resets (`manage/page.tsx`).
+- **Draft hydration re-runs on id change.** All three draft surfaces
+  — manager review composer, self-review form, peer decline reason —
+  used a boolean `hydratedRef` that stayed `true` across client-side
+  nav, so visiting a second review/request id never hydrated its
+  draft. Now keyed by id (`hydratedKeyRef === currentKey`), with an
+  explicit reset when the new id has no stored draft.
+
+### Reviews — UX consistency
+
+- **Cycle list now shares the inline-error pattern.** Activate /
+  advance on `/reviews/cycles` used to surface failures as a toast
+  that sat hidden behind the open `ConfirmDialog`; the detail page
+  rendered an inline red block inside the dialog. The list page now
+  uses the same inline block — same place users see the failure
+  matches the action that produced it.
+
+### i18n — parity + sweep
+
+- **25 new translation keys**, mirrored across `en` and `hi` (parity
+  preserved at 550 keys each). Sweep covers: cycles list ConfirmDialog
+  + toasts + status filter + breadcrumb + error panel; goal complete
+  dialog; manage status filter; manage detail "Back to Reviews" +
+  "Invite Peer Reviewers"; peer-requests error title.
+- Hindi entries keep technical terms (PR, GitHub, peer reviewer,
+  cycle, etc.) in English per the project convention.
+
+### Accessibility
+
+- **Notify dropdown trigger** on `/reviews/cycles/[cycleId]` now has
+  an explicit `aria-label` alongside `title=` — screen readers don't
+  reliably announce `title`, and the trigger needed a stable
+  accessible name.
+
+### Internal
+
+- `next-env.d.ts` and `tsconfig.tsbuildinfo` are now gitignored —
+  the former is rewritten by Next between dev (`.next/dev/...`) and
+  prod (`.next/...`) builds, the latter is per-machine.
+
 ## [0.8.1] - 2026-05-20
 
 UX overhaul of the agents + automations surface, plus a four-week

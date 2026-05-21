@@ -557,7 +557,7 @@ class ReviewService:
         self,
         review_id: str,
         responses: dict,
-        overall_rating: float,
+        overall_rating: float | None,
         ratings_breakdown: dict | None = None,
         linked_goals: list[str] | None = None,
         linked_contributions: list[str] | None = None,
@@ -567,7 +567,8 @@ class ReviewService:
         Args:
             review_id: Individual review ID.
             responses: Review responses.
-            overall_rating: Overall rating (1-5).
+            overall_rating: Overall rating (1-5). Optional for draft saves —
+                if None, any previously written rating is preserved.
             ratings_breakdown: Detailed ratings by category.
             linked_goals: IDs of linked goals.
             linked_contributions: IDs of linked contributions.
@@ -597,8 +598,12 @@ class ReviewService:
         self.db.add(submission)
 
         review.status = "manager_review_in_progress"
-        review.overall_rating = overall_rating
-        review.ratings_breakdown = ratings_breakdown or {}
+        # Preserve any previously-saved rating when this is a draft
+        # save with no rating selected yet.
+        if overall_rating is not None:
+            review.overall_rating = overall_rating
+        if ratings_breakdown:
+            review.ratings_breakdown = ratings_breakdown
         review.updated_at = datetime.utcnow()
 
         await self.db.flush()

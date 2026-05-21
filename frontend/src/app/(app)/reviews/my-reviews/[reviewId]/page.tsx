@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -23,47 +24,38 @@ import { useAuth } from "@/hooks/useAuth";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { InvitePeerReviewersModal } from "@/components/reviews/InvitePeerReviewersModal";
 import { ReviewRequest, reviewsApi } from "@/lib/api";
+import { formatDateShort } from "@/lib/datetime";
 
-const REQUEST_STATUS: Record<
+// Presentational config per peer-request status. Labels are
+// resolved at render time via i18n; only the colors + icon stay
+// in this module-level constant.
+const REQUEST_STATUS_VISUAL: Record<
   string,
-  { label: string; color: string; bg: string; Icon: typeof Clock }
+  { color: string; bg: string; Icon: typeof Clock }
 > = {
-  pending: {
-    label: "Awaiting response",
-    color: "text-amber-600 dark:text-amber-400",
-    bg: "bg-amber-500/10",
-    Icon: Clock,
-  },
-  accepted: {
-    label: "Accepted",
-    color: "text-blue-600 dark:text-blue-400",
-    bg: "bg-blue-500/10",
-    Icon: CheckCircle,
-  },
-  completed: {
-    label: "Submitted",
-    color: "text-green-600 dark:text-green-400",
-    bg: "bg-green-500/10",
-    Icon: CheckCircle,
-  },
-  declined: {
-    label: "Declined",
-    color: "text-red-600 dark:text-red-400",
-    bg: "bg-red-500/10",
-    Icon: XCircle,
-  },
+  pending: { color: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500/10", Icon: Clock },
+  accepted: { color: "text-blue-600 dark:text-blue-400", bg: "bg-blue-500/10", Icon: CheckCircle },
+  completed: { color: "text-green-600 dark:text-green-400", bg: "bg-green-500/10", Icon: CheckCircle },
+  declined: { color: "text-red-600 dark:text-red-400", bg: "bg-red-500/10", Icon: XCircle },
 };
 
-const PHASE_LABELS: Record<string, string> = {
-  draft: "Draft",
-  active: "Active",
-  self_review: "Self review",
-  peer_review: "Peer review",
-  manager_review: "Manager review",
-  completed: "Completed",
-};
+// `question_responses` values are typed `QuestionResponse = { comment?, rating? }`
+// on the backend. Older rows in the DB may still carry a bare string from
+// the previous frontend bug, so we accept both shapes here.
+function extractGeneralNote(
+  q: Record<string, unknown> | null | undefined,
+): string | undefined {
+  const v = q?.general;
+  if (typeof v === "string") return v;
+  if (v && typeof v === "object" && "comment" in v) {
+    const c = (v as { comment?: unknown }).comment;
+    return typeof c === "string" ? c : undefined;
+  }
+  return undefined;
+}
 
 export default function MyReviewDetailPage() {
+  const t = useTranslations("reviews.myReview");
   const params = useParams();
   const router = useRouter();
   const reviewId = params.reviewId as string;
@@ -107,11 +99,11 @@ export default function MyReviewDetailPage() {
     isReviewee && (peerMode === "employee_choice" || peerMode === "both");
   const peerSelectionExplanation =
     peerMode === "manager_assigned"
-      ? "Your manager assigns peer reviewers for this cycle."
+      ? t("peerSection.explanationManagerAssigned")
       : peerMode === "employee_choice"
-      ? "Nominate teammates you'd like to review you."
+      ? t("peerSection.explanationEmployeeChoice")
       : peerMode === "both"
-      ? "You and your manager can both nominate reviewers."
+      ? t("peerSection.explanationBoth")
       : null;
 
   const minReviewers = cycle?.settings?.min_peer_reviewers;
@@ -201,13 +193,17 @@ export default function MyReviewDetailPage() {
                   {cycle?.name || "Your review"}
                 </h1>
                 <p className="text-sm text-muted-foreground">
-                  Current phase:{" "}
+                  {t("phaseLabel")}:{" "}
                   <span className="text-foreground font-medium">
-                    {PHASE_LABELS[cycle?.status || ""] || cycle?.status || "—"}
+                    {cycle?.status
+                      ? t(`phaseLabels.${cycle.status}` as never)
+                      : "—"}
                   </span>
                   {review.manager_name && (
                     <>
-                      {" · Manager: "}
+                      {" · "}
+                      {t("managerLabel")}
+                      {": "}
                       <span className="text-foreground">{review.manager_name}</span>
                     </>
                   )}
@@ -215,25 +211,25 @@ export default function MyReviewDetailPage() {
               </div>
             </div>
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-muted text-foreground">
-              {PHASE_LABELS[review.status] || review.status}
+              {t(`phaseLabels.${review.status}` as never)}
             </span>
           </div>
 
           {/* Deadline strip */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-5">
             <DeadlineCard
-              label="Self review"
+              label={t("deadlines.selfReview")}
               date={cycle?.self_review_deadline}
               done={selfSubmitted}
             />
             <DeadlineCard
-              label="Peer review"
+              label={t("deadlines.peerReview")}
               date={cycle?.peer_review_deadline}
               done={activeRequestCount > 0 &&
                 peerRequests.every((r) => r.status === "completed" || r.status === "declined")}
             />
             <DeadlineCard
-              label="Manager review"
+              label={t("deadlines.managerReview")}
               date={cycle?.manager_review_deadline}
               done={!!review.manager_review}
             />
@@ -245,23 +241,23 @@ export default function MyReviewDetailPage() {
           <div className="flex items-start justify-between gap-4 mb-3">
             <div>
               <h2 className="text-base font-semibold text-foreground">
-                Your self review
+                {t("selfReviewSection.heading")}
               </h2>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {selfSubmitted
-                  ? "Submitted — your manager will see this when they open the cycle."
-                  : "Reflect on your wins and growth this cycle. The manager-finalize step builds on what you write here."}
+                  ? t("selfReviewSection.submittedNote")
+                  : t("selfReviewSection.pendingNote")}
               </p>
             </div>
             {selfSubmitted ? (
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-green-600 dark:text-green-400 bg-green-500/10">
                 <CheckCircle className="h-3.5 w-3.5" />
-                Submitted
+                {t("selfReviewSection.badgeSubmitted")}
               </span>
             ) : (
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-amber-600 dark:text-amber-400 bg-amber-500/10">
                 <Clock className="h-3.5 w-3.5" />
-                Not started
+                {t("selfReviewSection.badgeNotStarted")}
               </span>
             )}
           </div>
@@ -270,7 +266,9 @@ export default function MyReviewDetailPage() {
             <SelfReviewSummary
               strengths={review.self_review?.responses.strengths || []}
               growthAreas={review.self_review?.responses.growth_areas || []}
-              note={review.self_review?.responses.question_responses?.general}
+              note={extractGeneralNote(
+                review.self_review?.responses.question_responses,
+              )}
             />
           ) : (
             <SelfReviewForm
@@ -288,7 +286,7 @@ export default function MyReviewDetailPage() {
             <div>
               <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
                 <Users className="h-4 w-4 text-cyan-400" />
-                Peer reviewers
+                {t("peerSection.heading")}
               </h2>
               {peerSelectionExplanation && (
                 <p className="text-xs text-muted-foreground mt-0.5">
@@ -297,22 +295,21 @@ export default function MyReviewDetailPage() {
               )}
               {(minReviewers != null || maxReviewers != null) && (
                 <p className="text-[11px] text-muted-foreground mt-0.5">
-                  {activeRequestCount} active ·{" "}
+                  {t("peerSection.activeCount", { activeRequestCount })} ·{" "}
                   {minReviewers != null && (
-                    <>
-                      need at least{" "}
-                      <span
-                        className={
-                          activeRequestCount >= minReviewers
-                            ? "text-green-500"
-                            : "text-amber-500"
-                        }
-                      >
-                        {minReviewers}
-                      </span>
-                    </>
+                    <span
+                      className={
+                        activeRequestCount >= minReviewers
+                          ? "text-green-500"
+                          : "text-amber-500"
+                      }
+                    >
+                      {t("peerSection.needAtLeast", { min: minReviewers })}
+                    </span>
                   )}
-                  {maxReviewers != null && <> · max {maxReviewers}</>}
+                  {maxReviewers != null && (
+                    <> · {t("peerSection.max", { max: maxReviewers })}</>
+                  )}
                 </p>
               )}
             </div>
@@ -322,7 +319,7 @@ export default function MyReviewDetailPage() {
                 className="px-3 py-1.5 text-sm rounded-md bg-cyan-600 hover:bg-cyan-500 text-white transition flex items-center gap-1.5"
               >
                 <UserCheck className="h-3.5 w-3.5" />
-                Nominate reviewers
+                {t("peerSection.nominate")}
               </button>
             )}
           </div>
@@ -334,8 +331,8 @@ export default function MyReviewDetailPage() {
           ) : peerRequests.length === 0 ? (
             <div className="text-center py-6 text-sm text-muted-foreground">
               {canNominate
-                ? "No reviewers yet. Pick teammates above to invite."
-                : "No reviewers assigned yet."}
+                ? t("peerSection.noneNominate")
+                : t("peerSection.noneAssigned")}
             </div>
           ) : (
             <ul className="divide-y divide-border border border-border rounded-lg overflow-hidden">
@@ -389,18 +386,21 @@ function DeadlineCard({
   date: string | null | undefined;
   done: boolean;
 }) {
-  const dateStr = date
-    ? new Date(date).toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-      })
-    : "—";
+  const t = useTranslations("reviews.myReview.deadlines");
+  // When a phase has no configured deadline, the original code
+  // rendered a bare "—" with no hint about why. Render "Open-ended"
+  // instead and stash the explanatory copy in a `title` so a hover
+  // reveals what's going on, matching `UX-RV-SELF-005`.
+  const dateStr = date ? formatDateShort(date) : t("openEnded");
   return (
     <div className="bg-muted/40 border border-border rounded-lg px-3 py-2">
       <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
         {label}
       </p>
-      <p className="text-sm text-foreground font-medium flex items-center gap-1.5 mt-0.5">
+      <p
+        className="text-sm text-foreground font-medium flex items-center gap-1.5 mt-0.5"
+        title={date ? undefined : t("noDeadlineTooltip")}
+      >
         <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
         {dateStr}
         {done && <CheckCircle className="h-3.5 w-3.5 text-green-500" />}
@@ -410,8 +410,10 @@ function DeadlineCard({
 }
 
 function PeerRequestRow({ request }: { request: ReviewRequest }) {
-  const status = REQUEST_STATUS[request.status] || REQUEST_STATUS.pending;
-  const Icon = status.Icon;
+  const t = useTranslations("reviews.myReview");
+  const tpr = useTranslations("reviews.peerRequests");
+  const visual = REQUEST_STATUS_VISUAL[request.status] || REQUEST_STATUS_VISUAL.pending;
+  const Icon = visual.Icon;
   return (
     <li className="px-4 py-2.5 flex items-center justify-between gap-3 bg-card">
       <div className="min-w-0">
@@ -419,20 +421,16 @@ function PeerRequestRow({ request }: { request: ReviewRequest }) {
           {request.reviewer_name || request.reviewer_email || "Unknown reviewer"}
         </p>
         <p className="text-[11px] text-muted-foreground">
-          {request.request_source === "employee" ? "Self-nominated" : "Manager-assigned"}
+          {tpr(`source.${request.request_source}` as never)}
           {" · "}
-          invited{" "}
-          {new Date(request.created_at).toLocaleDateString(undefined, {
-            month: "short",
-            day: "numeric",
-          })}
+          invited {formatDateShort(request.created_at)}
         </p>
       </div>
       <span
-        className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium ${status.color} ${status.bg}`}
+        className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium ${visual.color} ${visual.bg}`}
       >
         <Icon className="h-3 w-3" />
-        {status.label}
+        {t(`requestStatus.${request.status}` as never)}
       </span>
     </li>
   );
@@ -454,8 +452,17 @@ function SelfReviewSummary({
       </p>
     );
   }
+  // Two-column grid only when there's actually something to balance
+  // — a lone notes block in a `sm:grid-cols-2` slot stranded an
+  // empty right column on tablet widths. Switch to a stacked layout
+  // when fewer than two sections are populated.
+  const sectionCount =
+    (strengths.length > 0 ? 1 : 0) +
+    (growthAreas.length > 0 ? 1 : 0) +
+    (note ? 1 : 0);
+  const useGrid = sectionCount >= 2;
   return (
-    <div className="grid sm:grid-cols-2 gap-4 mt-2">
+    <div className={useGrid ? "grid sm:grid-cols-2 gap-4 mt-2" : "space-y-4 mt-2"}>
       {strengths.length > 0 && (
         <div>
           <p className="text-xs font-medium text-muted-foreground mb-1">Strengths</p>
@@ -479,7 +486,7 @@ function SelfReviewSummary({
         </div>
       )}
       {note && (
-        <div className="sm:col-span-2">
+        <div className={useGrid ? "sm:col-span-2" : undefined}>
           <p className="text-xs font-medium text-muted-foreground mb-1">Notes</p>
           <p className="text-sm text-foreground whitespace-pre-wrap">{note}</p>
         </div>
@@ -495,10 +502,71 @@ function SelfReviewForm({
   reviewId: string;
   onSubmitted: () => void;
 }) {
+  const t = useTranslations("reviews.myReview");
   const [strengths, setStrengths] = useState<string[]>([""]);
   const [growth, setGrowth] = useState<string[]>([""]);
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // Persist draft in sessionStorage so a 5-paragraph self-review
+  // doesn't evaporate on accidental tab close or submission failure.
+  // Same pattern as the peer-decline form (`UX-RV-PEER-002`).
+  const draftKey = reviewId ? `selfReviewDraft:${reviewId}` : null;
+  // Key the hydration guard by draftKey so client-side nav between
+  // two different review ids actually re-hydrates from the new key
+  // instead of getting stuck on the first id we saw this session.
+  const hydratedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!draftKey || hydratedKeyRef.current === draftKey) return;
+    hydratedKeyRef.current = draftKey;
+    try {
+      const raw = sessionStorage.getItem(draftKey);
+      if (!raw) {
+        // New review id with no stored draft — reset to defaults so
+        // the previous review's edits don't bleed through.
+        setStrengths([""]);
+        setGrowth([""]);
+        setNote("");
+        return;
+      }
+      const parsed = JSON.parse(raw) as {
+        strengths?: string[];
+        growth?: string[];
+        note?: string;
+      };
+      setStrengths(
+        Array.isArray(parsed.strengths) && parsed.strengths.length > 0
+          ? parsed.strengths
+          : [""],
+      );
+      setGrowth(
+        Array.isArray(parsed.growth) && parsed.growth.length > 0
+          ? parsed.growth
+          : [""],
+      );
+      setNote(typeof parsed.note === "string" ? parsed.note : "");
+    } catch {
+      // Corrupt JSON in storage — start clean.
+      setStrengths([""]);
+      setGrowth([""]);
+      setNote("");
+    }
+  }, [draftKey]);
+  useEffect(() => {
+    if (!draftKey) return;
+    const hasContent =
+      strengths.some((s) => s.trim()) ||
+      growth.some((s) => s.trim()) ||
+      note.trim();
+    if (hasContent) {
+      sessionStorage.setItem(
+        draftKey,
+        JSON.stringify({ strengths, growth, note }),
+      );
+    } else {
+      sessionStorage.removeItem(draftKey);
+    }
+  }, [draftKey, strengths, growth, note]);
 
   const handleSubmit = async () => {
     const cleanStrengths = strengths.map((s) => s.trim()).filter(Boolean);
@@ -508,24 +576,31 @@ function SelfReviewForm({
       cleanGrowth.length === 0 &&
       !note.trim()
     ) {
-      toast.error("Add at least one strength, growth area, or note");
+      toast.error(t("form.validationError"));
       return;
     }
     setSubmitting(true);
     try {
+      // Backend ReviewResponses.question_responses is
+      // `dict[str, QuestionResponse]` where each value is an object
+      // `{ rating?, comment? }`, not a bare string. Wrap accordingly
+      // or the request 422s.
       await reviewsApi.submitSelfReview(reviewId, {
         responses: {
           achievements: [],
           areas_for_growth: [],
-          question_responses: note.trim() ? { general: note.trim() } : {},
+          question_responses: note.trim()
+            ? { general: { comment: note.trim() } }
+            : {},
           strengths: cleanStrengths,
           growth_areas: cleanGrowth,
         },
       });
-      toast.success("Self-review submitted");
+      toast.success(t("form.submittedToast"));
+      if (draftKey) sessionStorage.removeItem(draftKey);
       onSubmitted();
     } catch (err: any) {
-      toast.error(err?.response?.data?.detail || "Failed to submit self review");
+      toast.error(err?.response?.data?.detail || t("form.submitFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -534,26 +609,26 @@ function SelfReviewForm({
   return (
     <div className="space-y-4 mt-2">
       <BulletEditor
-        label="What went well"
-        placeholder="e.g. Owned the auth migration end-to-end and unblocked mobile."
+        label={t("form.strengthsLabel")}
+        placeholder={t("form.strengthsPlaceholder")}
         values={strengths}
         onChange={setStrengths}
       />
       <BulletEditor
-        label="Areas to grow"
-        placeholder="e.g. Want to get sharper on architectural trade-offs."
+        label={t("form.growthLabel")}
+        placeholder={t("form.growthPlaceholder")}
         values={growth}
         onChange={setGrowth}
       />
       <div>
         <label className="text-xs font-medium text-muted-foreground block mb-1">
-          Anything else
+          {t("form.noteLabel")}
         </label>
         <textarea
           value={note}
           onChange={(e) => setNote(e.target.value)}
           rows={3}
-          placeholder="Free-text notes that don't fit above."
+          placeholder={t("form.notePlaceholder")}
           className="w-full bg-background border border-border rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/30"
         />
       </div>
@@ -568,7 +643,7 @@ function SelfReviewForm({
           ) : (
             <Send className="h-4 w-4" />
           )}
-          Submit self-review
+          {t("form.submit")}
         </button>
       </div>
     </div>
@@ -621,6 +696,7 @@ function BulletEditor({
             {values.length > 1 && (
               <button
                 onClick={() => handleRemove(i)}
+                aria-label={`Remove ${label.toLowerCase()} bullet ${i + 1}`}
                 className="text-xs text-muted-foreground hover:text-destructive pt-2"
                 type="button"
               >
@@ -641,15 +717,16 @@ function AcknowledgeCard({
   reviewId: string;
   onAcknowledged: () => void;
 }) {
+  const t = useTranslations("reviews.myReview.acknowledge");
   const [submitting, setSubmitting] = useState(false);
   const handleAcknowledge = async () => {
     setSubmitting(true);
     try {
       await reviewsApi.acknowledgeReview(reviewId);
-      toast.success("Review acknowledged");
+      toast.success(t("successToast"));
       onAcknowledged();
     } catch (err: any) {
-      toast.error(err?.response?.data?.detail || "Failed to acknowledge");
+      toast.error(err?.response?.data?.detail || t("failedToast"));
     } finally {
       setSubmitting(false);
     }
@@ -658,10 +735,7 @@ function AcknowledgeCard({
     <div className="mt-6 bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-5 flex items-center justify-between gap-3 flex-wrap">
       <div>
         <p className="text-sm font-medium text-foreground">
-          Your manager has completed this review.
-        </p>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          Acknowledge to close out the cycle for yourself.
+          {t("heading")}
         </p>
       </div>
       <button
@@ -674,7 +748,7 @@ function AcknowledgeCard({
         ) : (
           <CheckCircle className="h-4 w-4" />
         )}
-        Acknowledge
+        {submitting ? t("submitting") : t("cta")}
       </button>
     </div>
   );

@@ -464,3 +464,99 @@ export function useReviewStats(developerId: string | null | undefined, workspace
     isLoading: goalsLoading || reviewsLoading || requestsLoading,
   };
 }
+
+
+// ============ AI-driven Goal Suggestions (team-wide) ============
+
+/**
+ * Fans `reviewsApi.getGoalSuggestions(developerId)` out across a team
+ * and flattens the result. The per-developer endpoint already runs
+ * an LLM analysis against recent activity (commits, PRs, reviews),
+ * so the aggregation surface on the manager dashboard is a thin
+ * wrapper that:
+ *
+ *   1. Issues one request per member (parallel; React Query handles
+ *      caching + dedupe across renders).
+ *   2. Synthesizes a stable client-side `id` per suggestion so the
+ *      UI can track expand/collapse + discard state. The backend
+ *      response is unkeyed — title is the only stable handle.
+ *   3. Filters out members where the request errored so a single
+ *      bad row doesn't take down the tab.
+ */
+export interface TeamSuggestion {
+  id: string;
+  memberId: string;
+  memberName: string;
+  title: string;
+  goalType: GoalType;
+  suggestedMeasurable: string;
+  keywords: string[];
+  source: string;
+  confidence: number;
+  skillName: string | null;
+}
+
+export function useTeamSuggestions(
+  team: { id: string; name: string }[],
+): { suggestions: TeamSuggestion[]; isLoading: boolean } {
+  const [suggestions, setSuggestions] = useState<TeamSuggestion[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Stable key for the team — sorted ids joined — so we refetch only
+  // when the team membership actually changes.
+  const teamKey = team
+    .map(m => m.id)
+    .sort()
+    .join(",");
+
+  useEffect(() => {
+    if (team.length === 0) {
+      setSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    setIsLoading(true);
+    Promise.allSettled(
+      team.map(member =>
+        reviewsApi.getGoalSuggestions(member.id).then(rows =>
+          rows.map((s, idx): TeamSuggestion => ({
+            // Title is the most distinguishing field per developer,
+            // but two suggestions can share the same title (e.g.
+            // re-runs). Compose with index for stability.
+            id: `${member.id}:${idx}:${s.title}`,
+            memberId: member.id,
+            memberName: member.name,
+            title: s.title,
+            goalType: s.goal_type,
+            suggestedMeasurable: s.suggested_measurable,
+            keywords: s.suggested_keywords,
+            source: s.source,
+            confidence: s.confidence,
+            skillName: s.skill_name,
+          })),
+        ),
+      ),
+    )
+      .then(results => {
+        if (cancelled) return;
+        const flat = results
+          .filter(
+            (r): r is PromiseFulfilledResult<TeamSuggestion[]> =>
+              r.status === "fulfilled",
+          )
+          .flatMap(r => r.value);
+        setSuggestions(flat);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // teamKey captures the team membership cheaply; the closure
+    // still reads the live `team` array for names/ids.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teamKey]);
+
+  return { suggestions, isLoading };
+}

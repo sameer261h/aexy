@@ -2,6 +2,13 @@ node_modules
 .next
 .DS_Store
 
+# Local-only generated files — Next.js rewrites the next-env.d.ts
+# reference between dev (`.next/dev/types/...`) and prod
+# (`.next/types/...`) builds, and the TypeScript incremental build
+# info is per-machine. Both should not be committed.
+frontend/next-env.d.ts
+frontend/tsconfig.tsbuildinfo
+
 # Auto-generated merged i18n files (run npm run i18n:merge to regenerate)
 frontend/messages/en.json
 frontend/messages/hi.json
@@ -40,3 +47,4 @@ mailagent/uv.lock
 REVIEW_*.md
 SEO_GTM_2_MONTH_PLAN.md
 ux-tracker.md
+reviews-ux-tracker.md

@@ -162,3 +162,135 @@ class TestPullRequestUrlConstruction:
         getattr with a default so the same shape stays graceful."""
         # No html_url anywhere — must not raise.
         _build_pr_url(_StubPR(repository="a/b", number=1))
+
+
+# ---------------------------------------------------------------------------
+# Bug 4 — frontend submitting `question_responses: { general: "string" }`
+# instead of `{ general: { comment: "string" } }` triggers a Pydantic 422
+# at /reviews/peer-requests/{id}/submit and crashes the UI page.
+# ---------------------------------------------------------------------------
+
+
+class TestReviewResponsesContract:
+    """Pins the Pydantic contract the frontend has to satisfy. The
+    schema expects each `question_responses` value to be an object
+    matching `QuestionResponse`, not a bare string. The original bug
+    shipped strings here and every peer-review submission 422'd.
+
+    Both the previous (buggy) and current (fixed) frontend payloads
+    are validated against the live schema — the buggy one MUST raise
+    so the test fails if the contract ever loosens silently."""
+
+    def _import_schema(self):
+        from aexy.schemas.review import ReviewResponses
+
+        return ReviewResponses
+
+    def test_buggy_string_payload_is_rejected(self):
+        """The literal payload from the production log."""
+        from pydantic import ValidationError
+
+        ReviewResponses = self._import_schema()
+        bad = {
+            "achievements": [],
+            "areas_for_growth": [],
+            "question_responses": {"general": "dfggd"},
+            "strengths": ["dfgf", "gdhg"],
+            "growth_areas": ["dfgdf"],
+        }
+        with pytest.raises(ValidationError) as exc:
+            ReviewResponses.model_validate(bad)
+        # The error must point at question_responses.general — anything
+        # else means a different validator is firing.
+        assert any(
+            "question_responses" in ".".join(str(p) for p in e["loc"])
+            for e in exc.value.errors()
+        )
+
+    def test_fixed_object_payload_is_accepted(self):
+        """The shape the frontend now ships."""
+        ReviewResponses = self._import_schema()
+        good = {
+            "achievements": [],
+            "areas_for_growth": [],
+            "question_responses": {"general": {"comment": "dfggd"}},
+            "strengths": ["dfgf", "gdhg"],
+            "growth_areas": ["dfgdf"],
+        }
+        parsed = ReviewResponses.model_validate(good)
+        assert parsed.question_responses["general"].comment == "dfggd"
+
+    def test_empty_question_responses_is_accepted(self):
+        """When the user leaves the free-text note blank, the frontend
+        sends `{}` for `question_responses` — must still validate."""
+        ReviewResponses = self._import_schema()
+        parsed = self._import_schema().model_validate(
+            {
+                "achievements": [],
+                "areas_for_growth": [],
+                "question_responses": {},
+                "strengths": ["x"],
+                "growth_areas": [],
+            }
+        )
+        assert parsed.question_responses == {}
+
+
+# ---------------------------------------------------------------------------
+# Bug 5 — `Save Draft` on /reviews/manage/[memberId] used to 422 because
+# the frontend posted `overall_rating: 0` to satisfy a required `float`
+# on the schema, but `Field(ge=1, le=5)` rejected the sentinel. The fix
+# loosens ManagerReviewSubmission to accept null/missing — the rating
+# constraint still applies on `FinalReviewData` (finalize endpoint).
+# ---------------------------------------------------------------------------
+
+
+class TestManagerReviewDraftRating:
+    """Pins the optional-rating contract for the Save Draft path."""
+
+    def test_null_overall_rating_accepted_for_draft(self):
+        from aexy.schemas.review import ManagerReviewSubmission
+
+        payload = ManagerReviewSubmission.model_validate(
+            {
+                "responses": {
+                    "achievements": [],
+                    "areas_for_growth": [],
+                    "question_responses": {},
+                    "strengths": ["clear writing"],
+                    "growth_areas": [],
+                },
+                "overall_rating": None,
+                "ratings_breakdown": {},
+            }
+        )
+        assert payload.overall_rating is None
+
+    def test_missing_overall_rating_accepted_for_draft(self):
+        from aexy.schemas.review import ManagerReviewSubmission
+
+        payload = ManagerReviewSubmission.model_validate(
+            {
+                "responses": {
+                    "achievements": [],
+                    "areas_for_growth": [],
+                    "question_responses": {},
+                    "strengths": ["clear writing"],
+                    "growth_areas": [],
+                },
+            }
+        )
+        assert payload.overall_rating is None
+
+    def test_finalize_still_requires_rating_in_range(self):
+        """The finalize endpoint is where the hard constraint must
+        live — if this loosens, the rating story collapses entirely."""
+        from pydantic import ValidationError
+        from aexy.schemas.review import FinalReviewData
+
+        with pytest.raises(ValidationError):
+            FinalReviewData.model_validate({"overall_rating": 0})
+        with pytest.raises(ValidationError):
+            FinalReviewData.model_validate({"overall_rating": 6})
+        ok = FinalReviewData.model_validate({"overall_rating": 4})
+        assert ok.overall_rating == 4

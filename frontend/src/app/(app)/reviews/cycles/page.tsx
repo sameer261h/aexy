@@ -1,6 +1,5 @@
 "use client";
 
-import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
@@ -22,6 +21,9 @@ import { useReviewCycles } from "@/hooks/useReviews";
 import { ReviewCycle, reviewsApi } from "@/lib/api";
 import { REVIEW_CYCLE_STATUS_COLORS, getStatusColor } from "@/lib/statusColors";
 import { DataTable, DataTableColumn } from "@/components/ui/data-table";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { ErrorPanel } from "@/components/ui/error-panel";
+import { formatDate, formatDateShort } from "@/lib/datetime";
 import { useTranslations } from "next-intl";
 
 const statusLabels: Record<string, string> = {
@@ -74,45 +76,47 @@ function ActionsCell({
   cycle: ReviewCycle;
   onRefetch: () => void;
 }) {
+  const t = useTranslations("reviews.cycles");
   // Confirmation step prevents a single accidental click from broadcasting
   // notifications (activate) or moving every participant to the next phase
   // (advance). Both backend endpoints are not safely idempotent on intent.
+  // `ConfirmDialog` owns its pending state via the onConfirm promise; we
+  // just track which dialog is open.
   const [confirming, setConfirming] = useState<null | "activate" | "advance">(null);
-  const [pending, setPending] = useState<null | "activate" | "advance">(null);
+  // Inline error rendered inside the open ConfirmDialog — mirrors the
+  // pattern on /reviews/cycles/[cycleId] so the failure stays visible
+  // next to the action that produced it, rather than being hidden
+  // behind the modal as a toast.
+  const [activateError, setActivateError] = useState<string | null>(null);
+  const [advanceError, setAdvanceError] = useState<string | null>(null);
+
+  const extractDetail = (err: unknown): string | null =>
+    (err as { response?: { data?: { detail?: string } } })?.response?.data
+      ?.detail ?? null;
 
   const handleActivate = async () => {
-    if (pending) return;
-    setPending("activate");
+    setActivateError(null);
     try {
       await reviewsApi.activateCycle(cycle.id);
-      toast.success(`Activated "${cycle.name}"`);
+      toast.success(t("toasts.activated", { name: cycle.name }));
       onRefetch();
-      setConfirming(null);
     } catch (err: unknown) {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data
-          ?.detail;
-      toast.error(detail ?? "Failed to activate cycle");
-    } finally {
-      setPending(null);
+      setActivateError(extractDetail(err) ?? t("toasts.failedToActivate"));
+      // Re-throw so ConfirmDialog keeps the modal open and the user
+      // can read the inline error and retry / cancel.
+      throw err;
     }
   };
 
   const handleAdvance = async () => {
-    if (pending) return;
-    setPending("advance");
+    setAdvanceError(null);
     try {
       await reviewsApi.advanceCyclePhase(cycle.id);
-      toast.success(`Advanced "${cycle.name}" to the next phase`);
+      toast.success(t("toasts.advanced", { name: cycle.name }));
       onRefetch();
-      setConfirming(null);
     } catch (err: unknown) {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data
-          ?.detail;
-      toast.error(detail ?? "Failed to advance phase");
-    } finally {
-      setPending(null);
+      setAdvanceError(extractDetail(err) ?? t("toasts.failedToAdvance"));
+      throw err;
     }
   };
 
@@ -128,12 +132,12 @@ function ActionsCell({
         href={`/reviews/cycles/${cycle.id}`}
         className="px-3 py-1.5 text-sm text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 rounded-lg transition"
       >
-        View
+        {t("table.view")}
       </Link>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
           <button
-            aria-label="More actions"
+            aria-label={t("table.moreActions")}
             className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition"
           >
             <MoreVertical className="h-4 w-4" />
@@ -150,7 +154,7 @@ function ActionsCell({
                 href={`/reviews/cycles/${cycle.id}`}
                 className="block px-4 py-2 text-sm hover:bg-accent transition outline-none cursor-pointer"
               >
-                View Details
+                {t("table.viewDetails")}
               </Link>
             </DropdownMenu.Item>
             {cycle.status === "draft" && (
@@ -161,7 +165,7 @@ function ActionsCell({
                 }}
                 className="w-full text-left px-4 py-2 text-sm hover:bg-accent transition outline-none cursor-pointer"
               >
-                Activate Cycle…
+                {t("table.activateCycleEllipsis")}
               </DropdownMenu.Item>
             )}
             {(cycle.status === "self_review" ||
@@ -174,109 +178,101 @@ function ActionsCell({
                 }}
                 className="w-full text-left px-4 py-2 text-sm hover:bg-accent transition outline-none cursor-pointer"
               >
-                Advance Phase…
+                {t("table.advancePhaseEllipsis")}
               </DropdownMenu.Item>
             )}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
 
-      {confirming === "activate" && (
-        <ConfirmModal
-          title={`Activate "${cycle.name}"?`}
-          body={
-            <>
-              This opens the cycle and emails every enrolled developer that
-              their review is live. Notifications can&apos;t be unsent.
-            </>
+      <ConfirmDialog
+        open={confirming === "activate"}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirming(null);
+            setActivateError(null);
           }
-          confirmLabel={pending === "activate" ? "Activating…" : "Activate"}
-          onConfirm={handleActivate}
-          onCancel={() => setConfirming(null)}
-          isPending={pending === "activate"}
-        />
-      )}
-      {confirming === "advance" && (
-        <ConfirmModal
-          title={`Advance "${cycle.name}" to next phase?`}
-          body={
-            <>
-              Moves from{" "}
-              <span className="font-medium text-foreground">
-                {statusLabels[cycle.status] || cycle.status}
-              </span>{" "}
-              →{" "}
-              <span className="font-medium text-foreground">
-                {advanceTo ?? "next phase"}
-              </span>
-              . Participants are notified and the relevant submission forms
-              open / close.
-            </>
+        }}
+        title={t("confirm.activateTitle", { name: cycle.name })}
+        description={
+          <>
+            {t("confirm.activateDescription")}
+            {activateError && (
+              <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 mt-3">
+                <p className="text-red-400 text-sm">{activateError}</p>
+              </div>
+            )}
+          </>
+        }
+        confirmLabel={t("confirm.activateLabel")}
+        tone="neutral"
+        onConfirm={handleActivate}
+      />
+      <ConfirmDialog
+        open={confirming === "advance"}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirming(null);
+            setAdvanceError(null);
           }
-          confirmLabel={pending === "advance" ? "Advancing…" : "Advance"}
-          onConfirm={handleAdvance}
-          onCancel={() => setConfirming(null)}
-          isPending={pending === "advance"}
-        />
-      )}
+        }}
+        title={t("confirm.advanceTitle", { name: cycle.name })}
+        description={
+          <>
+            {t.rich("confirm.advanceDescription", {
+              from: tStatus(t, cycle.status),
+              to: advanceTo ?? t("confirm.advanceFallbackNext"),
+              strong: (chunks) => (
+                <span className="font-medium text-foreground">{chunks}</span>
+              ),
+            })}
+            {advanceError && (
+              <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 mt-3">
+                <p className="text-red-400 text-sm">{advanceError}</p>
+              </div>
+            )}
+          </>
+        }
+        confirmLabel={t("confirm.advanceLabel")}
+        tone="warning"
+        onConfirm={handleAdvance}
+      />
     </div>
   );
 }
 
-function ConfirmModal({
-  title,
-  body,
-  confirmLabel,
-  onConfirm,
-  onCancel,
-  isPending,
-}: {
-  title: string;
-  body: ReactNode;
-  confirmLabel: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-  isPending: boolean;
-}) {
-  return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-      onClick={onCancel}
-    >
-      <div
-        className="bg-card rounded-xl border border-border p-6 max-w-md w-full mx-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="text-base font-semibold text-foreground mb-2">{title}</h3>
-        <p className="text-sm text-muted-foreground mb-4">{body}</p>
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={onCancel}
-            disabled={isPending}
-            className="px-4 py-2 text-sm rounded-lg border border-border hover:bg-accent transition disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={isPending}
-            className="px-4 py-2 text-sm rounded-lg bg-purple-600 hover:bg-purple-500 text-white transition disabled:opacity-50"
-          >
-            {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+// `t` is the next-intl translator already scoped to "reviews.cycles".
+// Both label helpers fall back to the English module-level maps if a
+// key is missing from the locale file — defensive in case the JSON
+// catalog drifts behind the model's status enum.
+type CyclesT = ReturnType<typeof useTranslations<"reviews.cycles">>;
+
+function tStatus(t: CyclesT, status: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const translated = (t as any).has?.(`statusLabels.${status}`)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ? (t as any)(`statusLabels.${status}`)
+    : null;
+  return translated || statusLabels[status] || status;
+}
+
+function tCycleType(t: CyclesT, type: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const translated = (t as any).has?.(`cycleTypeLabels.${type}`)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ? (t as any)(`cycleTypeLabels.${type}`)
+    : null;
+  return translated || cycleTypeLabels[type] || type;
 }
 
 function buildCycleColumns(
   onRefetch: () => void,
+  t: CyclesT,
 ): DataTableColumn<ReviewCycle>[] {
   return [
   {
     id: "cycle",
-    header: "Cycle",
+    header: t("table.cycle"),
     sortable: true,
     sortValue: (cycle) => cycle.name.toLowerCase(),
     cell: (cycle) => (
@@ -290,7 +286,7 @@ function buildCycleColumns(
               {cycle.name}
             </p>
             <p className="text-xs text-muted-foreground">
-              {cycleTypeLabels[cycle.cycle_type] || cycle.cycle_type}
+              {tCycleType(t, cycle.cycle_type)}
             </p>
           </div>
         </div>
@@ -299,7 +295,7 @@ function buildCycleColumns(
   },
   {
     id: "status",
-    header: "Status",
+    header: t("table.status"),
     sortable: true,
     sortValue: (cycle) => statusSortOrder[cycle.status] ?? 99,
     cell: (cycle) => {
@@ -307,37 +303,29 @@ function buildCycleColumns(
       return (
         <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${statusColor.text} ${statusColor.bg}`}>
           {cycle.status === "active" || cycle.status === "self_review" || cycle.status === "peer_review" || cycle.status === "manager_review" ? (
-            <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+            <span className="w-1.5 h-1.5 rounded-full bg-current motion-safe:animate-pulse" />
           ) : null}
-          {statusLabels[cycle.status] || cycle.status}
+          {tStatus(t, cycle.status)}
         </span>
       );
     },
   },
   {
     id: "period",
-    header: "Period",
+    header: t("table.period"),
     sortable: true,
     sortValue: (cycle) => new Date(cycle.period_start).getTime(),
     cell: (cycle) => (
       <span className="text-sm text-muted-foreground">
-        {new Date(cycle.period_start).toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-        })}
+        {formatDate(cycle.period_start)}
         {" - "}
-        {new Date(cycle.period_end).toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-        })}
+        {formatDate(cycle.period_end)}
       </span>
     ),
   },
   {
     id: "deadlines",
-    header: "Deadlines",
+    header: t("table.deadlines"),
     sortable: true,
     sortValue: (cycle) =>
       cycle.self_review_deadline
@@ -348,10 +336,7 @@ function buildCycleColumns(
         {cycle.self_review_deadline && (
           <span className="text-xs text-muted-foreground" title="Self Review Deadline">
             <Clock className="h-3 w-3 inline mr-1" />
-            {new Date(cycle.self_review_deadline).toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-            })}
+            {formatDateShort(cycle.self_review_deadline)}
           </span>
         )}
       </div>
@@ -359,7 +344,7 @@ function buildCycleColumns(
   },
   {
     id: "actions",
-    header: "Actions",
+    header: t("table.actions"),
     headerClassName: "text-right",
     cellClassName: "text-right",
     cell: (cycle) => <ActionsCell cycle={cycle} onRefetch={onRefetch} />,
@@ -377,7 +362,7 @@ export default function ReviewCyclesPage() {
 
   // Capture refetch in the column factory so ActionsCell can refresh
   // the list after activate / advance mutations succeed.
-  const cycleColumns = useMemo(() => buildCycleColumns(refetch), [refetch]);
+  const cycleColumns = useMemo(() => buildCycleColumns(refetch, t), [refetch, t]);
 
   if (authLoading || currentWorkspaceLoading) {
     return (
@@ -413,21 +398,21 @@ export default function ReviewCyclesPage() {
   if (!hasWorkspaces) {
     return (
       <div className="min-h-screen bg-background">
-<main className="max-w-7xl mx-auto px-4 py-8">
+      <main className="max-w-7xl mx-auto px-4 py-8">
           <div className="text-center py-16">
             <div className="w-20 h-20 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
               <Calendar className="w-10 h-10 text-muted-foreground" />
             </div>
-            <h2 className="text-xl font-semibold text-foreground mb-2">No Workspace Selected</h2>
+            <h2 className="text-xl font-semibold text-foreground mb-2">{t("noWorkspace.title")}</h2>
             <p className="text-muted-foreground mb-6">
-              Review cycles are workspace-specific. Please create or select a workspace first.
+              {t("noWorkspace.description")}
             </p>
             <Link
               href="/settings/workspaces"
               className="inline-flex items-center gap-2 px-6 py-3 bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition"
             >
               <Settings className="h-4 w-4" />
-              Manage Workspaces
+              {t("noWorkspace.cta")}
             </Link>
           </div>
         </main>
@@ -435,24 +420,24 @@ export default function ReviewCyclesPage() {
     );
   }
 
-  const statusOptions = [
-    { value: undefined, label: "All Statuses" },
-    { value: "draft", label: "Draft" },
-    { value: "active", label: "Active" },
-    { value: "self_review", label: "Self Review" },
-    { value: "peer_review", label: "Peer Review" },
-    { value: "manager_review", label: "Manager Review" },
-    { value: "completed", label: "Completed" },
+  const statusOptions: { value: string | undefined; label: string }[] = [
+    { value: undefined, label: t("statusFilter.all") },
+    { value: "draft", label: t("statusLabels.draft") },
+    { value: "active", label: t("statusLabels.active") },
+    { value: "self_review", label: t("statusLabels.self_review") },
+    { value: "peer_review", label: t("statusLabels.peer_review") },
+    { value: "manager_review", label: t("statusLabels.manager_review") },
+    { value: "completed", label: t("statusLabels.completed") },
   ];
 
   return (
     <div className="min-h-screen bg-background">
-<main className="max-w-7xl mx-auto px-4 py-8">
+      <main className="max-w-7xl mx-auto px-4 py-8">
         {/* Breadcrumb */}
         <Breadcrumb
           items={[
-            { label: "Reviews", href: "/reviews" },
-            { label: "Cycles" },
+            { label: t("breadcrumb.reviews"), href: "/reviews" },
+            { label: t("breadcrumb.cycles") },
           ]}
         />
 
@@ -480,7 +465,12 @@ export default function ReviewCyclesPage() {
 
         {/* Filters */}
         <div className="flex items-center gap-4 mb-6">
+          <label htmlFor="cycle-status-filter" className="sr-only">
+            {t("statusFilter.label")}
+          </label>
           <select
+            id="cycle-status-filter"
+            aria-label={t("statusFilter.label")}
             value={statusFilter || ""}
             onChange={(e) => setStatusFilter(e.target.value || undefined)}
             className="bg-muted border border-border text-foreground rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
@@ -492,23 +482,17 @@ export default function ReviewCyclesPage() {
             ))}
           </select>
           <span className="text-muted-foreground text-sm">
-            {cycles.length} cycle{cycles.length !== 1 ? "s" : ""}
+            {t("cycleCount", { count: cycles.length })}
           </span>
         </div>
 
         {/* Cycles Table (desktop) */}
         {error ? (
-          <div className="bg-background/50 rounded-xl border border-border overflow-hidden">
-            <div className="text-center py-12">
-              <p className="text-red-400">Failed to load review cycles</p>
-              <button
-                onClick={refetch}
-                className="mt-4 text-purple-400 hover:text-purple-300"
-              >
-                Try again
-              </button>
-            </div>
-          </div>
+          <ErrorPanel
+            error={error}
+            title={t("errors.failedToLoad")}
+            onRetry={refetch}
+          />
         ) : (
           <>
             {/* Desktop: DataTable */}
@@ -566,16 +550,16 @@ export default function ReviewCyclesPage() {
                           <span className="text-foreground font-medium">{cycle.name}</span>
                         </div>
                         <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColor.text} ${statusColor.bg}`}>
-                          {statusLabels[cycle.status] || cycle.status}
+                          {tStatus(t, cycle.status)}
                         </span>
                       </div>
                       <p className="text-xs text-muted-foreground mb-1">
-                        {cycleTypeLabels[cycle.cycle_type] || cycle.cycle_type}
+                        {tCycleType(t, cycle.cycle_type)}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {new Date(cycle.period_start).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                        {formatDateShort(cycle.period_start)}
                         {" - "}
-                        {new Date(cycle.period_end).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                        {formatDate(cycle.period_end)}
                       </p>
                     </Link>
                   );

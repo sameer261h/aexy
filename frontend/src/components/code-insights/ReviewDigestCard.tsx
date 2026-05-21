@@ -71,9 +71,14 @@ export function ReviewDigestCard({
 
   // The snapshots list isn't filtered server-side by period_type, so we
   // pick the most recent snapshot whose payload's period_type matches.
+  // Guard against a malformed payload (proxy, stale cache, or a future
+  // backend change) returning anything other than `{ snapshots: [...] }`
+  // — a missing `.snapshots` here would crash the whole reviews surface
+  // because this component sits inside the manager detail page.
   const snapshot = useMemo(() => {
-    if (!data) return undefined;
-    return data.snapshots.find((s) => {
+    const snapshots = data?.snapshots;
+    if (!Array.isArray(snapshots)) return undefined;
+    return snapshots.find((s) => {
       const p = (s.payload as DeveloperReviewPayload | undefined)?.period_type;
       return p === period;
     });

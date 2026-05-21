@@ -1,11 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { CheckCircle, Loader2, Search, UserCheck, X } from "lucide-react";
+import { CheckCircle, Loader2, Search, UserCheck } from "lucide-react";
 
 import { ReviewRequest, reviewsApi } from "@/lib/api";
 import { useWorkspaceMembers } from "@/hooks/useWorkspace";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 // Two callers fan into the same picker: a manager assigning reviewers
 // for a team member (`manager_assign` — fires `assignPeerReviewers`,
@@ -63,6 +71,8 @@ export function InvitePeerReviewersModal({
   mode = "manager_assign",
   onAssigned,
 }: Props) {
+  const t = useTranslations("reviews.peerRequests.inviteModal");
+  const tc = useTranslations("common");
   const { members, isLoading } = useWorkspaceMembers(workspaceId);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -140,15 +150,22 @@ export function InvitePeerReviewersModal({
     (members ?? []).filter((m) => m.developer_id !== revieweeDeveloperId).length,
   );
 
-  if (!open) return null;
+  // Pre-Radix-migration the component bailed out here with `if
+  // (!open) return null` and used a hand-rolled `fixed inset-0` div.
+  // Radix Dialog handles mount/unmount via its own `open` prop, so
+  // the early return is gone — but the picker's local state (search
+  // box, selection set) must keep evaluating for the
+  // `existingByReviewer`/`filtered` memos below not to throw on a
+  // stale member list when the dialog re-opens.
 
   const toggle = (developerId: string) => {
     // Block re-selecting reviewers who already have a live request.
     const existingReq = existingByReviewer.get(developerId);
     if (existingReq && isActiveRequest(existingReq.status)) {
-      toast.info(
-        `Already ${REQUEST_STATUS_LABELS[existingReq.status]?.toLowerCase() || existingReq.status} — can't re-invite`,
-      );
+      const statusLabel =
+        REQUEST_STATUS_LABELS[existingReq.status]?.toLowerCase() ||
+        existingReq.status;
+      toast.info(t("alreadyInvited", { status: statusLabel }));
       return;
     }
     setSelected((prev) => {
@@ -158,7 +175,7 @@ export function InvitePeerReviewersModal({
       } else if (next.size < maxReviewers) {
         next.add(developerId);
       } else {
-        toast.error(`Max ${maxReviewers} reviewers per cycle`);
+        toast.error(t("maxReached", { count: maxReviewers }));
       }
       return next;
     });
@@ -166,9 +183,7 @@ export function InvitePeerReviewersModal({
 
   const handleAssign = async () => {
     if (selected.size < minReviewers) {
-      toast.error(
-        `Pick at least ${minReviewers} reviewer${minReviewers === 1 ? "" : "s"}`
-      );
+      toast.error(t("pickAtLeast", { count: minReviewers }));
       return;
     }
     setSubmitting(true);
@@ -191,13 +206,13 @@ export function InvitePeerReviewersModal({
         const failed = results.length - sent;
         if (sent > 0) {
           toast.success(
-            `Invited ${sent} reviewer${sent === 1 ? "" : "s"}${
-              failed > 0 ? ` — ${failed} failed` : ""
-            }`,
+            failed > 0
+              ? t("invitedWithFailures", { count: sent, failed })
+              : t("invited", { count: sent }),
           );
         }
         if (sent === 0) {
-          toast.error("Failed to send invites");
+          toast.error(t("failedToSend"));
           return;
         }
       } else {
@@ -205,7 +220,7 @@ export function InvitePeerReviewersModal({
           reviewer_ids: ids,
           message: trimmedMessage,
         });
-        toast.success(`Invited ${ids.length} reviewer${ids.length === 1 ? "" : "s"}`);
+        toast.success(t("invited", { count: ids.length }));
       }
       setSelected(new Set());
       setMessage("");
@@ -222,46 +237,41 @@ export function InvitePeerReviewersModal({
   const headerCopy =
     mode === "self_nominate"
       ? {
-          title: "Nominate peer reviewers",
-          subtitle:
-            "Pick teammates you'd like to review you this cycle. Each gets a notification and can accept or decline.",
-          submit: "Send request",
-          messagePlaceholder:
-            "e.g. We collaborated on the auth migration this quarter — would love your perspective.",
+          title: t("selfNominate.title"),
+          subtitle: t("selfNominate.subtitle"),
+          submit: t("selfNominate.submit"),
+          messagePlaceholder: t("selfNominate.messagePlaceholder"),
         }
       : {
-          title: "Invite peer reviewers",
-          subtitle: `Pick ${minReviewers}–${maxReviewers} teammates. Each gets a notification and can accept or decline.`,
-          submit: "Invite",
-          messagePlaceholder:
-            "e.g. Focus on cross-team collaboration this cycle.",
+          title: t("managerAssign.title"),
+          subtitle: t("managerAssign.subtitle", {
+            min: minReviewers,
+            max: maxReviewers,
+          }),
+          submit: t("managerAssign.submit"),
+          messagePlaceholder: t("managerAssign.messagePlaceholder"),
         };
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-      onClick={onClose}
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // Block close while a submission is in flight so an accidental
+        // Esc / outside-click doesn't lose the user's selection mid-
+        // network. Same guard `ConfirmDialog` uses.
+        if (submitting) return;
+        if (!next) onClose();
+      }}
     >
-      <div
-        className="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[85vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="px-5 py-4 border-b border-border flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-foreground">
-              {headerCopy.title}
-            </h2>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {headerCopy.subtitle}
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded hover:bg-accent text-muted-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </header>
+      <DialogContent className="max-w-lg flex flex-col gap-0 p-0 max-h-[85vh] overflow-hidden">
+        <DialogHeader className="px-5 py-4 pr-12 border-b border-border space-y-0">
+          <DialogTitle className="text-base font-semibold text-foreground">
+            {headerCopy.title}
+          </DialogTitle>
+          <DialogDescription className="text-xs text-muted-foreground mt-0.5">
+            {headerCopy.subtitle}
+          </DialogDescription>
+        </DialogHeader>
 
         {/* Search */}
         <div className="px-5 py-3 border-b border-border">
@@ -269,16 +279,19 @@ export function InvitePeerReviewersModal({
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <input
               type="text"
-              placeholder="Search by name, email, or role"
+              placeholder={t("searchPlaceholder")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full bg-background border border-border rounded-md pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
             />
           </div>
           <p className="text-[11px] text-muted-foreground mt-1.5">
-            {selected.size} selected · {filtered.length} of {eligibleCount}{" "}
-            workspace member{eligibleCount === 1 ? "" : "s"}
-            {loadingExisting && " · loading existing invites…"}
+            {t("selectionSummary", {
+              selected: selected.size,
+              filtered: filtered.length,
+              eligible: eligibleCount,
+            })}
+            {loadingExisting && ` · ${t("loadingExistingInvites")}`}
           </p>
         </div>
 
@@ -291,7 +304,7 @@ export function InvitePeerReviewersModal({
           )}
           {!isLoading && filtered.length === 0 && (
             <div className="p-5 text-sm text-muted-foreground text-center">
-              No matching workspace members.
+              {t("noMatching")}
             </div>
           )}
           {!isLoading && filtered.length > 0 && (
@@ -360,7 +373,7 @@ export function InvitePeerReviewersModal({
         {/* Optional message */}
         <div className="px-5 py-3 border-t border-border">
           <label className="text-xs text-muted-foreground block mb-1">
-            Message to all selected reviewers (optional)
+            {t("messageLabel")}
           </label>
           <textarea
             value={message}
@@ -378,7 +391,7 @@ export function InvitePeerReviewersModal({
             disabled={submitting}
             className="px-3 py-1.5 text-sm rounded-md border border-border hover:bg-accent transition disabled:opacity-50"
           >
-            Cancel
+            {tc("cancel")}
           </button>
           <button
             onClick={handleAssign}
@@ -390,11 +403,15 @@ export function InvitePeerReviewersModal({
             ) : (
               <UserCheck className="h-3.5 w-3.5" />
             )}
-            {headerCopy.submit} {selected.size > 0 ? selected.size : ""} reviewer
-            {selected.size === 1 ? "" : "s"}
+            {selected.size > 0
+              ? t("submitWithCount", {
+                  action: headerCopy.submit,
+                  count: selected.size,
+                })
+              : t("submitNoCount", { action: headerCopy.submit })}
           </button>
         </footer>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

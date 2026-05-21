@@ -1,11 +1,10 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useTranslations } from "next-intl";
 import { useAuth } from "@/hooks/useAuth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import Image from "next/image";
 import {
   ClipboardCheck,
   Target,
@@ -17,7 +16,6 @@ import {
   Clock,
   AlertCircle,
   AlertTriangle,
-  Filter,
   GitPullRequest,
   GitCommit,
   MessageSquare,
@@ -26,35 +24,20 @@ import {
   Eye,
   X,
   Sparkles,
-  ExternalLink,
   ChevronDown,
-  MoreHorizontal,
   UserCheck,
-  FileText,
-  Zap,
   Lightbulb,
 } from "lucide-react";
 import { useWorkspace, useWorkspaceMembers } from "@/hooks/useWorkspace";
-import { useManagerReviews, useReviewCycles } from "@/hooks/useReviews";
+import {
+  useManagerReviews,
+  useReviewCycles,
+  useTeamSuggestions,
+} from "@/hooks/useReviews";
 import { SearchInput } from "@/components/ui/search-input";
+import { formatDate } from "@/lib/datetime";
+import { getInitials } from "@/lib/strings";
 import { IndividualReview, WorkspaceMember } from "@/lib/api";
-
-// Types for suggestions (to be replaced with real API data when available)
-interface GitHubSuggestion {
-  id: string;
-  memberId: string;
-  memberName: string;
-  type: string;
-  source: string;
-  title: string;
-  description: string;
-  suggestedGoal: string;
-  keywords: string[];
-  commits: number;
-  prs: number;
-  confidence: number;
-  discarded: boolean;
-}
 
 // Types for actionables
 interface Actionable {
@@ -92,10 +75,9 @@ export default function ReviewsManagePage() {
   const tc = useTranslations("common");
 
   const [activeTab, setActiveTab] = useState<"overview" | "actionables" | "suggestions">("overview");
+  const [expandedSuggestion, setExpandedSuggestion] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [suggestions, setSuggestions] = useState<GitHubSuggestion[]>([]);
-  const [expandedSuggestion, setExpandedSuggestion] = useState<string | null>(null);
 
   // Build team member data from workspace members and reviews
   const teamMembers = useMemo(() => {
@@ -107,15 +89,78 @@ export default function ReviewsManagePage() {
         avatar: member.developer_avatar_url,
         role: member.role || "Team Member",
         reviewStatus: memberReview?.status || "pending",
-        goalsCount: 0, // Would need separate API call
-        completedGoals: 0,
-        pendingFeedback: 0,
-        lastActivity: member.joined_at
-          ? new Date(member.joined_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-          : null,
+        lastActivity: member.joined_at ? formatDate(member.joined_at) : null,
       };
     });
   }, [members, reviews]);
+
+  // ---- AI suggestions (team-wide aggregation) ----
+  // The per-developer endpoint analyzes recent activity with an LLM
+  // and returns goal candidates. The manage dashboard aggregates
+  // across the whole team so the manager has one place to spot
+  // growth conversations to seed. Discard state has no backend
+  // counterpart yet, so we persist it in localStorage keyed by
+  // workspace — clearing it across workspaces avoids accidental
+  // cross-team carryover.
+  const { suggestions: rawSuggestions, isLoading: suggestionsLoading } =
+    useTeamSuggestions(teamMembers);
+
+  const discardKey = currentWorkspaceId
+    ? `reviews.manage.suggestions.discarded.${currentWorkspaceId}`
+    : null;
+  const [discardedIds, setDiscardedIds] = useState<Set<string>>(() => new Set());
+  // Hydrate from localStorage once a workspace is known. Always
+  // overwrite — switching to a workspace with no stored entry must
+  // reset to empty, otherwise the previous workspace's discard list
+  // leaks across teams.
+  useEffect(() => {
+    if (!discardKey) {
+      setDiscardedIds(new Set());
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(discardKey);
+      if (!raw) {
+        setDiscardedIds(new Set());
+        return;
+      }
+      const arr: unknown = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        setDiscardedIds(
+          new Set(arr.filter((v): v is string => typeof v === "string")),
+        );
+      } else {
+        setDiscardedIds(new Set());
+      }
+    } catch {
+      // Corrupt JSON in storage — start clean.
+      setDiscardedIds(new Set());
+    }
+  }, [discardKey]);
+  const persistDiscarded = (next: Set<string>) => {
+    setDiscardedIds(next);
+    if (discardKey) {
+      localStorage.setItem(discardKey, JSON.stringify([...next]));
+    }
+  };
+  const handleDiscardSuggestion = (id: string) => {
+    const next = new Set(discardedIds);
+    next.add(id);
+    persistDiscarded(next);
+  };
+  const handleRestoreSuggestion = (id: string) => {
+    const next = new Set(discardedIds);
+    next.delete(id);
+    persistDiscarded(next);
+  };
+  const activeSuggestions = useMemo(
+    () => rawSuggestions.filter(s => !discardedIds.has(s.id)),
+    [rawSuggestions, discardedIds],
+  );
+  const discardedSuggestions = useMemo(
+    () => rawSuggestions.filter(s => discardedIds.has(s.id)),
+    [rawSuggestions, discardedIds],
+  );
 
   // Build actionables from reviews data
   const actionables = useMemo(() => {
@@ -153,21 +198,6 @@ export default function ReviewsManagePage() {
 
     return items;
   }, [reviews, members]);
-
-  const handleDiscardSuggestion = (id: string) => {
-    setSuggestions(suggestions.map(s =>
-      s.id === id ? { ...s, discarded: true } : s
-    ));
-  };
-
-  const handleRestoreSuggestion = (id: string) => {
-    setSuggestions(suggestions.map(s =>
-      s.id === id ? { ...s, discarded: false } : s
-    ));
-  };
-
-  const activeSuggestions = suggestions.filter(s => !s.discarded);
-  const discardedSuggestions = suggestions.filter(s => s.discarded);
 
   const isLoading = authLoading || currentWorkspaceLoading || membersLoading || reviewsLoading;
 
@@ -239,7 +269,7 @@ export default function ReviewsManagePage() {
 
   return (
     <div className="min-h-screen bg-background">
-<main className="max-w-7xl mx-auto px-4 py-8">
+      <main className="max-w-7xl mx-auto px-4 py-8">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-sm mb-6">
           <Link href="/reviews" className="text-muted-foreground hover:text-foreground transition flex items-center gap-1">
@@ -266,10 +296,6 @@ export default function ReviewsManagePage() {
               <Calendar className="h-4 w-4" />
               {t("reviewCycles")}
             </Link>
-            <button className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition text-sm font-medium">
-              <FileText className="h-4 w-4" />
-              {t("exportReport")}
-            </button>
           </div>
         </div>
 
@@ -322,12 +348,18 @@ export default function ReviewsManagePage() {
               </div>
               <span className="text-muted-foreground text-sm">{t("suggestions")}</span>
             </div>
-            <p className="text-2xl font-bold text-foreground">{activeSuggestions.length}</p>
+            <p className="text-2xl font-bold text-foreground">
+              {suggestionsLoading ? "…" : activeSuggestions.length}
+            </p>
           </div>
         </div>
 
         {/* Tabs */}
-        <div role="tablist" className="flex gap-2 mb-6 bg-muted p-1 rounded-lg w-fit">
+        <div
+          role="tablist"
+          aria-label={t("teamOverview")}
+          className="flex gap-2 mb-6 bg-muted p-1 rounded-lg w-fit"
+        >
           {[
             { key: "overview", label: t("teamOverview"), icon: Users },
             { key: "actionables", label: t("actionables"), icon: AlertCircle, count: actionables.length },
@@ -368,16 +400,21 @@ export default function ReviewsManagePage() {
                 placeholder={t("searchTeamMembers")}
                 wrapperClassName="flex-1"
               />
+              <label htmlFor="manage-status-filter" className="sr-only">
+                {t("statusFilter.label")}
+              </label>
               <select
+                id="manage-status-filter"
+                aria-label={t("statusFilter.label")}
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="bg-muted border border-border rounded-lg px-4 py-2 text-foreground focus:outline-none focus:border-primary-500 text-sm"
               >
-                <option value="all">All Status</option>
-                <option value="pending">Pending</option>
-                <option value="self_review_submitted">Self Review Done</option>
-                <option value="peer_review_in_progress">Peer Review</option>
-                <option value="completed">Completed</option>
+                <option value="all">{t("statusFilter.all")}</option>
+                <option value="pending">{t("reviewStatus.pending")}</option>
+                <option value="self_review_submitted">{t("reviewStatus.self_review_submitted")}</option>
+                <option value="peer_review_in_progress">{t("reviewStatus.peer_review_in_progress")}</option>
+                <option value="completed">{t("reviewStatus.completed")}</option>
               </select>
             </div>
 
@@ -393,7 +430,7 @@ export default function ReviewsManagePage() {
                     <div className="flex items-start justify-between mb-4">
                       <div className="flex items-center gap-3">
                         <div className="w-12 h-12 bg-gradient-to-br from-primary-500 to-purple-500 rounded-full flex items-center justify-center text-white font-bold">
-                          {member.name.split(" ").map(n => n[0]).join("")}
+                          {getInitials(member.name)}
                         </div>
                         <div>
                           <h3 className="text-foreground font-medium">{member.name}</h3>
@@ -401,35 +438,20 @@ export default function ReviewsManagePage() {
                         </div>
                       </div>
                       <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${status.bgColor} ${status.color}`}>
-                        {status.label}
+                        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                        {((t as any).has?.(`reviewStatus.${member.reviewStatus}`)
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          ? (t as any)(`reviewStatus.${member.reviewStatus}`)
+                          : status.label) as string}
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
-                      <div className="text-center">
-                        <p className="text-foreground font-semibold">{member.goalsCount}</p>
-                        <p className="text-muted-foreground text-xs">Goals</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-emerald-400 font-semibold">{member.completedGoals}</p>
-                        <p className="text-muted-foreground text-xs">Completed</p>
-                      </div>
-                      <div className="text-center">
-                        <p className={`font-semibold ${member.pendingFeedback > 0 ? "text-amber-400" : "text-muted-foreground"}`}>
-                          {member.pendingFeedback}
-                        </p>
-                        <p className="text-muted-foreground text-xs">Pending</p>
-                      </div>
-                    </div>
 
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-4 border-t border-border">
                       <span className="text-muted-foreground text-xs" data-testid="member-activity">
                         {member.lastActivity ? `Joined ${member.lastActivity}` : t("recentlyJoined")}
                       </span>
                       <div className="flex items-center gap-2">
-                        <button aria-label="Preview member" className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition">
-                          <Eye className="h-4 w-4" />
-                        </button>
                         <Link
                           href={`/reviews/manage/${member.id}`}
                           className="flex items-center gap-1 px-3 py-1.5 bg-accent hover:bg-muted text-foreground rounded-lg text-sm transition"
@@ -454,9 +476,9 @@ export default function ReviewsManagePage() {
                   <div className="flex items-center gap-3">
                     <AlertTriangle className="h-5 w-5 text-amber-400" />
                     <div>
-                      <h3 className="text-amber-400 font-medium">Action Required</h3>
+                      <h3 className="text-amber-400 font-medium">{t("actionable.banner")}</h3>
                       <p className="text-amber-400/70 text-sm">
-                        {actionables.length} items need your attention to keep the review cycle on track
+                        {t("actionable.bannerDescription", { count: actionables.length })}
                       </p>
                     </div>
                   </div>
@@ -487,13 +509,13 @@ export default function ReviewsManagePage() {
                         <h3 className="text-foreground font-medium">{action.title}</h3>
                         {action.priority === "high" && (
                           <span className="px-2 py-0.5 bg-red-500/20 text-red-400 text-xs rounded-full">
-                            High Priority
+                            {t("actionable.highPriority")}
                           </span>
                         )}
                       </div>
                       <p className="text-muted-foreground text-sm">{action.description}</p>
                       {action.dueDate && (
-                        <p className="text-red-400 text-xs mt-1">Due: {action.dueDate}</p>
+                        <p className="text-red-400 text-xs mt-1">{t("actionable.due", { date: action.dueDate })}</p>
                       )}
                     </div>
                   </div>
@@ -503,14 +525,17 @@ export default function ReviewsManagePage() {
                         href={`/reviews/manage/${action.memberId}`}
                         className="flex items-center gap-1 px-3 py-1.5 bg-accent hover:bg-muted text-foreground rounded-lg text-sm transition"
                       >
-                        View
+                        {t("actionable.view")}
                         <ChevronRight className="h-4 w-4" />
                       </Link>
                     )}
                     {action.type === "manager_review_needed" && (
-                      <button className="flex items-center gap-1 px-3 py-1.5 bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-sm transition">
-                        Start Review
-                      </button>
+                      <Link
+                        href={`/reviews/manage/${action.memberId}?tab=feedback`}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-sm transition"
+                      >
+                        {t("actionable.startReview")}
+                      </Link>
                     )}
                   </div>
                 </div>
@@ -533,159 +558,188 @@ export default function ReviewsManagePage() {
 
         {activeTab === "suggestions" && (
           <div role="tabpanel" className="space-y-6">
-            {/* Info Banner */}
             <div className="bg-purple-500/10 border border-purple-500/30 rounded-xl p-4">
               <div className="flex items-center gap-3">
                 <Sparkles className="h-5 w-5 text-purple-400" />
                 <div>
                   <h3 className="text-purple-400 font-medium">{t("aiSuggestionsBanner")}</h3>
-                  <p className="text-purple-400/70 text-sm">
-                    {t("aiSuggestionsDesc")}
-                  </p>
+                  <p className="text-purple-400/70 text-sm">{t("aiSuggestionsDesc")}</p>
                 </div>
               </div>
             </div>
 
-            {activeSuggestions.length === 0 && discardedSuggestions.length === 0 ? (
+            {suggestionsLoading && rawSuggestions.length === 0 ? (
+              <div className="bg-muted rounded-xl border border-border p-12 text-center">
+                <Lightbulb className="w-8 h-8 text-purple-400 mx-auto mb-3 animate-pulse" />
+                <p className="text-muted-foreground text-sm">Analyzing recent activity…</p>
+              </div>
+            ) : activeSuggestions.length === 0 && discardedSuggestions.length === 0 ? (
               <div className="bg-muted rounded-xl border border-border p-12 text-center">
                 <div className="w-16 h-16 bg-purple-500/10 rounded-full flex items-center justify-center mx-auto mb-4">
                   <Lightbulb className="w-8 h-8 text-purple-400" />
                 </div>
                 <h3 className="text-lg font-medium text-foreground mb-2">{t("noSuggestions")}</h3>
-                <p className="text-muted-foreground text-sm max-w-md mx-auto">
-                  {t("noSuggestionsDesc")}
-                </p>
+                <p className="text-muted-foreground text-sm max-w-md mx-auto">{t("noSuggestionsDesc")}</p>
               </div>
             ) : (
               <>
-                {/* Active Suggestions */}
                 <div>
                   <h3 className="text-foreground font-semibold mb-4 flex items-center gap-2">
                     <Lightbulb className="h-5 w-5 text-amber-400" />
-                    Active Suggestions ({activeSuggestions.length})
+                    {t("suggestionList.activeHeader", { count: activeSuggestions.length })}
                   </h3>
-
                   {activeSuggestions.length === 0 ? (
-                    <p className="text-muted-foreground text-sm">No active suggestions</p>
+                    <p className="text-muted-foreground text-sm">
+                      {t("suggestionList.allDiscarded")}
+                    </p>
                   ) : (
                     <div className="space-y-4">
-                      {activeSuggestions.map((suggestion) => (
-                  <div
-                    key={suggestion.id}
-                    className="bg-muted rounded-xl border border-border overflow-hidden"
-                  >
-                    <div
-                      className="p-5 cursor-pointer"
-                      onClick={() => setExpandedSuggestion(
-                        expandedSuggestion === suggestion.id ? null : suggestion.id
-                      )}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-start gap-4">
-                          <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white text-sm font-bold">
-                            {suggestion.memberName.split(" ").map(n => n[0]).join("")}
-                          </div>
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <h3 className="text-foreground font-medium">{suggestion.title}</h3>
-                              <span className="px-2 py-0.5 bg-accent text-muted-foreground text-xs rounded-full">
-                                {suggestion.source}
-                              </span>
-                              <span className={`px-2 py-0.5 rounded-full text-xs ${
-                                suggestion.confidence >= 90 ? "bg-emerald-500/20 text-emerald-400" :
-                                suggestion.confidence >= 80 ? "bg-blue-500/20 text-blue-400" :
-                                "bg-amber-500/20 text-amber-400"
-                              }`}>
-                                {suggestion.confidence}% confidence
-                              </span>
-                            </div>
-                            <p className="text-muted-foreground text-sm mb-2">{suggestion.memberName}</p>
-                            <p className="text-foreground text-sm">{suggestion.description}</p>
-
-                            {/* Activity Stats */}
-                            <div className="flex items-center gap-4 mt-3">
-                              <span className="flex items-center gap-1 text-muted-foreground text-xs">
-                                <GitCommit className="h-3.5 w-3.5" />
-                                {suggestion.commits} commits
-                              </span>
-                              <span className="flex items-center gap-1 text-muted-foreground text-xs">
-                                <GitPullRequest className="h-3.5 w-3.5" />
-                                {suggestion.prs} PRs
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                        <ChevronDown className={`h-5 w-5 text-muted-foreground transition-transform ${
-                          expandedSuggestion === suggestion.id ? "rotate-180" : ""
-                        }`} />
-                      </div>
-                    </div>
-
-                    {/* Expanded Content */}
-                    {expandedSuggestion === suggestion.id && (
-                      <div className="px-5 pb-5 border-t border-border pt-4">
-                        {/* Suggested Goal */}
-                        <div className="bg-background rounded-lg p-4 mb-4">
-                          <div className="flex items-center gap-2 mb-2">
-                            <Target className="h-4 w-4 text-cyan-400" />
-                            <span className="text-cyan-400 text-sm font-medium">Suggested Goal</span>
-                          </div>
-                          <p className="text-foreground">{suggestion.suggestedGoal}</p>
-                        </div>
-
-                        {/* Keywords */}
-                        <div className="mb-4">
-                          <p className="text-muted-foreground text-sm mb-2">Tracking Keywords:</p>
-                          <div className="flex flex-wrap gap-2">
-                            {suggestion.keywords.map((keyword) => (
-                              <span
-                                key={keyword}
-                                className="px-2 py-1 bg-accent text-foreground text-xs rounded-lg"
-                              >
-                                {keyword}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* Actions */}
-                        <div className="flex items-center gap-3">
-                          <Link
-                            href={`/reviews/goals/new?suggestion=${suggestion.id}&member=${suggestion.memberId}&title=${encodeURIComponent(suggestion.suggestedGoal)}&keywords=${encodeURIComponent(suggestion.keywords.join(","))}`}
-                            className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-sm font-medium transition"
+                      {activeSuggestions.map(suggestion => {
+                        const expanded = expandedSuggestion === suggestion.id;
+                        const confidenceClass =
+                          suggestion.confidence >= 0.9
+                            ? "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400"
+                            : suggestion.confidence >= 0.7
+                            ? "bg-blue-500/20 text-blue-600 dark:text-blue-400"
+                            : "bg-amber-500/20 text-amber-600 dark:text-amber-400";
+                        return (
+                          <div
+                            key={suggestion.id}
+                            className="bg-muted rounded-xl border border-border overflow-hidden"
                           >
-                            <Plus className="h-4 w-4" />
-                            {t("convertToGoal")}
-                          </Link>
-                          <Link
-                            href={`/reviews/manage/${suggestion.memberId}`}
-                            className="flex items-center gap-2 px-4 py-2 bg-accent hover:bg-muted text-foreground rounded-lg text-sm transition"
-                          >
-                            <Eye className="h-4 w-4" />
-                            {t("viewMember")}
-                          </Link>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDiscardSuggestion(suggestion.id);
-                            }}
-                            className="flex items-center gap-2 px-4 py-2 text-muted-foreground hover:text-red-400 hover:bg-red-500/10 rounded-lg text-sm transition"
-                          >
-                            <X className="h-4 w-4" />
-                            {t("discard")}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                      ))}
+                            <button
+                              type="button"
+                              aria-expanded={expanded}
+                              onClick={() =>
+                                setExpandedSuggestion(expanded ? null : suggestion.id)
+                              }
+                              className="w-full text-left p-5 cursor-pointer"
+                            >
+                              <div className="flex items-start justify-between gap-4">
+                                <div className="flex items-start gap-4 min-w-0">
+                                  <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0">
+                                    {getInitials(suggestion.memberName)}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                                      <h3 className="text-foreground font-medium">
+                                        {suggestion.title}
+                                      </h3>
+                                      <span className="px-2 py-0.5 bg-accent text-muted-foreground text-xs rounded-full">
+                                        {suggestion.source}
+                                      </span>
+                                      <span
+                                        className={`px-2 py-0.5 rounded-full text-xs ${confidenceClass}`}
+                                      >
+                                        {t("suggestionList.confidence", { percent: Math.round(suggestion.confidence * 100) })}
+                                      </span>
+                                    </div>
+                                    <p className="text-muted-foreground text-sm mb-2">
+                                      {suggestion.memberName}
+                                      {suggestion.skillName ? ` · ${suggestion.skillName}` : ""}
+                                    </p>
+                                    {suggestion.suggestedMeasurable && (
+                                      <p className="text-foreground text-sm">
+                                        {suggestion.suggestedMeasurable}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                                <ChevronDown
+                                  className={`h-5 w-5 text-muted-foreground transition-transform shrink-0 ${
+                                    expanded ? "rotate-180" : ""
+                                  }`}
+                                />
+                              </div>
+                            </button>
+                            {expanded && (
+                              <div className="px-5 pb-5 border-t border-border pt-4">
+                                {suggestion.keywords.length > 0 && (
+                                  <div className="mb-4">
+                                    <p className="text-muted-foreground text-sm mb-2">
+                                      {t("suggestionList.trackingKeywords")}
+                                    </p>
+                                    <div className="flex flex-wrap gap-2">
+                                      {suggestion.keywords.map(keyword => (
+                                        <span
+                                          key={keyword}
+                                          className="px-2 py-1 bg-accent text-foreground text-xs rounded-lg"
+                                        >
+                                          {keyword}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                <div className="flex flex-wrap items-center gap-3">
+                                  <Link
+                                    href={`/reviews/goals/new?member=${suggestion.memberId}&title=${encodeURIComponent(
+                                      suggestion.title,
+                                    )}&keywords=${encodeURIComponent(suggestion.keywords.join(","))}`}
+                                    className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-sm font-medium transition"
+                                  >
+                                    <Plus className="h-4 w-4" />
+                                    {t("convertToGoal")}
+                                  </Link>
+                                  <Link
+                                    href={`/reviews/manage/${suggestion.memberId}`}
+                                    className="flex items-center gap-2 px-4 py-2 bg-accent hover:bg-muted text-foreground rounded-lg text-sm transition"
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                    {t("viewMember")}
+                                  </Link>
+                                  <button
+                                    type="button"
+                                    onClick={e => {
+                                      e.stopPropagation();
+                                      handleDiscardSuggestion(suggestion.id);
+                                    }}
+                                    className="flex items-center gap-2 px-4 py-2 text-muted-foreground hover:text-red-400 hover:bg-red-500/10 rounded-lg text-sm transition"
+                                  >
+                                    <X className="h-4 w-4" />
+                                    {t("discard")}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
+
+                {discardedSuggestions.length > 0 && (
+                  <div>
+                    <h3 className="text-muted-foreground text-sm font-medium mb-3">
+                      {t("suggestionList.discardedHeader", { count: discardedSuggestions.length })}
+                    </h3>
+                    <ul className="space-y-2">
+                      {discardedSuggestions.map(s => (
+                        <li
+                          key={s.id}
+                          className="bg-muted/40 border border-border rounded-lg px-3 py-2 text-sm flex items-center justify-between gap-3"
+                        >
+                          <span className="text-muted-foreground truncate">
+                            <span className="text-foreground">{s.memberName}</span> — {s.title}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleRestoreSuggestion(s.id)}
+                            className="text-xs text-cyan-400 hover:text-cyan-300 transition shrink-0"
+                          >
+                            {t("suggestionList.restore")}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </>
             )}
           </div>
         )}
+
       </main>
     </div>
   );
