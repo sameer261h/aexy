@@ -4961,17 +4961,33 @@ export interface ReviewSubmission {
   created_at: string;
 }
 
+/**
+ * Mirror of the backend `QuestionResponse` Pydantic model. Each
+ * entry under `question_responses` is an object — never a bare
+ * string. The earlier `Record<string, string>` type let a real prod
+ * bug ship; the contract now matches `backend/schemas/review.py:153`.
+ */
+export interface ReviewQuestionResponse {
+  rating?: number | null;
+  comment?: string | null;
+}
+
 export interface ReviewResponses {
   achievements: Achievement[];
   areas_for_growth: GrowthArea[];
-  question_responses: Record<string, string>;
+  question_responses: Record<string, ReviewQuestionResponse>;
   strengths: string[];
   growth_areas: string[];
   // Optional COIN-format top-level fields used by the manager-finalize
   // view as a free-text fallback when no structured Achievement /
   // GrowthArea rows have been supplied. Backend tolerates missing keys.
+  // `impact` + `next_steps` round out the COIN shape; the
+  // manage/[memberId] feedback tab reads all four when a peer
+  // submission carries them.
   context?: string;
   observation?: string;
+  impact?: string;
+  next_steps?: string;
 }
 
 export interface Achievement {
@@ -5204,7 +5220,10 @@ export const reviewsApi = {
     reviewId: string,
     data: {
       responses: ReviewResponses;
-      overall_rating: number;
+      // Optional — the endpoint backs Save Draft, which can run
+      // before the manager has settled on an overall rating. The
+      // finalize call below is where the rating is required.
+      overall_rating?: number | null;
       ratings_breakdown?: Record<string, number>;
       linked_goals?: string[];
       linked_contributions?: string[];

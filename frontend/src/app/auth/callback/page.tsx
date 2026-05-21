@@ -30,6 +30,11 @@ function AuthCallbackContent() {
       }
 
       if (!token) {
+        const existingToken = localStorage.getItem("token");
+        if (existingToken) {
+          await setToken(existingToken);
+          return;
+        }
         window.location.href = "/?error=no_token";
         return;
       }
@@ -41,6 +46,10 @@ function AuthCallbackContent() {
       // silently plant their session in any victim who follows the link.
       // See lib/oauth.ts for the rationale.
       if (!consumeOAuthInflight()) {
+        if (localStorage.getItem("token") === token) {
+          await setToken(token);
+          return;
+        }
         window.location.href = "/?error=oauth_state_missing";
         return;
       }

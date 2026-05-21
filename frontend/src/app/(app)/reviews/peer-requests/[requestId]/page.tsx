@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -20,37 +21,20 @@ import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { useAuth } from "@/hooks/useAuth";
 import { ReviewRequest, reviewsApi } from "@/lib/api";
 
-const STATUS_BADGE: Record<
+// Presentational config per status. Labels live in
+// `reviews.peerRequests.detail.statusBadges.*` so en/hi stay in sync.
+const STATUS_VISUAL: Record<
   string,
-  { label: string; color: string; bg: string; Icon: typeof Clock }
+  { color: string; bg: string; Icon: typeof Clock }
 > = {
-  pending: {
-    label: "Awaiting your decision",
-    color: "text-amber-600 dark:text-amber-400",
-    bg: "bg-amber-500/10",
-    Icon: Clock,
-  },
-  accepted: {
-    label: "Accepted — submit your feedback",
-    color: "text-blue-600 dark:text-blue-400",
-    bg: "bg-blue-500/10",
-    Icon: CheckCircle,
-  },
-  completed: {
-    label: "Completed",
-    color: "text-green-600 dark:text-green-400",
-    bg: "bg-green-500/10",
-    Icon: CheckCircle,
-  },
-  declined: {
-    label: "Declined",
-    color: "text-red-600 dark:text-red-400",
-    bg: "bg-red-500/10",
-    Icon: XCircle,
-  },
+  pending: { color: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500/10", Icon: Clock },
+  accepted: { color: "text-blue-600 dark:text-blue-400", bg: "bg-blue-500/10", Icon: CheckCircle },
+  completed: { color: "text-green-600 dark:text-green-400", bg: "bg-green-500/10", Icon: CheckCircle },
+  declined: { color: "text-red-600 dark:text-red-400", bg: "bg-red-500/10", Icon: XCircle },
 };
 
 export default function PeerRequestDetailPage() {
+  const t = useTranslations("reviews.peerRequests.detail");
   const params = useParams();
   const router = useRouter();
   const requestId = params.requestId as string;
@@ -67,6 +51,36 @@ export default function PeerRequestDetailPage() {
   const [showDeclineForm, setShowDeclineForm] = useState(false);
   const [declineReason, setDeclineReason] = useState("");
   const [isResponding, setIsResponding] = useState(false);
+
+  // Persist the decline reason in sessionStorage keyed by request id
+  // so a 500 from `respondToPeerRequest` (or an accidental tab close
+  // mid-typing) doesn't wipe what the reviewer wrote. Cleared on
+  // successful decline OR when the user cancels the decline form.
+  const declineDraftKey = requestId ? `peerDeclineDraft:${requestId}` : null;
+  // Track which key we hydrated for, so a client-side nav to a
+  // different request id re-runs the hydration instead of getting
+  // stuck on the previous request's state.
+  const hydratedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!declineDraftKey || hydratedKeyRef.current === declineDraftKey) return;
+    hydratedKeyRef.current = declineDraftKey;
+    const saved = sessionStorage.getItem(declineDraftKey);
+    if (saved) {
+      setDeclineReason(saved);
+      setShowDeclineForm(true);
+    } else {
+      setDeclineReason("");
+      setShowDeclineForm(false);
+    }
+  }, [declineDraftKey]);
+  useEffect(() => {
+    if (!declineDraftKey) return;
+    if (declineReason) {
+      sessionStorage.setItem(declineDraftKey, declineReason);
+    } else {
+      sessionStorage.removeItem(declineDraftKey);
+    }
+  }, [declineDraftKey, declineReason]);
 
   // Submission flow (when status === "accepted")
   // Kept narrow on purpose — managers/HR get the full COIN form on the
@@ -85,7 +99,7 @@ export default function PeerRequestDetailPage() {
       const data = await reviewsApi.getPeerRequest(requestId);
       setRequest(data);
     } catch (err: any) {
-      setError(err?.response?.data?.detail || "Failed to load request");
+      setError(err?.response?.data?.detail || t("toasts.loadFailed"));
     } finally {
       setIsLoading(false);
     }
@@ -114,9 +128,9 @@ export default function PeerRequestDetailPage() {
         accept: true,
       });
       setRequest(updated);
-      toast.success("Accepted — write your feedback below");
+      toast.success(t("toasts.accepted"));
     } catch (err: any) {
-      toast.error(err?.response?.data?.detail || "Failed to accept request");
+      toast.error(err?.response?.data?.detail || t("toasts.acceptFailed"));
     } finally {
       setIsResponding(false);
     }
@@ -125,7 +139,7 @@ export default function PeerRequestDetailPage() {
   const handleDecline = async () => {
     if (!request || isResponding) return;
     if (!declineReason.trim()) {
-      toast.error("Add a short reason so the requester knows why");
+      toast.error(t("decline.missingReason"));
       return;
     }
     setIsResponding(true);
@@ -136,9 +150,11 @@ export default function PeerRequestDetailPage() {
       });
       setRequest(updated);
       setShowDeclineForm(false);
-      toast.success("Request declined");
+      setDeclineReason("");
+      if (declineDraftKey) sessionStorage.removeItem(declineDraftKey);
+      toast.success(t("toasts.declined"));
     } catch (err: any) {
-      toast.error(err?.response?.data?.detail || "Failed to decline request");
+      toast.error(err?.response?.data?.detail || t("toasts.declineFailed"));
     } finally {
       setIsResponding(false);
     }
@@ -149,7 +165,7 @@ export default function PeerRequestDetailPage() {
     const cleanStrengths = strengths.map((s) => s.trim()).filter(Boolean);
     const cleanGrowth = growth.map((s) => s.trim()).filter(Boolean);
     if (cleanStrengths.length === 0 && cleanGrowth.length === 0 && !generalNote.trim()) {
-      toast.error("Add at least one strength, growth area, or note before submitting");
+      toast.error(t("form.validationError"));
       return;
     }
     setIsSubmitting(true);
@@ -158,22 +174,25 @@ export default function PeerRequestDetailPage() {
       // version only fills strengths + growth + the question_responses
       // catch-all; achievements / areas_for_growth structured arrays are
       // left empty (the manager-finalization step doesn't require them).
+      // Backend's `question_responses` is typed `dict[str, QuestionResponse]`
+      // where QuestionResponse is `{ rating?: int, comment?: str }`. Sending a
+      // bare string here triggers a 422 — wrap it as `{ comment: ... }`.
       await reviewsApi.submitPeerReview(request.id, user.id, {
         responses: {
           achievements: [],
           areas_for_growth: [],
           question_responses: generalNote.trim()
-            ? { general: generalNote.trim() }
+            ? { general: { comment: generalNote.trim() } }
             : {},
           strengths: cleanStrengths,
           growth_areas: cleanGrowth,
         },
       });
-      toast.success("Peer review submitted — thanks for the feedback");
+      toast.success(t("toasts.submitted"));
       // Refetch to flip the status badge into "Completed".
       await fetchRequest();
     } catch (err: any) {
-      toast.error(err?.response?.data?.detail || "Failed to submit review");
+      toast.error(err?.response?.data?.detail || t("toasts.submitFailed"));
     } finally {
       setIsSubmitting(false);
     }
@@ -200,14 +219,14 @@ export default function PeerRequestDetailPage() {
           />
           <div className="bg-card border border-border rounded-xl p-8 text-center">
             <p className="text-sm text-muted-foreground">
-              {error || "Request not found"}
+              {error || t("notFoundTitle")}
             </p>
             <Link
               href="/reviews/peer-requests"
               className="inline-flex items-center gap-1.5 text-sm text-purple-400 hover:text-purple-300 mt-3"
             >
               <ArrowLeft className="h-4 w-4" />
-              Back to peer requests
+              {t("backLink")}
             </Link>
           </div>
         </main>
@@ -215,8 +234,8 @@ export default function PeerRequestDetailPage() {
     );
   }
 
-  const status = STATUS_BADGE[request.status] || STATUS_BADGE.pending;
-  const StatusIcon = status.Icon;
+  const visual = STATUS_VISUAL[request.status] || STATUS_VISUAL.pending;
+  const StatusIcon = visual.Icon;
   const isMine = request.reviewer_id === user?.id;
 
   return (
@@ -239,28 +258,28 @@ export default function PeerRequestDetailPage() {
               </div>
               <div>
                 <h1 className="text-xl font-semibold text-foreground">
-                  Peer review request
+                  {t("heading")}
                 </h1>
                 <p className="text-sm text-muted-foreground">
-                  from{" "}
+                  {t("from")}{" "}
                   <span className="text-foreground font-medium">
-                    {request.requester_name || "Unknown"}
+                    {request.requester_name || t("unknownRequester")}
                   </span>
                 </p>
               </div>
             </div>
             <span
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${status.color} ${status.bg}`}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${visual.color} ${visual.bg}`}
             >
               <StatusIcon className="h-3.5 w-3.5" />
-              {status.label}
+              {t(`statusBadges.${request.status}` as never)}
             </span>
           </div>
 
           <div className="grid grid-cols-2 gap-4 text-xs text-muted-foreground mb-4">
             <div className="flex items-center gap-2">
               <User className="h-3.5 w-3.5" />
-              Source: <span className="capitalize text-foreground">{request.request_source}</span>
+              {t("source")}: <span className="capitalize text-foreground">{request.request_source}</span>
             </div>
             <div className="flex items-center gap-2">
               <Calendar className="h-3.5 w-3.5" />
@@ -274,7 +293,7 @@ export default function PeerRequestDetailPage() {
 
           {request.message && (
             <div className="bg-muted/40 border border-border rounded-lg p-3 text-sm">
-              <p className="text-xs text-muted-foreground mb-1">Message</p>
+              <p className="text-xs text-muted-foreground mb-1">{t("message")}</p>
               <p className="text-foreground whitespace-pre-wrap">{request.message}</p>
             </div>
           )}
@@ -283,15 +302,14 @@ export default function PeerRequestDetailPage() {
         {/* Action area depends on status */}
         {!isMine && (
           <div className="bg-card border border-border rounded-xl p-6 text-sm text-muted-foreground">
-            This request is for another reviewer. You can view it but not act
-            on it.
+            {request.reviewer_id ? t("readOnly") : t("readOnlyExternal")}
           </div>
         )}
 
         {isMine && request.status === "pending" && !showDeclineForm && (
           <div className="bg-card border border-border rounded-xl p-6 flex flex-col sm:flex-row sm:items-center gap-3">
             <p className="text-sm text-muted-foreground flex-1">
-              Accept to write feedback, or decline with a short reason.
+              {t("pendingActions.prompt")}
             </p>
             <div className="flex gap-2">
               <button
@@ -299,7 +317,7 @@ export default function PeerRequestDetailPage() {
                 disabled={isResponding}
                 className="px-4 py-2 text-sm rounded-lg border border-border text-foreground hover:bg-accent transition disabled:opacity-50"
               >
-                Decline
+                {t("pendingActions.decline")}
               </button>
               <button
                 onClick={handleAccept}
@@ -311,7 +329,7 @@ export default function PeerRequestDetailPage() {
                 ) : (
                   <CheckCircle className="h-4 w-4" />
                 )}
-                Accept
+                {t("pendingActions.accept")}
               </button>
             </div>
           </div>
@@ -320,17 +338,16 @@ export default function PeerRequestDetailPage() {
         {isMine && request.status === "pending" && showDeclineForm && (
           <div className="bg-card border border-border rounded-xl p-6 space-y-3">
             <p className="text-sm text-foreground font-medium">
-              Why are you declining?
+              {t("decline.title")}
             </p>
             <p className="text-xs text-muted-foreground">
-              This is shared with the requester so they know whether to
-              reassign or follow up.
+              {t("decline.subtitle")}
             </p>
             <textarea
               value={declineReason}
               onChange={(e) => setDeclineReason(e.target.value)}
               rows={3}
-              placeholder="e.g. I haven't worked closely with this person this cycle."
+              placeholder={t("decline.placeholder")}
               className="w-full bg-background border border-border rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30"
             />
             <div className="flex justify-end gap-2">
@@ -342,7 +359,7 @@ export default function PeerRequestDetailPage() {
                 disabled={isResponding}
                 className="px-4 py-2 text-sm rounded-lg border border-border hover:bg-accent transition disabled:opacity-50"
               >
-                Cancel
+                {t("decline.cancel")}
               </button>
               <button
                 onClick={handleDecline}
@@ -354,7 +371,7 @@ export default function PeerRequestDetailPage() {
                 ) : (
                   <XCircle className="h-4 w-4" />
                 )}
-                Decline request
+                {t("decline.submit")}
               </button>
             </div>
           </div>
@@ -364,37 +381,36 @@ export default function PeerRequestDetailPage() {
           <div className="bg-card border border-border rounded-xl p-6 space-y-5">
             <div>
               <h2 className="text-base font-semibold text-foreground mb-1">
-                Write your feedback
+                {t("form.heading")}
               </h2>
               <p className="text-xs text-muted-foreground">
-                Add concrete examples. Strengths first, then growth areas —
-                both surface in the manager's finalization view.
+                {t("form.subtitle")}
               </p>
             </div>
 
             <BulletEditor
-              label="Strengths"
-              placeholder="e.g. Drove the auth migration end-to-end and unblocked the mobile team."
+              label={t("form.strengthsLabel")}
+              placeholder={t("form.strengthsPlaceholder")}
               values={strengths}
               onChange={setStrengths}
             />
 
             <BulletEditor
-              label="Growth areas"
-              placeholder="e.g. Could share design rationale earlier in big-scope PRs."
+              label={t("form.growthLabel")}
+              placeholder={t("form.growthPlaceholder")}
               values={growth}
               onChange={setGrowth}
             />
 
             <div>
               <label className="text-xs font-medium text-muted-foreground block mb-1">
-                Anything else for context
+                {t("form.noteLabel")}
               </label>
               <textarea
                 value={generalNote}
                 onChange={(e) => setGeneralNote(e.target.value)}
                 rows={3}
-                placeholder="Free-text notes that don't fit above."
+                placeholder={t("form.notePlaceholder")}
                 className="w-full bg-background border border-border rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
               />
             </div>
@@ -410,7 +426,7 @@ export default function PeerRequestDetailPage() {
                 ) : (
                   <Send className="h-4 w-4" />
                 )}
-                Submit peer review
+                {t("form.submit")}
               </button>
             </div>
           </div>
@@ -420,15 +436,15 @@ export default function PeerRequestDetailPage() {
           <div className="bg-card border border-border rounded-xl p-6">
             <p className="text-sm text-foreground">
               {request.status === "completed"
-                ? "Thanks — your feedback has been submitted."
-                : "You declined this request."}
+                ? t("completedNote")
+                : t("declinedNote")}
             </p>
             <Link
               href="/reviews/peer-requests"
               className="inline-flex items-center gap-1.5 text-sm text-purple-400 hover:text-purple-300 mt-3"
             >
               <ArrowLeft className="h-4 w-4" />
-              Back to peer requests
+              {t("backLink")}
             </Link>
           </div>
         )}
@@ -483,6 +499,7 @@ function BulletEditor({
             {values.length > 1 && (
               <button
                 onClick={() => handleRemove(i)}
+                aria-label={`Remove ${label.toLowerCase()} bullet ${i + 1}`}
                 className="text-xs text-muted-foreground hover:text-destructive pt-2"
                 type="button"
               >

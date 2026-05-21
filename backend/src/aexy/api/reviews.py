@@ -646,12 +646,46 @@ async def list_goals(
 
 @router.get("/goals/suggestions", response_model=list[GoalSuggestion])
 async def get_goal_suggestions(
+    developer_id: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: Developer = Depends(get_current_developer),
 ):
-    """Get goal suggestions for the current user from their learning path."""
+    """Get goal suggestions for a developer from their learning path.
+
+    Accepts an optional `developer_id` query param. Without it, the
+    suggestions are for the calling user — the legacy / dashboard
+    behavior. When passed (used by `/reviews/manage` aggregating
+    suggestions across a team), the caller must either be the same
+    developer or a manager of the target.
+
+    Previously this endpoint ignored `developer_id` entirely and
+    always returned `current_user.id`'s list, so the manager surface
+    saw the same caller's suggestions duplicated for every team
+    member.
+    """
+    target_id = developer_id or str(current_user.id)
+    if developer_id and developer_id != str(current_user.id):
+        # Authorize: only allow if the caller is the target's manager
+        # for any open review cycle. Falling back on developer record
+        # checks keeps the surface usable when the manager hasn't yet
+        # been wired through a review (mirrors how other manager
+        # endpoints in this module gate access).
+        from sqlalchemy import select
+        from aexy.models import IndividualReview
+
+        stmt = select(IndividualReview).where(
+            IndividualReview.developer_id == developer_id,
+            IndividualReview.manager_id == current_user.id,
+        ).limit(1)
+        result = await db.execute(stmt)
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=403,
+                detail="You can only fetch goal suggestions for developers you manage.",
+            )
+
     service = GoalService(db)
-    suggestions = await service.suggest_goals_from_learning_path(str(current_user.id))
+    suggestions = await service.suggest_goals_from_learning_path(target_id)
     return [
         GoalSuggestion(
             title=s.title,
@@ -660,6 +694,8 @@ async def get_goal_suggestions(
             suggested_keywords=s.suggested_keywords,
             learning_milestone_id=s.learning_milestone_id,
             skill_name=s.skill_name,
+            source=s.source,
+            confidence=s.confidence,
         )
         for s in suggestions
     ]

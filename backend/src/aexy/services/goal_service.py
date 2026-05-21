@@ -27,6 +27,14 @@ class GoalSuggestion:
     suggested_keywords: list[str]
     learning_milestone_id: str | None
     skill_name: str | None
+    # `source` describes WHERE the suggestion came from so the manager
+    # surface can group / filter (today only "learning_path"; future
+    # surfaces will add "github_activity", "self_review_growth_area",
+    # etc.). `confidence` is a 0..1 score the frontend renders as a
+    # percentage pill — 1.0 for deterministic learning-path mappings,
+    # lower for LLM-derived suggestions.
+    source: str = "learning_path"
+    confidence: float = 1.0
 
 
 @dataclass

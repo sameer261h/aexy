@@ -14,10 +14,6 @@ import {
   Plus,
   ChevronRight,
   CheckCircle,
-  Clock,
-  AlertCircle,
-  Star,
-  TrendingUp,
   GitPullRequest,
   MessageSquare,
   Settings,
@@ -30,6 +26,7 @@ import {
   useContributionSummary,
 } from "@/hooks/useReviews";
 import { WorkGoal, ReviewCycle } from "@/lib/api";
+import { formatDateShort } from "@/lib/datetime";
 import { GOAL_STATUS_COLORS, REVIEW_CYCLE_STATUS_COLORS, getStatusColor } from "@/lib/statusColors";
 
 // Goal Card Component
@@ -59,7 +56,14 @@ function GoalCard({ goal }: { goal: WorkGoal }) {
         <span className="capitalize">{goal.goal_type.replace("_", " ")}</span>
         <span>{progressPercent}% complete</span>
       </div>
-      <div className="mt-2 h-1.5 bg-accent rounded-full overflow-hidden">
+      <div
+        role="progressbar"
+        aria-label={`${goal.title} progress`}
+        aria-valuenow={progressPercent}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        className="mt-2 h-1.5 bg-accent rounded-full overflow-hidden"
+      >
         <div
           className="h-full bg-cyan-500 rounded-full transition-all"
           style={{ width: `${progressPercent}%` }}
@@ -87,15 +91,7 @@ function CycleCard({ cycle }: { cycle: ReviewCycle }) {
       <h4 className="text-foreground font-medium mb-1">{cycle.name}</h4>
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span>
-          {new Date(cycle.period_start).toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-          })}{" "}
-          -{" "}
-          {new Date(cycle.period_end).toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-          })}
+          {formatDateShort(cycle.period_start)} - {formatDateShort(cycle.period_end)}
         </span>
       </div>
     </Link>
@@ -125,6 +121,10 @@ export default function ReviewsPage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const t = useTranslations("reviews");
   const tc = useTranslations("common");
+  // Peer-request status labels live under `reviews.peerRequests.status.*` —
+  // share that block here so the inline pill matches the dedicated
+  // peer-requests page.
+  const tpr = useTranslations("reviews.peerRequests");
 
   const handleGenerateSummary = async () => {
     if (!developerId) return;
@@ -194,7 +194,7 @@ export default function ReviewsPage() {
 
   return (
     <div className="min-h-screen bg-background">
-<main className="max-w-7xl mx-auto px-4 py-8">
+      <main className="max-w-7xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <div className="flex items-center gap-4">
@@ -307,22 +307,22 @@ export default function ReviewsPage() {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">
-                    Your active review
+                    {t("dashboard.activeReviewBanner.heading")}
                   </p>
                   <p className="text-lg font-semibold text-foreground">
                     {activeCycle.name}
                   </p>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {selfNotStarted
-                      ? "Self-review not started — open to get started"
+                      ? t("dashboard.activeReviewBanner.selfNotStarted")
                       : managerCompleted
-                      ? "Manager review complete — acknowledge to close out"
-                      : "Track self-review, peer nominations, and feedback"}
+                      ? t("dashboard.activeReviewBanner.managerCompleted")
+                      : t("dashboard.activeReviewBanner.inProgress")}
                   </p>
                 </div>
               </div>
               <span className="text-sm text-purple-400 flex items-center gap-1 font-medium">
-                Open your review
+                {t("dashboard.activeReviewBanner.cta")}
                 <ChevronRight className="h-4 w-4" />
               </span>
             </div>
@@ -373,21 +373,34 @@ export default function ReviewsPage() {
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <Target className="h-4 w-4 text-cyan-400" />
-                        <span className="text-foreground text-sm font-medium">Improve API response times by 50%</span>
+                        <span className="text-foreground text-sm font-medium">
+                          {t("dashboard.exampleGoal.title")}
+                        </span>
                       </div>
-                      <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-400 text-xs rounded-full">Performance</span>
+                      <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-400 text-xs rounded-full">
+                        {t("dashboard.exampleGoal.type")}
+                      </span>
                     </div>
-                    <div className="w-full bg-accent rounded-full h-2 mb-2">
+                    <div
+                      role="progressbar"
+                      aria-label={t("dashboard.exampleGoal.title")}
+                      aria-valuenow={65}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      className="w-full bg-accent rounded-full h-2 mb-2"
+                    >
                       <div className="bg-cyan-500 h-2 rounded-full" style={{ width: "65%" }} />
                     </div>
                     <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                      <span>2 key results</span>
-                      <span>3 PRs linked</span>
-                      <span className="text-cyan-400">65% complete</span>
+                      <span>{t("dashboard.exampleGoal.keyResults", { count: 2 })}</span>
+                      <span>{t("dashboard.exampleGoal.prsLinked", { count: 3 })}</span>
+                      <span className="text-cyan-400">
+                        {t("dashboard.exampleGoal.percentComplete", { percent: 65 })}
+                      </span>
                     </div>
                   </div>
                   <p className="text-muted-foreground text-sm text-center">
-                    This is what your goals will look like. Start tracking your progress now.
+                    {t("dashboard.exampleGoalPreview")}
                   </p>
                   <div className="text-center">
                     <Link
@@ -395,7 +408,7 @@ export default function ReviewsPage() {
                       className="inline-flex items-center gap-2 px-5 py-2.5 bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition text-sm font-medium"
                     >
                       <Plus className="h-4 w-4" />
-                      Create Your First Goal
+                      {t("dashboard.exampleGoal.createCta")}
                     </Link>
                   </div>
                 </div>
@@ -474,9 +487,11 @@ export default function ReviewsPage() {
                       className="block bg-muted/50 rounded-lg p-3 hover:bg-muted transition border border-border/50"
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-foreground text-sm">{request.message || "Peer review request"}</span>
-                        <span className="text-xs text-amber-400 px-2 py-0.5 bg-amber-500/10 rounded capitalize">
-                          {request.status}
+                        <span className="text-foreground text-sm">
+                          {request.message || t("dashboard.peerReviewRequestFallback")}
+                        </span>
+                        <span className="text-xs text-amber-400 px-2 py-0.5 bg-amber-500/10 rounded">
+                          {tpr(`status.${request.status}` as never)}
                         </span>
                       </div>
                     </Link>
@@ -558,7 +573,7 @@ export default function ReviewsPage() {
                         <span className="text-purple-400 text-xs font-medium">{t("dashboard.aiInsightPreviewLabel")}</span>
                       </div>
                       <p className="text-muted-foreground text-xs italic">
-                        &quot;Connect your GitHub account to unlock AI-generated contribution narratives that synthesize your commits, PRs, and code reviews into compelling summaries.&quot;
+                        &ldquo;{t("dashboard.aiInsightPreview")}&rdquo;
                       </p>
                     </div>
                   )}
@@ -577,10 +592,10 @@ export default function ReviewsPage() {
                     <GitPullRequest className="w-7 h-7 text-muted-foreground" />
                   </div>
                   <p className="text-muted-foreground text-sm mb-2">
-                    No contribution data yet
+                    {t("dashboard.noContributionData")}
                   </p>
                   <p className="text-muted-foreground text-xs">
-                    Click &quot;Generate Summary&quot; to analyze your GitHub activity
+                    {t("dashboard.noContributionDataHint")}
                   </p>
                 </div>
               )}

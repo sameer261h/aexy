@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { safeInternalPath, stashPostLoginRedirect } from "@/lib/oauth";
-import { setAuthPresenceCookie } from "@/lib/authCookie";
+import { setAuthPresenceCookie, clearAuthPresenceCookie } from "@/lib/authCookie";
+import { repositoriesApi } from "@/lib/api";
 import {
   ArrowRight,
   BarChart3,
@@ -136,14 +137,38 @@ export default function Home() {
     const nextPath = safeInternalPath(rawNext);
     const token = localStorage.getItem("token");
     if (token) {
-      // Sync the middleware-visible presence cookie BEFORE redirecting.
-      // Without this, the middleware (which can't read localStorage) sees
-      // no `aexy_authed` cookie, bounces `/dashboard` back here with
-      // `?next=/dashboard`, and we re-enter this branch — infinite loop
-      // on the black loader. If the token is stale, the dashboard's
-      // useAuth /me call will 401 and the (app) layout clears both.
-      setAuthPresenceCookie();
-      router.replace(nextPath ?? "/dashboard");
+      // We validate the token THROUGH `getOnboardingStatus` before
+      // syncing the middleware-visible `aexy_authed` cookie. The
+      // previous order set the cookie first, which left stale-token
+      // users routed to /onboarding (the layout's own status check
+      // would then "fail open" and grant access to a protected
+      // shell). The fix: validate first, then mark authed.
+      repositoriesApi
+        .getOnboardingStatus()
+        .then((status) => {
+          setAuthPresenceCookie();
+          router.replace(status.completed ? nextPath ?? "/dashboard" : "/onboarding");
+        })
+        .catch((err) => {
+          // 401 means the token is dead — wipe both the localStorage
+          // entry and the presence cookie, then surface the login
+          // CTA on this same page. Any other error (network blip,
+          // 5xx) is transient: keep the user where they are and let
+          // the next click retry.
+          const status = (err as { response?: { status?: number } })
+            ?.response?.status;
+          if (status === 401 || status === 403) {
+            localStorage.removeItem("token");
+            clearAuthPresenceCookie();
+            if (nextPath) stashPostLoginRedirect(nextPath);
+            setIsChecking(false);
+          } else {
+            // Transient — show the loader's idle state so the user
+            // can retry from the landing UI rather than landing on
+            // a half-rendered shell.
+            setIsChecking(false);
+          }
+        });
     } else {
       if (nextPath) stashPostLoginRedirect(nextPath);
       setIsChecking(false);
