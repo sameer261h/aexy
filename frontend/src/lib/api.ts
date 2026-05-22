@@ -2434,7 +2434,13 @@ export interface TeamSkillCoverage {
 
 // Sprint Types
 export type SprintStatus = "planning" | "active" | "review" | "retrospective" | "completed";
-export type TaskStatus = "backlog" | "todo" | "in_progress" | "review" | "done";
+// Free-form status slug — workspaces define their own statuses via the
+// `workspace_task_statuses` table (with optional per-project overrides).
+// The canonical five (backlog/todo/in_progress/review/done) are the seed
+// defaults; the type is string so custom slugs like "on_hold" round-trip
+// without TS gymnastics. Use `useTaskStatuses(workspaceId, projectId)` to
+// enumerate the legal set for a given scope.
+export type TaskStatus = string;
 export type TaskPriority = "critical" | "high" | "medium" | "low";
 export type TaskSourceType = "github_issue" | "jira" | "linear" | "manual";
 
@@ -2472,6 +2478,20 @@ export interface SprintListItem {
   total_points: number;
   completed_points: number;
   settings?: Record<string, unknown>;
+}
+
+// Result shape returned by the bulk cross-project move endpoint. Each
+// entry corresponds to one source task; `status="skipped"` ships an
+// `error_code` so the UI can render which moves failed and why.
+export interface BulkMoveResult {
+  task_id: string;
+  status: "moved" | "skipped";
+  new_task_id: string | null;
+  error_code: string | null;
+}
+
+export interface BulkMoveResponse {
+  results: BulkMoveResult[];
 }
 
 export interface SprintTask {
@@ -3789,6 +3809,47 @@ export const projectTasksApi = {
     const response = await api.patch(`/teams/${teamId}/tasks/${taskId}/move-to-sprint`, null, {
       params: { sprint_id: sprintId },
     });
+    return response.data;
+  },
+
+  /**
+   * Fork a task into another project in the same workspace. A new task is
+   * created in the target project, linked back to the source via a
+   * "duplicates" dependency. The source is archived OR marked done.
+   */
+  moveToProject: async (
+    teamId: string,
+    taskId: string,
+    body: {
+      target_project_id: string;
+      source_action: "archive" | "mark_done";
+      subtask_strategy?: "block" | "cascade" | "orphan";
+    },
+  ): Promise<SprintTask> => {
+    const response = await api.post(
+      `/teams/${teamId}/tasks/${taskId}/move-to-project`,
+      body,
+    );
+    return response.data;
+  },
+
+  /**
+   * Bulk fork-and-link. Per-task results are returned; failures don't
+   * abort the batch.
+   */
+  bulkMoveToProject: async (
+    teamId: string,
+    body: {
+      task_ids: string[];
+      target_project_id: string;
+      source_action: "archive" | "mark_done";
+      subtask_strategy?: "block" | "cascade" | "orphan";
+    },
+  ): Promise<BulkMoveResponse> => {
+    const response = await api.post(
+      `/teams/${teamId}/tasks/bulk-move-to-project`,
+      body,
+    );
     return response.data;
   },
 

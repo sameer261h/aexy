@@ -7,7 +7,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # Sprint Status Types
 SprintStatus = Literal["planning", "active", "review", "retrospective", "completed"]
-TaskStatus = Literal["backlog", "todo", "in_progress", "review", "done"]
+# Free-form status slug — workspaces define their own via
+# workspace_task_statuses (with optional per-project overrides). The
+# canonical five (backlog, todo, in_progress, review, done) are the seed
+# defaults; validation that a slug is known happens at write time against
+# the workspace's status set, not at schema parsing.
+TaskStatus = str
 TaskPriority = Literal["critical", "high", "medium", "low"]
 TaskSourceType = Literal["github_issue", "jira", "linear", "manual", "ticket", "automation"]
 # Status category is a free-form slug validated at write time against the
@@ -838,5 +843,45 @@ class TaskFromTemplateCreate(BaseModel):
     override_story_points: int | None = None
     additional_labels: list[str] = Field(default_factory=list)
     create_subtasks: bool = True
+
+
+# ==================== Cross-project Move Schemas ====================
+
+# "Move" semantics: a new task is created in the target project linked
+# back to the source as a "duplicates" dependency. The source is either
+# archived or marked done at the operator's choice. See
+# SprintTaskService.move_to_project for the contract.
+
+SourceAction = Literal["archive", "mark_done"]
+SubtaskStrategy = Literal["block", "cascade", "orphan"]
+
+
+class TaskMoveToProjectRequest(BaseModel):
+    """Move a single task to another project in the same workspace."""
+
+    target_project_id: str
+    source_action: SourceAction
+    subtask_strategy: SubtaskStrategy = "block"
+
+
+class TaskBulkMoveToProjectRequest(BaseModel):
+    """Move many tasks to another project. Lenient — per-task failures
+    are reported in the response rather than aborting the batch."""
+
+    task_ids: list[str] = Field(..., min_length=1)
+    target_project_id: str
+    source_action: SourceAction
+    subtask_strategy: SubtaskStrategy = "block"
+
+
+class BulkMoveResult(BaseModel):
+    task_id: str
+    status: Literal["moved", "skipped"]
+    new_task_id: str | None = None
+    error_code: str | None = None
+
+
+class BulkMoveResponse(BaseModel):
+    results: list[BulkMoveResult]
 
 

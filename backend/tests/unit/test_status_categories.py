@@ -184,3 +184,28 @@ async def test_update_status_rejects_unknown_category(
             category="ghost-category",
         )
     assert exc.value.code == "unknown_category"
+
+
+@pytest.mark.asyncio
+async def test_create_status_rejects_duplicate_display_name(
+    db_session: AsyncSession,
+) -> None:
+    """Two statuses with the same name in the same scope would render two
+    identical kanban columns. Reject on the second create so the operator
+    notices and picks a distinct name."""
+    ws = await _make_workspace(db_session, "ws-dup-name")
+    service = TaskConfigService(db_session)
+    await service.seed_default_statuses(ws.id)
+    await db_session.commit()
+
+    await service.create_status(workspace_id=ws.id, name="On Hold", category="todo")
+    await db_session.commit()
+
+    with pytest.raises(TaskValidationError) as exc:
+        await service.create_status(workspace_id=ws.id, name="On Hold", category="todo")
+    assert exc.value.code == "status_name_exists"
+
+    with pytest.raises(TaskValidationError) as exc:
+        # Case-insensitive — `on hold` would still collide with the existing row.
+        await service.create_status(workspace_id=ws.id, name="on hold", category="todo")
+    assert exc.value.code == "status_name_exists"

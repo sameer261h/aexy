@@ -93,6 +93,7 @@ import { CycleTimeChart } from "@/components/planning/CycleTimeChart";
 import { CapacityPlanner } from "@/components/planning/CapacityPlanner";
 import { PlanningPoker } from "@/components/planning/PlanningPoker";
 import { ImportTasksModal } from "@/components/planning/ImportTasksModal";
+import { MoveToProjectModal } from "@/components/planning/MoveToProjectModal";
 import {
   CollapsiblePRInsight,
   ReviewerSuggestionsCard,
@@ -1347,6 +1348,7 @@ function EditTaskModal({ task, onClose, onUpdate, onDelete, isUpdating, sprints,
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showRestoredNotice, setShowRestoredNotice] = useState(!!cachedState);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const [showMoveProject, setShowMoveProject] = useState(false);
   const editorRef = useRef<TaskDescriptionEditorRef>(null);
 
   // Cache form state when values change
@@ -2131,6 +2133,20 @@ function EditTaskModal({ task, onClose, onUpdate, onDelete, isUpdating, sprints,
               </label>
             </div>
 
+            {/* Move to project */}
+            {task.workspace_id && task.team_id && (
+              <div className="pt-4 border-t border-border">
+                <button
+                  type="button"
+                  onClick={() => setShowMoveProject(true)}
+                  className="w-full px-2 py-1.5 text-foreground hover:bg-accent rounded text-sm transition flex items-center justify-center gap-2"
+                >
+                  <ArrowRightLeft className="h-4 w-4" />
+                  Move to project…
+                </button>
+              </div>
+            )}
+
             {/* Archive button */}
             <div className="pt-4 border-t border-border">
               {showDeleteConfirm ? (
@@ -2202,6 +2218,21 @@ function EditTaskModal({ task, onClose, onUpdate, onDelete, isUpdating, sprints,
             </button>
           </div>
         </div>
+
+        {showMoveProject && task.workspace_id && task.team_id && (
+          <MoveToProjectModal
+            workspaceId={task.workspace_id}
+            sourceProjectId={task.team_id}
+            taskIds={[task.id]}
+            hasSubtasks={(task.subtasks_count ?? 0) > 0}
+            onClose={() => setShowMoveProject(false)}
+            onMoved={() => {
+              // Source is archived/done — close the detail modal so the
+              // user lands back on the board which will re-fetch.
+              onClose();
+            }}
+          />
+        )}
 
         {showCloseConfirm && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
@@ -2430,6 +2461,7 @@ export default function ProjectBoardPage({
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const [showSprintDropdown, setShowSprintDropdown] = useState(false);
   const [showAssignDropdown, setShowAssignDropdown] = useState(false);
+  const [showBulkMoveProject, setShowBulkMoveProject] = useState(false);
   const [showExportDropdown, setShowExportDropdown] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
@@ -3106,6 +3138,15 @@ export default function ProjectBoardPage({
                 </button>
               </div>
               <div className="flex items-center gap-2">
+                {/* Move to Project */}
+                <button
+                  onClick={() => setShowBulkMoveProject(true)}
+                  className="px-3 py-1.5 bg-accent hover:bg-muted text-foreground rounded-lg text-sm transition flex items-center gap-1.5"
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5" />
+                  Move to Project
+                </button>
+
                 {/* Move to Sprint Dropdown */}
                 <div className="relative">
                   <button
@@ -3549,6 +3590,16 @@ export default function ProjectBoardPage({
               setShowImportTasks(false);
               setImportTargetSprint(null);
             }}
+          />
+        )}
+        {showBulkMoveProject && currentWorkspaceId && (
+          <MoveToProjectModal
+            workspaceId={currentWorkspaceId}
+            sourceProjectId={projectId}
+            taskIds={Array.from(selectedTasks)}
+            hasSubtasks={false}
+            onClose={() => setShowBulkMoveProject(false)}
+            onMoved={() => clearSelection()}
           />
         )}
       </AnimatePresence>

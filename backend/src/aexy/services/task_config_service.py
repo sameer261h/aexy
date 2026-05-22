@@ -58,6 +58,29 @@ class TaskConfigService:
             return WorkspaceTaskStatus.project_id.is_(None)
         return WorkspaceTaskStatus.project_id == project_id
 
+    async def _assert_name_unique(
+        self,
+        workspace_id: str,
+        project_id: str | None,
+        name: str,
+        excluding_id: str | None = None,
+    ) -> None:
+        """Raise ``status_name_exists`` if another active row in this scope
+        already uses this display name (case-insensitive). Two columns titled
+        the same on the kanban is the bug we're preventing — slug
+        deduplication would silently let it through."""
+        stmt = (
+            select(WorkspaceTaskStatus.id)
+            .where(WorkspaceTaskStatus.workspace_id == workspace_id)
+            .where(self._scope_filter(project_id))
+            .where(WorkspaceTaskStatus.is_active == True)  # noqa: E712
+            .where(func.lower(WorkspaceTaskStatus.name) == name.strip().lower())
+        )
+        if excluding_id is not None:
+            stmt = stmt.where(WorkspaceTaskStatus.id != excluding_id)
+        if (await self.db.execute(stmt)).first() is not None:
+            raise TaskValidationError("status_name_exists")
+
     # ==================== Status Management ====================
 
     async def get_statuses(
@@ -156,6 +179,8 @@ class TaskConfigService:
             await self.seed_default_categories(workspace_id)
             if not await self._resolve_category_slug(workspace_id, category, project_id):
                 raise TaskValidationError("unknown_category")
+
+        await self._assert_name_unique(workspace_id, project_id, name)
 
         # Generate unique slug within the (workspace, project) scope.
         base_slug = slugify(name)
@@ -300,6 +325,12 @@ class TaskConfigService:
             await self._snapshot_fallback_projects(str(status.workspace_id))
 
         if name is not None:
+            await self._assert_name_unique(
+                str(status.workspace_id),
+                status.project_id,
+                name,
+                excluding_id=status.id,
+            )
             status.name = name
             # Update slug if name changes
             status.slug = slugify(name)

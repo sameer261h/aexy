@@ -9,6 +9,7 @@ import {
   ArrowLeft,
   Clock,
   FolderKanban,
+  Layers,
   Plus,
   RefreshCw,
   Shield,
@@ -35,10 +36,12 @@ import { useAuth } from "@/hooks/useAuth";
 import { useWorkspace, useWorkspaceMembers } from "@/hooks/useWorkspace";
 import { useProject } from "@/hooks/useProjects";
 import { useTaskStatuses, useStatusCategories } from "@/hooks/useTaskConfig";
-import { TaskStatusConfig } from "@/lib/api";
+import { TaskStatusConfig, WorkspaceStatusCategory } from "@/lib/api";
 import { SortableStatusItem } from "@/components/settings/SortableStatusItem";
 import { StatusModal } from "@/components/settings/StatusModal";
 import { DeleteStatusModal } from "@/components/settings/DeleteStatusModal";
+import { CategoryModal } from "@/components/settings/CategoryModal";
+import { SortableCategoryItem } from "@/components/settings/SortableCategoryItem";
 
 export default function ProjectStatusesPage() {
   const params = useParams();
@@ -64,12 +67,19 @@ export default function ProjectStatusesPage() {
     isDeleting,
   } = useTaskStatuses(currentWorkspaceId, projectId);
 
-  const { categories: statusCategories } = useStatusCategories(
-    currentWorkspaceId,
-    projectId,
-  );
+  const {
+    categories: statusCategories,
+    isLoading: categoriesLoading,
+    createCategory,
+    updateCategory,
+    deleteCategory,
+    isCreating: isCreatingCategory,
+    isUpdating: isUpdatingCategory,
+  } = useStatusCategories(currentWorkspaceId, projectId);
 
   const [showStatusModal, setShowStatusModal] = useState(false);
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<WorkspaceStatusCategory | null>(null);
   const [editingStatus, setEditingStatus] = useState<TaskStatusConfig | null>(null);
   const [deletingStatus, setDeletingStatus] = useState<TaskStatusConfig | null>(null);
 
@@ -106,6 +116,54 @@ export default function ProjectStatusesPage() {
       toast.success("Status created");
     }
     setEditingStatus(null);
+  };
+
+  const handleSaveCategory = async (data: {
+    slug?: string;
+    label: string;
+    color: string;
+    semantics: "open" | "active" | "done" | "cancelled";
+  }) => {
+    if (editingCategory) {
+      await updateCategory({
+        categoryId: editingCategory.id,
+        data: {
+          label: data.label,
+          color: data.color,
+          semantics: data.semantics,
+        },
+      });
+      toast.success("Category updated");
+    } else {
+      await createCategory({
+        slug: data.slug!,
+        label: data.label,
+        color: data.color,
+        semantics: data.semantics,
+      });
+      toast.success("Category created");
+    }
+    setEditingCategory(null);
+  };
+
+  const handleDeleteCategory = async (cat: WorkspaceStatusCategory) => {
+    const inUse = statuses.some((s) => s.category === cat.slug);
+    if (inUse) {
+      toast.error(
+        `Can't delete "${cat.label}" — statuses still use it. Reassign them first.`,
+      );
+      return;
+    }
+    if (!confirm(`Delete category "${cat.label}"?`)) return;
+    try {
+      await deleteCategory(cat.id);
+      toast.success("Category deleted");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to delete";
+      toast.error(/category_in_use/i.test(msg)
+        ? "This category is still in use by one or more statuses."
+        : msg);
+    }
   };
 
   const handleConfirmDelete = async (migrateTo: string | null) => {
@@ -198,6 +256,65 @@ export default function ProjectStatusesPage() {
             <Workflow className="h-4 w-4" />
             Statuses
           </Link>
+        </div>
+
+        {/* Categories section — the buckets statuses can belong to. Ships
+            with six canonical buckets (backlog, todo, in_progress,
+            in_review, done, cancelled) seeded per workspace; admins can
+            rename, recolor, or add more. Burndown/velocity branches on
+            semantics so renaming a slug is safe. */}
+        <div className="mb-8">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+            <div className="flex items-start gap-3">
+              <Layers className="h-5 w-5 text-muted-foreground mt-0.5" />
+              <div>
+                <h2 className="text-lg font-medium text-foreground">Categories</h2>
+                <p className="text-muted-foreground text-sm">
+                  Buckets that statuses belong to. Each carries a semantics
+                  flag (Open / Active / Done / Cancelled) used for burndown.
+                </p>
+              </div>
+            </div>
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  setEditingCategory(null);
+                  setShowCategoryModal(true);
+                }}
+                className="flex items-center gap-2 px-3 py-1.5 bg-muted hover:bg-accent text-foreground rounded-lg transition text-sm"
+              >
+                <Plus className="h-4 w-4" />
+                Add Category
+              </button>
+            )}
+          </div>
+
+          {categoriesLoading ? (
+            <div className="space-y-2">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-14 bg-card rounded-lg animate-pulse" />
+              ))}
+            </div>
+          ) : statusCategories.length > 0 ? (
+            <div className="space-y-2">
+              {statusCategories.map((cat) => (
+                <SortableCategoryItem
+                  key={cat.id}
+                  category={cat}
+                  isAdmin={isAdmin}
+                  onEdit={(c) => {
+                    setEditingCategory(c);
+                    setShowCategoryModal(true);
+                  }}
+                  onDelete={handleDeleteCategory}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="bg-card rounded-xl p-8 text-center text-sm text-muted-foreground">
+              No categories yet — they'll seed automatically when you save your first status.
+            </div>
+          )}
         </div>
 
         {/* Header */}
@@ -321,6 +438,18 @@ export default function ProjectStatusesPage() {
           }}
           onSave={handleSaveStatus}
           isSaving={isCreating || isUpdating}
+        />
+      )}
+
+      {showCategoryModal && (
+        <CategoryModal
+          category={editingCategory}
+          onClose={() => {
+            setShowCategoryModal(false);
+            setEditingCategory(null);
+          }}
+          onSave={handleSaveCategory}
+          isSaving={isCreatingCategory || isUpdatingCategory}
         />
       )}
 
