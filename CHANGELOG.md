@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.36] - 2026-05-23
+
+### Remove BubbleMenu from DocumentEditor (selection crash, take 2)
+
+0.8.35 gated BubbleMenu on `editorMode === "rich"` thinking the
+crash was a mode-switch race. The user kept hitting the same
+`removeChild` error while selecting text in rich mode — the gate
+fixed the switch path but not the steady-state path. Re-diagnosis:
+
+- `@tiptap/react`'s `BubbleMenu` wraps Tippy.js.
+- Tippy appends its tooltip node into `document.body`, outside the
+  React tree.
+- Every `selectionchange` causes BubbleMenu to remount its Tippy
+  instance, moving DOM nodes between body and the editor.
+- React's reconciler then tries to remove a node from a parent that
+  no longer owns it → `NotFoundError: Failed to execute 'removeChild'
+  on 'Node'` in the commit phase.
+
+This is a known incompatibility between `@tiptap/react`'s BubbleMenu
+and React 18+ concurrent reconciliation
+(ueberdosis/tiptap#3580, #2658).
+
+Removed the BubbleMenu entirely. The top `EditorToolbar` already
+exposes Bold / Italic / Underline / Code, so the affordance isn't
+lost — only the floating bubble. If we want the bubble UX back, the
+replacement should use `@floating-ui/react` (in-tree positioning)
+rather than Tippy.
+
 ## [0.8.35] - 2026-05-23
 
 Two docs surface fixes.
