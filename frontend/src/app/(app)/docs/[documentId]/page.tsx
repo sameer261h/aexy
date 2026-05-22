@@ -156,7 +156,16 @@ export default function DocumentPage() {
         title={document.title}
         icon={document.icon}
         onSave={handleSave}
-        isLoading={isUpdating}
+        // NOTE: do NOT pass `isLoading={isUpdating}` here.
+        // `isUpdating` flips true→false on every keystroke-triggered save
+        // because of the debounced autosave inside DocumentEditor. Passing
+        // it as `isLoading` makes DocumentEditor render its skeleton on
+        // each save, unmounting the TipTap editor and losing the cursor
+        // (the symptom: "doc refreshes and cursor becomes deselected
+        // after typing"). The page-level initial-load skeleton above
+        // already covers the only case where we want to hide the editor.
+        // The in-editor save indicator (Cloud / Saved / Saving…) shows
+        // save state without unmounting anything.
         autoSave={true}
         autoSaveDelay={1000}
         breadcrumb={<DocumentBreadcrumb workspaceId={currentWorkspaceId} documentId={documentId} />}

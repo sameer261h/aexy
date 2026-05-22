@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.37] - 2026-05-23
+
+### Doc editor no longer unmounts on every save
+
+Reported: "after typing the doc refreshes and the cursor becomes
+deselected".
+
+Root cause was on the page, not the editor. `/docs/[documentId]/page.tsx`
+was passing `isLoading={isUpdating}` to `DocumentEditor`, where
+`isUpdating` is the mutation-pending flag from `useDocument`'s
+`updateContent` mutation. `DocumentEditor` returns its loading skeleton
+when `isLoading` is true — so every debounced autosave kicked off by
+typing flipped `isUpdating` to true, the editor was replaced by the
+skeleton, then `isUpdating` flipped back to false and the editor was
+remounted — fresh TipTap instance, fresh selection, cursor lost.
+
+Removed the prop. The page-level initial-load guard (above the
+component) still shows a skeleton on first fetch; once the document
+is loaded the editor stays mounted, and the in-editor "Saving… / Saved"
+indicator reflects save state without tearing anything down.
+
 ## [0.8.36] - 2026-05-23
 
 ### Remove BubbleMenu from DocumentEditor (selection crash, take 2)
