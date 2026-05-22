@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { useEditor, EditorContent } from "@tiptap/react";
+import { useEditor, EditorContent, BubbleMenu } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Link from "@tiptap/extension-link";
@@ -22,7 +22,15 @@ import { InlineDatabase } from "./extensions/InlineDatabase";
 import { SlashCommands } from "./extensions/SlashCommands";
 import { EditorToolbar } from "./EditorToolbar";
 import { debounce } from "@/lib/utils";
-import { Check, Cloud, Smile } from "lucide-react";
+import {
+  Check,
+  Cloud,
+  Smile,
+  Bold,
+  Italic,
+  Underline as UnderlineIcon,
+  Code,
+} from "lucide-react";
 
 const lowlight = createLowlight(common);
 
@@ -82,6 +90,18 @@ export function DocumentEditor({
   useEffect(() => {
     setLocalIcon(icon || "📄");
   }, [icon]);
+
+  // Escape closes the emoji picker. Audit caught the picker staying
+  // open through multiple intermediate actions because only the
+  // backdrop click and the toggle button were wired.
+  useEffect(() => {
+    if (!showEmojiPicker) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowEmojiPicker(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [showEmojiPicker]);
 
   // Create stable debounced save function
   const debouncedSave = useMemo(
@@ -177,8 +197,16 @@ export function DocumentEditor({
     immediatelyRender: false,
     editorProps: {
       attributes: {
+        // `max-w-none` was the audit's reading-measure finding —
+        // paragraphs ran ~140cpl on a 1440 viewport. Cap at max-w-3xl
+        // (~672px, ~65cpl) and centre inside the editor canvas. The
+        // arbitrary-variant `[&_ul]:list-disc` etc. is used instead of
+        // the typography-plugin `prose-ul:` modifier because the
+        // outer ProseMirror class also has a long inline className
+        // (DocumentEditor.tsx:411) where Tailwind's preflight reset
+        // would otherwise win the cascade and strip bullets.
         class:
-          "prose dark:prose-invert max-w-none focus:outline-none min-h-[500px] px-4 py-2 prose-p:text-foreground prose-headings:text-foreground prose-strong:text-foreground prose-li:text-foreground",
+          "prose dark:prose-invert max-w-3xl mx-auto focus:outline-none min-h-[500px] px-4 py-2 prose-p:text-foreground prose-headings:text-foreground prose-strong:text-foreground prose-li:text-foreground [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_li]:my-1",
       },
     },
     onUpdate: ({ editor }) => {
@@ -220,15 +248,10 @@ export function DocumentEditor({
     [autoSave, debouncedSave]
   );
 
-  // Manual save
-  const handleManualSave = useCallback(() => {
-    if (!editor) return;
-    onSaveRef.current({
-      title: localTitle,
-      content: editor.getJSON() as Record<string, unknown>,
-      icon: localIcon,
-    });
-  }, [editor, localTitle, localIcon]);
+  // `handleManualSave` removed — autoSave covers every change path
+  // (rich/markdown), the dual-affordance was an audit finding. If a
+  // future force-save UX is needed, prefer keyboard (Mod+S) over a
+  // toolbar button.
 
   // Toggle editor mode
   const handleModeToggle = useCallback(() => {
@@ -389,16 +412,79 @@ export function DocumentEditor({
           </div>
         </div>
 
-        {/* Editor Toolbar */}
+        {/* Editor Toolbar — no manual Save button: autosave handles it.
+            Audit found the dual affordance created "is autosave actually
+            working?" doubt; aligning with Notion/Linear/Craft we drop
+            the Save and surface only the autosave status. */}
         {editor && !readOnly && (
           <div className="bg-background/95 backdrop-blur-xl border-b border-border/50 shadow-lg shadow-black/10">
             <EditorToolbar
               editor={editor}
-              onSave={handleManualSave}
               editorMode={editorMode}
               onModeToggle={handleModeToggle}
             />
           </div>
+        )}
+
+        {/* Floating BubbleMenu — appears when text is selected so users
+            don't have to fly the cursor up to the top toolbar to format.
+            Previously this only existed in the (disabled) collaborative
+            editor path; bringing it into the default editor.
+            Note: @tiptap/react's BubbleMenu only forwards `className`
+            (see node_modules/@tiptap/react/dist/index.cjs), so the
+            data-testid lives on the inner wrapper, not the menu root. */}
+        {editor && !readOnly && (
+          <BubbleMenu
+            editor={editor}
+            tippyOptions={{ duration: 100, placement: "top" }}
+            className="bg-background border border-border rounded-lg shadow-xl p-1"
+          >
+            <div
+              data-testid="docs-bubble-menu"
+              className="flex items-center gap-0.5"
+            >
+              <button
+                type="button"
+                aria-label="Bold"
+                onClick={() => editor.chain().focus().toggleBold().run()}
+                className={`p-1.5 rounded transition-colors ${
+                  editor.isActive("bold") ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
+              >
+                <Bold className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                aria-label="Italic"
+                onClick={() => editor.chain().focus().toggleItalic().run()}
+                className={`p-1.5 rounded transition-colors ${
+                  editor.isActive("italic") ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
+              >
+                <Italic className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                aria-label="Underline"
+                onClick={() => editor.chain().focus().toggleUnderline().run()}
+                className={`p-1.5 rounded transition-colors ${
+                  editor.isActive("underline") ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
+              >
+                <UnderlineIcon className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                aria-label="Inline code"
+                onClick={() => editor.chain().focus().toggleCode().run()}
+                className={`p-1.5 rounded transition-colors ${
+                  editor.isActive("code") ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
+              >
+                <Code className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </BubbleMenu>
         )}
       </div>
 

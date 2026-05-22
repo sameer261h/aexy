@@ -5,6 +5,105 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.23] - 2026-05-22
+
+In-app docs UX bug-fix sweep across three clusters (shell, editor,
+a11y), TDD against 13 new E2E specs. Captures every fix in a failing-
+then-passing test so the regressions can't sneak back. Cmd+K now
+actually searches docs, mobile is no longer unusable, the editor
+gets a real reading measure plus bullets + a floating BubbleMenu,
+and the sidebar exposes tree semantics to assistive tech.
+
+### Cluster 1 — shell fixes
+
+- **`Cmd+K` in `/docs` opens the doc-scoped SearchModal, not the
+  global CommandPalette.** Two `keydown` listeners on `document` were
+  racing — the app-shell global was mounted earlier and won. The docs
+  layout now installs its listener in capture phase and calls
+  `stopImmediatePropagation()`, so the global never sees the event
+  on docs routes. (`DocsLayoutClient.tsx`)
+- **Sidebar collapses to a drawer below `md`.** The hard-coded
+  `w-60 flex-shrink-0` was eating ~62 % of a 390 px viewport. Sidebar
+  now slides off-screen via `-translate-x-full md:translate-x-0`,
+  with a `data-testid="docs-mobile-menu-trigger"` hamburger in a new
+  mobile top bar (`pl-14` so it doesn't collide with the app-shell's
+  fixed-position trigger) and a backdrop that closes on tap.
+  Drawer auto-closes on route change.
+- **Delete confirmation is a styled dialog, not `window.confirm()`.**
+  `NotionSidebar.tsx` now opens the existing `ConfirmDialog` from
+  `components/ui/confirm-dialog.tsx` with `tone="danger"` and a
+  "Delete" primary action. The native browser dialog (which broke
+  visual consistency with the dark theme) is gone.
+- **Inert menu items hidden until implemented.** "Duplicate" and
+  "Manage Space" were `console.log("…")` TODOs surfaced as live
+  affordances. NotionSidebar no longer passes the `onDuplicate` /
+  `onManageSpace` props, so DocumentItem's existing
+  `{onDuplicate && (…)}` guards collapse the rows. Real handlers
+  can be wired later without changing markup.
+- **`/docs/files` no longer strands on "Loading document…".**
+  The bare prefix matched the `[documentId]` catch-all with
+  `documentId="files"` and loaded forever. A new
+  `app/(app)/docs/files/page.tsx` redirects to `/docs/drive`.
+
+### Cluster 2 — editor fixes
+
+- **Reading-measure cap.** `prose ... max-w-none` (which ran ~140
+  cpl on 1440 px viewports) replaced with
+  `prose ... max-w-3xl mx-auto` (~672 px / ~65 cpl). Editor
+  spec asserts `≤ 900 px` at 1440 desktop.
+  (`DocumentEditor.tsx:181`)
+- **Lists render visible markers again.** Tailwind's preflight
+  reset was stripping bullets off bare `<ul>`/`<ol>` inside the
+  ProseMirror because typography-plugin `prose-ul:` modifiers
+  weren't resolving in the cascade. Switched to arbitrary-variant
+  utilities (`[&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal
+  [&_ol]:pl-6 [&_li]:my-1`) which carry enough specificity.
+- **Emoji picker closes on Escape.** Audit caught the picker
+  staying open across three intermediate actions. Added a
+  scoped `keydown` listener while the picker is mounted; on
+  Escape it sets `showEmojiPicker(false)`.
+- **Manual `Save` button removed.** `autoSave` is on by default
+  with a 1 s debounce; the duplicate Save button created
+  "is autosave actually working?" doubt. Drop the `onSave` prop
+  passed to EditorToolbar — the `{onSave && (…)}` guard already
+  collapses the row. `handleManualSave` callback also removed.
+- **Floating BubbleMenu is back in the non-collab path.** The
+  BubbleMenu only existed in `CollaborativeEditor.tsx`, which is
+  hard-disabled by `collaborationEnabled = false`. DocumentEditor
+  now mounts its own BubbleMenu with Bold/Italic/Underline/Code
+  controls. `data-testid="docs-bubble-menu"` lives on an inner
+  wrapper because `@tiptap/react@2.27.1` BubbleMenu only forwards
+  `className` to the rendered div (verified by reading
+  `node_modules/@tiptap/react/dist/index.cjs`).
+
+### Cluster 3 — ARIA / accessibility
+
+- **SearchModal exposes the right contract.** `role="dialog"` +
+  `aria-modal="true"` + `aria-label="Search documents"` on the
+  modal root. Screen-reader users can now identify the overlay.
+- **Sidebar is a real tree.** The scrollable content container
+  gets `role="tree"` + `aria-label="Documents"`. Each
+  DocumentItem row gets `role="treeitem"` + `aria-selected`
+  (driven by `isSelected`) + `aria-expanded` when it has children.
+  Active document is `aria-selected="true"`.
+
+### Tests
+
+13 new E2E specs under `frontend/e2e/docs-*.spec.ts`, all live-
+backend, no LLM (use `backendOnlyReady` + `setupAiLiveAuth`).
+Spec-first per cluster: write specs → run them red → implement
+fixes → run them green. Files:
+
+- `docs-cmdk-doc-search`, `docs-mobile-sidebar` (×2),
+  `docs-styled-confirm-dialog`, `docs-todo-menu-items-hidden`,
+  `docs-files-route-redirect`
+- `docs-editor-reading-measure`, `docs-editor-list-bullets`,
+  `docs-editor-emoji-picker-escape`, `docs-editor-no-save-button`,
+  `docs-editor-bubble-menu`
+- `docs-a11y-search-modal`, `docs-a11y-doc-tree`
+
+Full suite passes in ~22 s.
+
 ## [0.8.22] - 2026-05-22
 
 AI/automation E2E coverage expansion: the workflow builder now has a

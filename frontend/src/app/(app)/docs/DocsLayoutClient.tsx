@@ -7,7 +7,7 @@ import { NotionSidebar } from "@/components/docs/sidebar";
 import { SearchModal } from "@/components/docs/SearchModal";
 import { NotificationInbox } from "@/components/docs/NotificationInbox";
 import { useRouter, useParams } from "next/navigation";
-import { Building2, Plus } from "lucide-react";
+import { Building2, Plus, Menu, X } from "lucide-react";
 
 export default function DocsLayoutClient({
   children,
@@ -31,6 +31,10 @@ export default function DocsLayoutClient({
   // Modal states
   const [showSearch, setShowSearch] = useState(false);
   const [showInbox, setShowInbox] = useState(false);
+  // Mobile drawer state — desktop ignores this; the sidebar is always
+  // visible there. Below `md` we hide the sidebar off-screen and a
+  // hamburger toggles it.
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -39,18 +43,29 @@ export default function DocsLayoutClient({
     setMounted(true);
   }, []);
 
-  // Global keyboard shortcut for search
+  // Cmd+K in /docs scope must reach the doc-scoped SearchModal, not
+  // the app-shell global CommandPalette. Both listen on `document`;
+  // without `capture: true` + stopImmediatePropagation the global wins
+  // (it's mounted earlier in the layout tree). Capture phase here runs
+  // BEFORE the bubble-phase listeners the global hook installs.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
+        e.stopImmediatePropagation();
         setShowSearch((prev) => !prev);
       }
     };
-
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
+    document.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () =>
+      document.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, []);
+
+  // Close the mobile drawer whenever the route changes — without this
+  // the drawer stays open after picking a doc from the sidebar.
+  useEffect(() => {
+    setMobileSidebarOpen(false);
+  }, [params?.documentId]);
 
   const handleCreateWorkspace = async () => {
     setIsCreatingWorkspace(true);
@@ -94,7 +109,7 @@ export default function DocsLayoutClient({
   if (workspaces.length === 0) {
     return (
       <div className="min-h-screen bg-background flex flex-col">
-<div className="flex-1 flex items-center justify-center">
+        <div className="flex-1 flex items-center justify-center">
           <div className="text-center max-w-md mx-auto px-4">
             <div className="w-16 h-16 bg-gradient-to-br from-primary-500/20 to-purple-500/20 rounded-2xl flex items-center justify-center mx-auto mb-6">
               <Building2 className="h-8 w-8 text-primary-400" />
@@ -129,11 +144,56 @@ export default function DocsLayoutClient({
   }
 
   return (
-    <div className="h-screen bg-background flex overflow-hidden">
-      {/* Main Layout */}
+    <div className="h-screen bg-background flex flex-col md:flex-row overflow-hidden">
+      {/* Mobile top bar — visible below md, holds the docs-scoped
+          hamburger. Sits to the right of pl-14 so the app-shell's
+          fixed top-left sidebar trigger (also at top-4 left-4) doesn't
+          overlap the docs hamburger. */}
+      <div className="md:hidden flex items-center gap-2 pl-14 pr-3 h-12 border-b border-border/50 bg-background/95 backdrop-blur-xl flex-shrink-0">
+        <button
+          type="button"
+          onClick={() => setMobileSidebarOpen(true)}
+          aria-label="Open docs sidebar"
+          data-testid="docs-mobile-menu-trigger"
+          className="p-2 hover:bg-accent rounded-lg transition"
+        >
+          <Menu className="h-5 w-5 text-foreground" />
+        </button>
+        <span className="text-foreground font-semibold text-sm">Docs</span>
+      </div>
+
+      {/* Mobile backdrop — only renders when drawer is open. */}
+      {mobileSidebarOpen && (
+        <div
+          className="md:hidden fixed inset-0 bg-black/40 z-40"
+          onClick={() => setMobileSidebarOpen(false)}
+          aria-hidden
+        />
+      )}
+
+      {/* Main Layout — sidebar + content */}
       <div className="flex flex-1 min-h-0">
-        {/* Notion-style Sidebar */}
-        <div className="w-60 flex-shrink-0 h-full">
+        {/* Sidebar:
+            - desktop (md+): static 240px column
+            - mobile: fixed-position drawer, translated off-screen until open */}
+        <div
+          data-testid="docs-sidebar"
+          className={`w-60 flex-shrink-0 h-full bg-card transition-transform duration-200
+            fixed inset-y-0 left-0 z-50 md:relative md:translate-x-0
+            ${mobileSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
+          `}
+        >
+          {/* Mobile-only close affordance inside the drawer */}
+          <div className="md:hidden flex justify-end px-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setMobileSidebarOpen(false)}
+              aria-label="Close sidebar"
+              className="p-2 hover:bg-accent rounded-lg transition"
+            >
+              <X className="h-4 w-4 text-muted-foreground" />
+            </button>
+          </div>
           {currentWorkspaceId && (
             <NotionSidebar
               selectedDocumentId={params?.documentId as string | undefined}

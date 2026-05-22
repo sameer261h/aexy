@@ -5,6 +5,224 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.23] - 2026-05-22
+
+In-app docs UX bug-fix sweep across three clusters (shell, editor,
+a11y), TDD against 13 new E2E specs. Captures every fix in a failing-
+then-passing test so the regressions can't sneak back. Cmd+K now
+actually searches docs, mobile is no longer unusable, the editor
+gets a real reading measure plus bullets + a floating BubbleMenu,
+and the sidebar exposes tree semantics to assistive tech.
+
+### Cluster 1 — shell fixes
+
+- **`Cmd+K` in `/docs` opens the doc-scoped SearchModal, not the
+  global CommandPalette.** Two `keydown` listeners on `document` were
+  racing — the app-shell global was mounted earlier and won. The docs
+  layout now installs its listener in capture phase and calls
+  `stopImmediatePropagation()`, so the global never sees the event
+  on docs routes. (`DocsLayoutClient.tsx`)
+- **Sidebar collapses to a drawer below `md`.** The hard-coded
+  `w-60 flex-shrink-0` was eating ~62 % of a 390 px viewport. Sidebar
+  now slides off-screen via `-translate-x-full md:translate-x-0`,
+  with a `data-testid="docs-mobile-menu-trigger"` hamburger in a new
+  mobile top bar (`pl-14` so it doesn't collide with the app-shell's
+  fixed-position trigger) and a backdrop that closes on tap.
+  Drawer auto-closes on route change.
+- **Delete confirmation is a styled dialog, not `window.confirm()`.**
+  `NotionSidebar.tsx` now opens the existing `ConfirmDialog` from
+  `components/ui/confirm-dialog.tsx` with `tone="danger"` and a
+  "Delete" primary action. The native browser dialog (which broke
+  visual consistency with the dark theme) is gone.
+- **Inert menu items hidden until implemented.** "Duplicate" and
+  "Manage Space" were `console.log("…")` TODOs surfaced as live
+  affordances. NotionSidebar no longer passes the `onDuplicate` /
+  `onManageSpace` props, so DocumentItem's existing
+  `{onDuplicate && (…)}` guards collapse the rows. Real handlers
+  can be wired later without changing markup.
+- **`/docs/files` no longer strands on "Loading document…".**
+  The bare prefix matched the `[documentId]` catch-all with
+  `documentId="files"` and loaded forever. A new
+  `app/(app)/docs/files/page.tsx` redirects to `/docs/drive`.
+
+### Cluster 2 — editor fixes
+
+- **Reading-measure cap.** `prose ... max-w-none` (which ran ~140
+  cpl on 1440 px viewports) replaced with
+  `prose ... max-w-3xl mx-auto` (~672 px / ~65 cpl). Editor
+  spec asserts `≤ 900 px` at 1440 desktop.
+  (`DocumentEditor.tsx:181`)
+- **Lists render visible markers again.** Tailwind's preflight
+  reset was stripping bullets off bare `<ul>`/`<ol>` inside the
+  ProseMirror because typography-plugin `prose-ul:` modifiers
+  weren't resolving in the cascade. Switched to arbitrary-variant
+  utilities (`[&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal
+  [&_ol]:pl-6 [&_li]:my-1`) which carry enough specificity.
+- **Emoji picker closes on Escape.** Audit caught the picker
+  staying open across three intermediate actions. Added a
+  scoped `keydown` listener while the picker is mounted; on
+  Escape it sets `showEmojiPicker(false)`.
+- **Manual `Save` button removed.** `autoSave` is on by default
+  with a 1 s debounce; the duplicate Save button created
+  "is autosave actually working?" doubt. Drop the `onSave` prop
+  passed to EditorToolbar — the `{onSave && (…)}` guard already
+  collapses the row. `handleManualSave` callback also removed.
+- **Floating BubbleMenu is back in the non-collab path.** The
+  BubbleMenu only existed in `CollaborativeEditor.tsx`, which is
+  hard-disabled by `collaborationEnabled = false`. DocumentEditor
+  now mounts its own BubbleMenu with Bold/Italic/Underline/Code
+  controls. `data-testid="docs-bubble-menu"` lives on an inner
+  wrapper because `@tiptap/react@2.27.1` BubbleMenu only forwards
+  `className` to the rendered div (verified by reading
+  `node_modules/@tiptap/react/dist/index.cjs`).
+
+### Cluster 3 — ARIA / accessibility
+
+- **SearchModal exposes the right contract.** `role="dialog"` +
+  `aria-modal="true"` + `aria-label="Search documents"` on the
+  modal root. Screen-reader users can now identify the overlay.
+- **Sidebar is a real tree.** The scrollable content container
+  gets `role="tree"` + `aria-label="Documents"`. Each
+  DocumentItem row gets `role="treeitem"` + `aria-selected`
+  (driven by `isSelected`) + `aria-expanded` when it has children.
+  Active document is `aria-selected="true"`.
+
+### Tests
+
+13 new E2E specs under `frontend/e2e/docs-*.spec.ts`, all live-
+backend, no LLM (use `backendOnlyReady` + `setupAiLiveAuth`).
+Spec-first per cluster: write specs → run them red → implement
+fixes → run them green. Files:
+
+- `docs-cmdk-doc-search`, `docs-mobile-sidebar` (×2),
+  `docs-styled-confirm-dialog`, `docs-todo-menu-items-hidden`,
+  `docs-files-route-redirect`
+- `docs-editor-reading-measure`, `docs-editor-list-bullets`,
+  `docs-editor-emoji-picker-escape`, `docs-editor-no-save-button`,
+  `docs-editor-bubble-menu`
+- `docs-a11y-search-modal`, `docs-a11y-doc-tree`
+
+Full suite passes in ~22 s.
+
+## [0.8.22] - 2026-05-22
+
+AI/automation E2E coverage expansion: the workflow builder now has a
+schema-driven test fixture, 35 new Playwright specs across nodes,
+triggers, actions, templates and end-to-end runs, plus tighter
+assertions on the live-LLM tests so the suite actually catches
+provider drift and prompt regressions instead of greenlighting them.
+
+### Workflow builder — new `join` node + canvas testability
+
+- **`join` is now a first-class node type.** Added to
+  `WorkflowNodeType` in `backend/src/aexy/schemas/workflow.py`; the
+  canvas's `JoinNode` was already wired up but the schema literal
+  was missing, so `nodes: [..., { type: "join" }]` round-trips
+  through validation now instead of being silently coerced.
+- **`NodePalette` and `NodeConfigPanel` got stable test hooks.**
+  `data-testid="palette-category-${kind}"`,
+  `palette-subtype-${kind}-${value}` on every entry, plus
+  `data-testid="node-config-panel"` + `role="dialog"` on the config
+  drawer. One helper change updates every spec instead of 200.
+- **Categories without subtypes show a hover-revealed `+` affordance.**
+  A bare row gave no visual hint that clicking does anything;
+  drag-first UX stays primary, the icon is subtle by design.
+
+### Automation templates — save no longer silently 400s
+
+- **`send_email` template actions now ship subject + body.** The
+  backend's `validate_workflow` rejects email actions without
+  `email_body`, so the "follow-up sequence" and "welcome sequence"
+  templates were silently failing the save with HTTP 400 and the
+  user saw an empty canvas after "saving" (`automationTemplates.ts`).
+- **Template action `config` is spread flat into node `data`.**
+  `NodeConfigPanel` writes action fields flat (`data.email_body`,
+  `data.duration_value`) and the backend reads them flat too;
+  nesting under `data.config` meant the validator never saw the
+  required fields. No remaining `node.data.config.*` readers
+  anywhere in the frontend.
+
+### Schema-driven test fixture
+
+- **`backend/scripts/dump_automation_schema.py`** emits the
+  trigger/action registry to
+  `frontend/e2e/fixtures/automation-schema.generated.json`. The
+  per-subtype specs (`ai-automation-triggers-*`,
+  `ai-automation-actions-*`) parametrise from this fixture so
+  adding a new trigger on the backend forces a matching test entry.
+- **`npm run schema:automation`** regenerates the fixture via
+  `docker exec aexy-backend ...`. **`npm run schema:automation:check`**
+  is the CI drift gate. Both now precheck that `aexy-backend` is
+  running and exit with a clear message ("Start it with:
+  docker-compose up -d backend") instead of leaving devs to parse
+  a raw `docker exec` error.
+
+### AI automation E2E suite — 35 new specs
+
+- **Three layers, all live-backend:**
+  1. **Per-node CRUD** (`ai-automation-node-{trigger,action,
+     condition,wait,agent,branch,join}.spec.ts`) — palette add,
+     config-panel render, click-to-select, delete.
+  2. **Per-subtype parametrised loops** —
+     `ai-automation-{triggers,actions}-{module}.spec.ts` covering
+     every trigger and action in every module's registry, all
+     driven by the generated fixture above.
+  3. **End-to-end** — `canvas-wire` (6-node save/reload
+     round-trip), `templates` (every gallery template lands a
+     usable graph), `generate-workflow-per-module` (LLM generator
+     across all 10 modules), `run-agent` and `end-to-end`
+     (record-created trigger → seeded LLM agent → workspace
+     state mutation, with marker-envelope assertions).
+- **Shared helpers in `frontend/e2e/fixtures/automation-helpers.ts`**
+  — `openCanvas`, `addNodeFromPalette`, `canvasNodes`,
+  `openNodeConfig`, `connectNodes`, `saveWorkflow`,
+  `fetchWorkflow`, `deleteAutomation`. Roughly 35 specs share one
+  contract; testid drift breaks one helper, not the whole suite.
+
+### Live-LLM assertions — false-positive class eliminated
+
+- **Marker-envelope check on agent output.** `ai-automation-run-agent`
+  and `ai-automation-end-to-end` now pass a per-test
+  `echo_token` in `trigger_data` and instruct the agent (via its
+  system prompt) to wrap it in a literal `[ECHO:<token>]`
+  envelope. The envelope shape can't appear from stub providers,
+  cached responses, or a passthrough copy of input data — only
+  from an LLM that actually read and reshaped the payload.
+- **`generate-workflow-per-module` now hard-fails on unknown
+  `trigger_type`.** A `console.warn` previously demoted LLM
+  hallucinations like `record.modified` (instead of
+  `record.updated`) to log noise nobody reads — exactly the
+  prompt-regression class this spec exists to catch. Now an
+  unknown trigger fails the test with the known-trigger list in
+  the failure message.
+- **`run-agent` workflow status check tightened from
+  `["completed", "running", "failed"]` to strictly `"completed"`.**
+  `dry_run=true` is synchronous so anything else means the
+  executor bailed before producing the node_results we go on to
+  assert against.
+
+### Test-env plumbing
+
+- **`backendOnlyReady` (in `frontend/e2e/fixtures/ai-env.ts`)**
+  splits the LM Studio probe out of `aiLiveReady`. Structural
+  tests that don't invoke any LLM (canvas wiring, palette
+  interaction, save round-trip) no longer skip the entire spec
+  file when LM Studio happens to be down.
+- **`setupAiLiveAuth` now sets the `aexy_authed=1` cookie before
+  the first navigation.** Middleware redirects every protected
+  route to `/?next=...` when the cookie is missing — and the
+  cookie is normally set client-side by `useAuth` AFTER mount, so
+  without this fix the very first goto bounced through the login
+  page and dropped any query params we'd set.
+- **`playwright.config.ts`** honours `PLAYWRIGHT_BASE_URL` instead
+  of hard-coding `http://localhost:3000`, so the suite can run
+  against a non-default host (CI runner, remote box).
+- **`docker-compose.yml`** passes
+  `LMSTUDIO_BASE_URL=${LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}`
+  into the backend. `localhost` inside the container was the
+  container, not the host — the agent action couldn't reach the
+  developer's LM Studio during E2E and dev runs.
+
 ## [0.8.21] - 2026-05-22
 
 AI surface hardening: the `/automations` canvas no longer crashes on
