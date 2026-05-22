@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.29] - 2026-05-22
+
+Project statuses are now genuinely isolated from workspace edits. The
+0.8.28 release introduced project-scoped statuses with a workspace
+fallback; this release closes the gap where a fallback project would
+still see workspace renames, deletions, and reorders flow through.
+
+### Lazy auto-fork on destructive workspace edits
+
+- New `TaskConfigService._snapshot_fallback_projects(workspace_id)`
+  finds every project in the workspace that has no project-scoped
+  status row of its own and runs `clone_workspace_statuses_to_project`
+  for each, capturing the current workspace defaults.
+- `update_status` and `delete_status` now invoke the snapshot **before**
+  applying the change when the target row is a workspace default
+  (`project_id IS NULL`). Editing a project-scoped row is a no-op for
+  the snapshot — those projects already own their statuses.
+- `reorder_statuses` invokes the snapshot when any of the reordered
+  IDs is a workspace default; reordering changes a project's visual
+  workflow and counts as destructive for the same reason as a rename.
+- `create_status` (workspace) is intentionally **not** wrapped — adding
+  a new status is additive, so fallback projects pick it up via the
+  resolver without being auto-forked into snowflakes.
+- All snapshot writes share the API endpoint's transaction (`db.commit`
+  is the last step in `update_task_status` / `delete_task_status` /
+  `reorder_task_statuses`), so a partial failure rolls back cleanly.
+
+### Tests
+
+- 5 new unit tests in `test_task_config_project_scope.py`:
+  - Workspace rename snapshots the fallback project (project keeps
+    the old name).
+  - Workspace add does **not** snapshot (project stays in fallback
+    and resolves the new status via the workspace defaults).
+  - Workspace delete snapshots the fallback project (project keeps
+    the deleted status as an active project override).
+  - Workspace reorder snapshots the fallback project (project keeps
+    the original order).
+  - Workspace edit with a mixed project set leaves the already-
+    customized project untouched and only forks the fallback one.
+
+### Notes for follow-up frontend work
+
+This release is backend-only. The discoverability work proposed
+alongside this (kanban-header drawer, `/sprints/[projectId]/settings/
+statuses` route, delete-with-task-migration modal, read-only
+"Workspace default" preview, "reset to workspace defaults" undo)
+will land in a follow-up PR. Operators editing statuses today still
+use `/settings/task-config` with the project picker.
+
 ## [0.8.28] - 2026-05-22
 
 Workspace All-Tasks gains inline create, statuses become per-project

@@ -188,6 +188,56 @@ class TaskConfigService:
         await self.db.flush()
         return cloned
 
+    async def _snapshot_fallback_projects(self, workspace_id: str) -> int:
+        """Capture the current workspace defaults into every fallback project
+        before a destructive workspace-default edit. Returns the number of
+        projects snapshotted.
+
+        This is the mechanism that makes "workspace edits don't affect project
+        statuses" hold even for projects that haven't yet customized — they
+        get an automatic clone the moment a workspace admin renames/deletes/
+        reorders, capturing the pre-edit state. Projects that already
+        customized are detected (any row with this project_id) and skipped.
+
+        Additive edits (a new workspace status) are *not* destructive and
+        should call sites bypass this helper; fallback projects will pick up
+        the new status via the resolver and that's the intended behavior.
+        """
+        # Lazy import — Project lives in a sibling models package and would
+        # create a circular import if imported at module top.
+        from aexy.models.project import Project
+
+        project_ids_stmt = select(Project.id).where(
+            Project.workspace_id == workspace_id
+        )
+        all_project_ids = list(
+            (await self.db.execute(project_ids_stmt)).scalars().all()
+        )
+        if not all_project_ids:
+            return 0
+
+        customized_stmt = (
+            select(WorkspaceTaskStatus.project_id)
+            .where(WorkspaceTaskStatus.workspace_id == workspace_id)
+            .where(WorkspaceTaskStatus.project_id.is_not(None))
+            .distinct()
+        )
+        customized_ids = {
+            str(pid)
+            for pid in (await self.db.execute(customized_stmt)).scalars().all()
+        }
+
+        fallback_ids = [
+            str(pid) for pid in all_project_ids if str(pid) not in customized_ids
+        ]
+        if not fallback_ids:
+            return 0
+
+        for pid in fallback_ids:
+            await self.clone_workspace_statuses_to_project(workspace_id, pid)
+
+        return len(fallback_ids)
+
     async def update_status(
         self,
         status_id: str,
@@ -197,10 +247,18 @@ class TaskConfigService:
         icon: str | None = None,
         is_default: bool | None = None,
     ) -> WorkspaceTaskStatus | None:
-        """Update a task status."""
+        """Update a task status.
+
+        If the row being edited is a workspace default, fallback projects are
+        snapshotted first so they retain the pre-edit state. See
+        ``_snapshot_fallback_projects`` for why.
+        """
         status = await self.get_status(status_id)
         if not status:
             return None
+
+        if status.project_id is None:
+            await self._snapshot_fallback_projects(str(status.workspace_id))
 
         if name is not None:
             status.name = name
@@ -220,10 +278,17 @@ class TaskConfigService:
         return status
 
     async def delete_status(self, status_id: str) -> bool:
-        """Soft delete a status (mark as inactive)."""
+        """Soft delete a status (mark as inactive).
+
+        For workspace defaults: snapshot fallback projects first so they keep
+        the to-be-deleted status as a project override.
+        """
         status = await self.get_status(status_id)
         if not status:
             return False
+
+        if status.project_id is None:
+            await self._snapshot_fallback_projects(str(status.workspace_id))
 
         status.is_active = False
         await self.db.flush()
@@ -234,7 +299,24 @@ class TaskConfigService:
         workspace_id: str,
         status_ids: list[str],
     ) -> list[WorkspaceTaskStatus]:
-        """Reorder statuses by providing new order of IDs."""
+        """Reorder statuses by providing new order of IDs.
+
+        If any of the IDs are workspace defaults, fallback projects are
+        snapshotted first — reordering changes a project's visual workflow
+        and counts as destructive in the same sense as a rename.
+        """
+        if status_ids:
+            scope_stmt = select(WorkspaceTaskStatus.project_id).where(
+                WorkspaceTaskStatus.id.in_(status_ids),
+                WorkspaceTaskStatus.workspace_id == workspace_id,
+            )
+            touches_workspace_defaults = any(
+                pid is None
+                for pid in (await self.db.execute(scope_stmt)).scalars().all()
+            )
+            if touches_workspace_defaults:
+                await self._snapshot_fallback_projects(workspace_id)
+
         for position, status_id in enumerate(status_ids):
             await self.db.execute(
                 update(WorkspaceTaskStatus)
