@@ -24,6 +24,7 @@ import {
 import { toast } from "sonner";
 import { useWorkspace, useWorkspaceMembers } from "@/hooks/useWorkspace";
 import { useTaskStatuses, useCustomFields } from "@/hooks/useTaskConfig";
+import { useProjects } from "@/hooks/useProjects";
 import { useAuth } from "@/hooks/useAuth";
 import { TaskStatusConfig, CustomField, StatusCategory, CustomFieldType, CustomFieldOption } from "@/lib/api";
 import {
@@ -667,6 +668,12 @@ export default function TaskConfigPage() {
     hasWorkspaces,
   } = useWorkspace();
   const { members: workspaceMembers } = useWorkspaceMembers(currentWorkspaceId);
+  const { projects } = useProjects(currentWorkspaceId);
+
+  // Project picker for the Statuses tab. `null` = workspace defaults
+  // (legacy behavior); a project id = that project's status set, with the
+  // backend falling back to workspace defaults until the admin customizes.
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
   const {
     statuses,
@@ -675,9 +682,12 @@ export default function TaskConfigPage() {
     updateStatus,
     deleteStatus,
     reorderStatuses,
+    cloneFromWorkspace,
+    isUsingWorkspaceFallback,
+    isCloning,
     isCreating: isCreatingStatus,
     isUpdating: isUpdatingStatus,
-  } = useTaskStatuses(currentWorkspaceId);
+  } = useTaskStatuses(currentWorkspaceId, selectedProjectId);
 
   const {
     fields,
@@ -865,19 +875,73 @@ export default function TaskConfigPage() {
                       Define the workflow statuses for tasks. Drag to reorder.
                     </p>
                   </div>
-                  {isAdmin && (
-                    <button
-                      onClick={() => {
-                        setEditingStatus(null);
-                        setShowStatusModal(true);
-                      }}
-                      className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition text-sm"
-                    >
-                      <Plus className="h-4 w-4" />
-                      Add Status
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {/* Scope picker — workspace defaults vs. per-project. The
+                        scope drives which rows the rest of this tab edits. */}
+                    {projects.length > 0 && (
+                      <select
+                        value={selectedProjectId ?? ""}
+                        onChange={(e) =>
+                          setSelectedProjectId(e.target.value || null)
+                        }
+                        className="px-3 py-2 bg-card border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary-500/40"
+                        aria-label="Status scope"
+                      >
+                        <option value="">Workspace defaults</option>
+                        {projects.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {isAdmin && (
+                      <button
+                        onClick={() => {
+                          setEditingStatus(null);
+                          setShowStatusModal(true);
+                        }}
+                        className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition text-sm"
+                      >
+                        <Plus className="h-4 w-4" />
+                        Add Status
+                      </button>
+                    )}
+                  </div>
                 </div>
+
+                {/* Per-project mode + fallback: prompt the admin to clone the
+                    workspace defaults into the project before customizing. */}
+                {selectedProjectId && isUsingWorkspaceFallback && isAdmin && (
+                  <div className="mb-4 flex items-start gap-3 rounded-lg border border-primary-500/30 bg-primary-500/5 p-4">
+                    <AlertCircle className="h-5 w-5 text-primary-400 mt-0.5" />
+                    <div className="flex-1">
+                      <h4 className="text-sm font-medium text-foreground">
+                        This project uses the workspace defaults
+                      </h4>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        Customizing here will fork the workspace statuses into a
+                        project-scoped copy. Other projects keep using the
+                        workspace defaults.
+                      </p>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await cloneFromWorkspace();
+                          toast.success("Statuses copied to project");
+                        } catch (err) {
+                          console.error(err);
+                          toast.error("Failed to copy statuses");
+                        }
+                      }}
+                      disabled={isCloning}
+                      className="px-3 py-1.5 bg-primary-600 hover:bg-primary-700 disabled:opacity-50 text-white rounded-md text-sm whitespace-nowrap"
+                    >
+                      {isCloning ? "Copying…" : "Customize for this project"}
+                    </button>
+                  </div>
+                )}
 
                 {statuses.length > 0 ? (
                   <DndContext

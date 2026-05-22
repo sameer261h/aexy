@@ -170,6 +170,20 @@ export async function setupTaskBoardMocks(
     localStorage.setItem("current_workspace_id", "ws-1");
   });
 
+  // `aexy_authed` is the middleware's presence cookie — useAuth mirrors it
+  // from the localStorage token on the client, but the middleware runs first
+  // and would otherwise redirect every auth-required URL to `/?next=...`
+  // before any client code ran. Set it explicitly so test specs land on the
+  // page they navigate to instead of the onboarding wizard.
+  await page.context().addCookies([
+    {
+      name: "aexy_authed",
+      value: "1",
+      domain: "localhost",
+      path: "/",
+    },
+  ]);
+
   // Generic catch-all: anything not specifically mocked returns an empty array.
   await page.route(`${API_BASE}/**`, (route) => {
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });

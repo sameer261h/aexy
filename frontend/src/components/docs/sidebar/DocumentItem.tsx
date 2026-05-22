@@ -41,7 +41,7 @@ export function DocumentItem({
   const paddingLeft = 12 + level * 16;
 
   return (
-    <div>
+    <div role="treeitem" aria-selected={isSelected} aria-expanded={hasChildren ? isExpanded : undefined}>
       {/* Document Row */}
       <div
         className={`group relative flex items-center py-1 px-2 rounded-md cursor-pointer transition-colors ${
@@ -164,7 +164,7 @@ export function DocumentItem({
                         onDelete(document.id);
                         setShowMenu(false);
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-red-400 hover:bg-accent"
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:bg-accent"
                     >
                       <Trash2 className="h-4 w-4" />
                       Delete

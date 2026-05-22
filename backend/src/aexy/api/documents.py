@@ -25,14 +25,20 @@ from aexy.schemas.document import (
     DocumentTreeItem,
     DocumentUpdate,
     DocumentVersionResponse,
+    ProposedEditReject,
+    ProposedEditResponse,
     TemplateCreate,
     TemplateListResponse,
     TemplateResponse,
 )
 from aexy.services.document_service import DocumentService
 from aexy.services.document_generation_service import DocumentGenerationService
+from aexy.services.proposed_edits_service import (
+    ProposedEditsService,
+    compute_content_sha,
+)
 from aexy.services.workspace_service import WorkspaceService
-from aexy.models.documentation import TemplateCategory
+from aexy.models.documentation import ProposedEditSource, TemplateCategory
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/documents", tags=["Documents"])
 template_router = APIRouter(prefix="/templates", tags=["Templates"])
@@ -812,10 +818,29 @@ async def generate_documentation(
     workspace_id: str,
     document_id: str,
     template_category: str = Query(default="function_docs"),
+    apply: bool = Query(
+        default=False,
+        description=(
+            "Legacy escape hatch: when true, overwrite the document "
+            "directly (pre-0.8.26 behaviour). Default false routes the "
+            "generated content into the proposed-edits review queue, "
+            "where the user approves or rejects before it lands."
+        ),
+    ),
     current_user: Developer = Depends(get_current_developer),
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate documentation for a document from linked code."""
+    """Generate documentation for a document from linked code.
+
+    Default behaviour (apply=false): generates docs and creates a
+    `pending` DocumentProposedEdit row instead of overwriting the
+    document. Caller is expected to review and approve through the
+    proposed-edits endpoints below.
+
+    Legacy behaviour (apply=true): overwrites `document.content`
+    immediately. Use only for migrations / scripted runs that have
+    already pre-vetted the output.
+    """
     await check_workspace_permission(workspace_id, current_user, db, "member")
 
     doc_service = DocumentService(db)
@@ -870,21 +895,41 @@ async def generate_documentation(
             developer_id=str(current_user.id),
         )
 
-        # Update the document with generated content
-        updated_doc = await doc_service.update_document(
-            document_id=document_id,
-            updated_by_id=str(current_user.id),
-            content=content,
-        )
+        if apply:
+            # Legacy overwrite path. The audit flagged this as user-
+            # hostile (no preview, no rollback short of version history)
+            # — kept here only for callers that explicitly opt in.
+            updated_doc = await doc_service.update_document(
+                document_id=document_id,
+                updated_by_id=str(current_user.id),
+                content=content,
+            )
+            updated_doc.generation_status = "generated"
+            updated_doc.last_generated_at = datetime.now(timezone.utc)
+            await db.commit()
 
-        # Update generation status
-        updated_doc.generation_status = "generated"
-        updated_doc.last_generated_at = datetime.now(timezone.utc)
+            return {
+                "status": "success",
+                "applied": True,
+                "document_id": document_id,
+                "content": content,
+            }
+
+        # New default: route through the proposed-edit queue.
+        proposed_edits = ProposedEditsService(db)
+        proposal = await proposed_edits.create_proposal(
+            document_id=document_id,
+            source=ProposedEditSource.REGENERATE,
+            proposed_content=content,
+            proposed_by_id=str(current_user.id),
+        )
         await db.commit()
 
         return {
-            "status": "success",
+            "status": "proposed",
+            "applied": False,
             "document_id": document_id,
+            "proposed_edit_id": proposal.id,
             "content": content,
         }
 
@@ -1126,6 +1171,79 @@ async def suggest_improvements(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to analyze documentation: {str(e)}",
         )
+
+
+@router.post("/{document_id}/suggest-improvements/apply")
+async def apply_suggestion(
+    workspace_id: str,
+    document_id: str,
+    suggestion_summary: str = Query(
+        ...,
+        description=(
+            "Short description of the improvement to apply, copied "
+            "from `suggest_improvements`'s `improvements[].suggestion`. "
+            "Fed to the doc-update prompt as the change summary."
+        ),
+    ),
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Take an improvement suggestion produced by `suggest-improvements`,
+    run it through `update_documentation`, and land the result as a
+    pending proposed-edit (source=suggest_improvements). The user
+    approves through the same banner UI as regenerate flows.
+
+    Does not mutate the document — the proposal queue is the user's
+    confirmation step.
+    """
+    await check_workspace_permission(workspace_id, current_user, db, "member")
+
+    doc_service = DocumentService(db)
+    document = await doc_service.get_document(document_id, workspace_id)
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
+        )
+
+    gen_service = DocumentGenerationService(db, workspace_id=workspace_id)
+    try:
+        # No linked code is required — improvements act on the
+        # documentation itself, not on a referenced repo path. We pass
+        # the existing content as both "old" and "new" code stand-ins
+        # so the update prompt has the right context to rewrite.
+        update_result = await gen_service.update_documentation(
+            existing_doc=document.content or {"type": "doc", "content": []},
+            old_code="",
+            new_code="",
+            language=None,
+            changes_summary=suggestion_summary,
+            developer_id=str(current_user.id),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to apply suggestion: {str(e)}",
+        )
+
+    proposed_content = update_result.get("updated_doc") or update_result
+    if not isinstance(proposed_content, dict):
+        proposed_content = {"type": "doc", "content": []}
+
+    proposed_edits = ProposedEditsService(db)
+    proposal = await proposed_edits.create_proposal(
+        document_id=document_id,
+        source=ProposedEditSource.SUGGEST_IMPROVEMENTS,
+        proposed_content=proposed_content,
+        proposed_by_id=str(current_user.id),
+        diff_summary={"suggestion": suggestion_summary},
+    )
+    await db.commit()
+
+    return {
+        "status": "proposed",
+        "document_id": document_id,
+        "proposed_edit_id": proposal.id,
+    }
 
 
 # ==================== GitHub Sync ====================
@@ -1536,3 +1654,168 @@ async def duplicate_template(
         created_at=template.created_at,
         updated_at=template.updated_at,
     )
+
+
+# =============================================================================
+# Proposed Edits — AI suggestion review queue
+# =============================================================================
+#
+# Sits between AI-generated content and the canonical document. The
+# legacy {doc_id}/generate path now defaults to creating a proposal
+# (see `apply=true` query param for back-compat). Once we have the
+# approval/reject flow nailed down, sync + suggest_improvements will
+# also route through this queue.
+
+
+def _to_proposed_edit_response(
+    proposal,
+    is_stale: bool,
+) -> ProposedEditResponse:
+    return ProposedEditResponse(
+        id=str(proposal.id),
+        document_id=str(proposal.document_id),
+        source=proposal.source,
+        proposed_content=proposal.proposed_content,
+        base_content_sha=proposal.base_content_sha,
+        diff_summary=proposal.diff_summary,
+        status=proposal.status,
+        proposed_by_id=str(proposal.proposed_by_id) if proposal.proposed_by_id else None,
+        proposed_at=proposal.proposed_at,
+        reviewed_by_id=str(proposal.reviewed_by_id) if proposal.reviewed_by_id else None,
+        reviewed_at=proposal.reviewed_at,
+        reason=proposal.reason,
+        is_stale=is_stale,
+    )
+
+
+@router.get(
+    "/{document_id}/proposed-edits",
+    response_model=list[ProposedEditResponse],
+)
+async def list_proposed_edits(
+    workspace_id: str,
+    document_id: str,
+    status_filter: str | None = Query(default="pending", alias="status"),
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """List proposed edits for a document.
+
+    Defaults to status=pending (the FE banner's hot path). Pass
+    `?status=all` to retrieve the full audit trail (approved /
+    rejected / superseded). Pass `?status=approved` etc. for a
+    specific bucket.
+    """
+    await check_workspace_permission(workspace_id, current_user, db, "member")
+
+    doc_service = DocumentService(db)
+    document = await doc_service.get_document(document_id, workspace_id)
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
+        )
+
+    proposed_edits = ProposedEditsService(db)
+    if status_filter == "pending" or status_filter is None:
+        proposals = await proposed_edits.list_pending(document_id)
+    else:
+        from sqlalchemy import select as _select
+
+        from aexy.models.documentation import DocumentProposedEdit as _DPE
+
+        stmt = _select(_DPE).where(_DPE.document_id == document_id)
+        if status_filter != "all":
+            stmt = stmt.where(_DPE.status == status_filter)
+        stmt = stmt.order_by(_DPE.proposed_at.desc())
+        result = await db.execute(stmt)
+        proposals = list(result.scalars().all())
+
+    # Compute current content sha once; stale check just compares
+    # against it.
+    current_sha = compute_content_sha(document.content)
+    return [
+        _to_proposed_edit_response(
+            p,
+            is_stale=bool(p.base_content_sha) and p.base_content_sha != current_sha,
+        )
+        for p in proposals
+    ]
+
+
+@router.post(
+    "/{document_id}/proposed-edits/{proposal_id}/approve",
+    response_model=ProposedEditResponse,
+)
+async def approve_proposed_edit(
+    workspace_id: str,
+    document_id: str,
+    proposal_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Approve a pending proposal — applies it to the document and
+    creates a new DocumentVersion in the process. Idempotent: calling
+    approve on an already-resolved proposal returns its current row
+    without re-applying.
+    """
+    await check_workspace_permission(workspace_id, current_user, db, "member")
+
+    doc_service = DocumentService(db)
+    document = await doc_service.get_document(document_id, workspace_id)
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
+        )
+
+    proposed_edits = ProposedEditsService(db)
+    proposal = await proposed_edits.get_proposal(proposal_id)
+    if not proposal or proposal.document_id != document_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Proposed edit not found"
+        )
+
+    approved = await proposed_edits.approve(proposal_id, str(current_user.id))
+    await db.commit()
+    # Recompute stale after approval (it's False post-apply because
+    # we just wrote the content).
+    return _to_proposed_edit_response(approved, is_stale=False)
+
+
+@router.post(
+    "/{document_id}/proposed-edits/{proposal_id}/reject",
+    response_model=ProposedEditResponse,
+)
+async def reject_proposed_edit(
+    workspace_id: str,
+    document_id: str,
+    proposal_id: str,
+    body: ProposedEditReject,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reject a pending proposal — leaves the document untouched and
+    records an optional human-readable reason."""
+    await check_workspace_permission(workspace_id, current_user, db, "member")
+
+    doc_service = DocumentService(db)
+    document = await doc_service.get_document(document_id, workspace_id)
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
+        )
+
+    proposed_edits = ProposedEditsService(db)
+    proposal = await proposed_edits.get_proposal(proposal_id)
+    if not proposal or proposal.document_id != document_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Proposed edit not found"
+        )
+
+    rejected = await proposed_edits.reject(
+        proposal_id, str(current_user.id), body.reason
+    )
+    await db.commit()
+    # Stale flag is computed against the (unchanged) doc content.
+    current_sha = compute_content_sha(document.content)
+    is_stale = bool(rejected.base_content_sha) and rejected.base_content_sha != current_sha
+    return _to_proposed_edit_response(rejected, is_stale=is_stale)

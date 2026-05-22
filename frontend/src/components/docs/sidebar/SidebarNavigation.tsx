@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Search, Home, Inbox } from "lucide-react";
+import { Search, Home, Inbox, HardDrive } from "lucide-react";
 
 interface SidebarNavigationProps {
   onOpenSearch: () => void;
@@ -36,6 +36,19 @@ export function SidebarNavigation({
       >
         <Home className="h-4 w-4" />
         <span className="text-sm">Home</span>
+      </Link>
+
+      {/* Files — the Drive surface used to be reachable only by URL,
+          which the audit flagged as an IA confusion. Surfacing it
+          inside the docs nav makes the relationship explicit:
+          docs are the writing surface, Files is the storage surface
+          and they share the same workspace. */}
+      <Link
+        href="/docs/drive"
+        className="flex items-center gap-3 px-3 py-1.5 rounded-md hover:bg-accent/50 transition-colors text-muted-foreground hover:text-foreground"
+      >
+        <HardDrive className="h-4 w-4" />
+        <span className="text-sm">Files</span>
       </Link>
 
       {/* Inbox */}

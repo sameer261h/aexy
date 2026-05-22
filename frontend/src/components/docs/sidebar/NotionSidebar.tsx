@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Star, Lock, Users, Loader2, Plus } from "lucide-react";
+import { Star, Lock, Users, Plus } from "lucide-react";
 
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { SidebarNavigation } from "./SidebarNavigation";
@@ -10,6 +10,7 @@ import { SidebarSection } from "./SidebarSection";
 import { DocumentItem } from "./DocumentItem";
 import { SpaceFolderWithData } from "./SpaceFolderWithData";
 import { CreateSpaceModal } from "../CreateSpaceModal";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useNotionDocs, useDocumentNotifications } from "@/hooks/useNotionDocs";
 import { useDocumentSpaces } from "@/hooks/useDocumentSpaces";
 import { useWorkspace } from "@/hooks/useWorkspace";
@@ -37,6 +38,7 @@ export function NotionSidebar({
   } = useDocumentSpaces(workspaceId);
 
   const [showCreateSpaceModal, setShowCreateSpaceModal] = useState(false);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
   // Private and shared documents (not tied to spaces)
   const {
@@ -99,21 +101,28 @@ export function NotionSidebar({
     }
   };
 
-  // Handle delete
+  // Open the styled confirm dialog. window.confirm() is deliberately
+  // gone — it broke visual consistency with the dark theme and
+  // couldn't be styled. Recursive child rows reach this same handler,
+  // so we resolve the title lazily from id rather than capturing it
+  // in a parent closure.
   const handleDelete = (documentId: string) => {
-    if (confirm("Are you sure you want to delete this document?")) {
-      deleteDocument(documentId);
-      if (selectedDocumentId === documentId) {
-        router.push("/docs");
-      }
-    }
+    setPendingDeleteId(documentId);
   };
 
-  // Handle duplicate
-  const handleDuplicate = async (documentId: string) => {
-    // TODO: Implement duplicate
-    console.log("Duplicate:", documentId);
+  const confirmDelete = () => {
+    if (!pendingDeleteId) return;
+    deleteDocument(pendingDeleteId);
+    if (selectedDocumentId === pendingDeleteId) {
+      router.push("/docs");
+    }
+    setPendingDeleteId(null);
   };
+
+  // `handleDuplicate` used to be wired here as a `console.log` TODO.
+  // Inert affordances are worse than missing ones — DocumentItem's
+  // dropdown hides the Duplicate row when `onDuplicate` is undefined,
+  // so we just don't pass a handler until duplication is implemented.
 
   // Handle create space
   const handleCreateSpace = async (data: {
@@ -125,11 +134,9 @@ export function NotionSidebar({
     await createSpace(data);
   };
 
-  // Handle manage space
-  const handleManageSpace = (spaceId: string) => {
-    // TODO: Navigate to space settings or open modal
-    console.log("Manage space:", spaceId);
-  };
+  // `handleManageSpace` used to be wired here as a TODO. SpaceFolder's
+  // onManageSpace prop is optional and the dropdown row hides when it's
+  // absent — so we just don't pass one until space-settings ships.
 
   // Render empty state
   const EmptyState = ({ message }: { message: string }) => (
@@ -159,8 +166,13 @@ export function NotionSidebar({
       {/* Divider */}
       <div className="h-px bg-muted/50 mx-3 my-1" />
 
-      {/* Scrollable Content */}
-      <div className="flex-1 overflow-y-auto">
+      {/* Scrollable Content — role=tree so assistive tech recognises
+          the hierarchical doc list and surfaces aria-selected on rows. */}
+      <div
+        className="flex-1 overflow-y-auto"
+        role="tree"
+        aria-label="Documents"
+      >
         {isLoading ? (
           <div className="space-y-1 px-2 py-2 animate-pulse">
             {[1, 2, 3, 4, 5].map((i) => (
@@ -206,7 +218,6 @@ export function NotionSidebar({
                     isSelected={selectedDocumentId === doc.id}
                     onToggleFavorite={toggleFavorite}
                     onDelete={handleDelete}
-                    onDuplicate={handleDuplicate}
                     onAddChild={(parentId) =>
                       handleCreatePrivateDocument(parentId)
                     }
@@ -233,7 +244,6 @@ export function NotionSidebar({
                     isSelected={selectedDocumentId === doc.id}
                     onToggleFavorite={toggleFavorite}
                     onDelete={handleDelete}
-                    onDuplicate={handleDuplicate}
                     onAddChild={(parentId) =>
                       handleCreateSharedDocument(parentId)
                     }
@@ -257,9 +267,7 @@ export function NotionSidebar({
                 defaultExpanded={spaces.length === 1}
                 onToggleFavorite={toggleFavorite}
                 onDelete={handleDelete}
-                onDuplicate={handleDuplicate}
                 onAddDocument={handleCreateSpaceDocument}
-                onManageSpace={handleManageSpace}
               />
             ))}
 
@@ -285,6 +293,19 @@ export function NotionSidebar({
         onClose={() => setShowCreateSpaceModal(false)}
         onCreate={handleCreateSpace}
         isCreating={isCreatingSpace}
+      />
+
+      {/* Styled delete confirmation — replaces window.confirm() */}
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteId(null);
+        }}
+        title="Delete document?"
+        description="This document and any child pages will be moved to trash. This can't be undone from the sidebar."
+        confirmLabel="Delete"
+        tone="danger"
+        onConfirm={confirmDelete}
       />
     </div>
   );

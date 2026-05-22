@@ -17,13 +17,18 @@ CustomFieldType = Literal["text", "number", "select", "multiselect", "date", "ur
 # ==================== Custom Task Status Schemas ====================
 
 class TaskStatusCreate(BaseModel):
-    """Schema for creating a custom task status."""
+    """Schema for creating a custom task status.
+
+    `project_id` scopes the status to a single project; omit it (the default)
+    to create a workspace-wide default.
+    """
 
     name: str = Field(..., min_length=1, max_length=100)
     category: StatusCategory = "todo"
     color: str = Field(default="#6B7280", max_length=20)
     icon: str | None = Field(default=None, max_length=50)
     is_default: bool = False
+    project_id: str | None = None
 
 
 class TaskStatusUpdate(BaseModel):
@@ -43,6 +48,7 @@ class TaskStatusResponse(BaseModel):
 
     id: str
     workspace_id: str
+    project_id: str | None = None
     name: str
     slug: str
     category: StatusCategory
@@ -244,6 +250,34 @@ class ProjectTaskCreate(BaseModel):
     sprint_id: str | None = None  # Optional - can assign to sprint later
     mentioned_user_ids: list[str] = Field(default_factory=list)  # @mentions
     mentioned_file_paths: list[str] = Field(default_factory=list)  # #mentions
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+    estimated_hours: float | None = Field(None, ge=0)
+
+
+class WorkspaceTaskCreate(BaseModel):
+    """Schema for creating a task from the workspace All-Tasks Kanban.
+
+    Unlike SprintTaskCreate (which is scoped under /sprints/{sprint_id}/tasks)
+    this payload accepts a project + optional sprint at the body level so the
+    caller can pick from the workspace-wide view.
+    """
+
+    title: str = Field(..., min_length=1, max_length=500)
+    project_id: str = Field(..., description="Project the task belongs to")
+    sprint_id: str | None = None  # null = backlog
+    description: str | None = None
+    description_json: dict | None = None
+    story_points: int | None = Field(None, ge=0)
+    priority: TaskPriority = "medium"
+    labels: list[str] = Field(default_factory=list)
+    assignee_id: str | None = None
+    status: TaskStatus = "backlog"
+    status_id: str | None = None  # custom project/workspace status id
+    epic_id: str | None = None
+    parent_task_id: str | None = None
+    mentioned_user_ids: list[str] = Field(default_factory=list)
+    mentioned_file_paths: list[str] = Field(default_factory=list)
     start_date: datetime | None = None
     end_date: datetime | None = None
     estimated_hours: float | None = Field(None, ge=0)

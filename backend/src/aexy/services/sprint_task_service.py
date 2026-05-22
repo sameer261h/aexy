@@ -1128,6 +1128,157 @@ class SprintTaskService:
         await GitHubTaskSyncService(self.db).auto_link_issue_references(task)
         return task
 
+    async def add_workspace_task(
+        self,
+        workspace_id: str,
+        project_id: str,
+        title: str,
+        sprint_id: str | None = None,
+        description: str | None = None,
+        description_json: dict | None = None,
+        story_points: int | None = None,
+        priority: str = "medium",
+        labels: list[str] | None = None,
+        assignee_id: str | None = None,
+        status: str = "backlog",
+        status_id: str | None = None,
+        epic_id: str | None = None,
+        parent_task_id: str | None = None,
+        mentioned_user_ids: list[str] | None = None,
+        mentioned_file_paths: list[str] | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        estimated_hours: float | None = None,
+        actor_id: str | None = None,
+    ) -> SprintTask:
+        """Create a task from the workspace All-Tasks Kanban.
+
+        Resolves team_id from project_id (via project_teams), validates that
+        the sprint (if provided) belongs to that team, and validates that the
+        custom status (if provided) is either a workspace default or scoped to
+        this project. Mirrors `add_task`'s activity log + automation dispatch
+        so the History tab and automations behave identically.
+        """
+        from aexy.models.project import ProjectTeam
+        from aexy.models.sprint import WorkspaceTaskStatus
+
+        # 1. Resolve team_id from project. A project can have multiple teams;
+        # we pick the first one by created_at — the same fallback the import
+        # path uses. Callers that want a specific team should drive task
+        # creation from /sprints/{sprint_id}/tasks instead.
+        pt_stmt = (
+            select(ProjectTeam)
+            .where(ProjectTeam.project_id == project_id)
+            .order_by(ProjectTeam.created_at)
+            .limit(1)
+        )
+        team_link = (await self.db.execute(pt_stmt)).scalar_one_or_none()
+        if not team_link:
+            raise ValueError(
+                "project_has_no_team: attach a team to the project before creating tasks"
+            )
+        team_id = team_link.team_id
+
+        # 2. If sprint_id is provided, ensure it belongs to that team.
+        if sprint_id:
+            s_stmt = select(Sprint).where(Sprint.id == sprint_id)
+            sprint_row = (await self.db.execute(s_stmt)).scalar_one_or_none()
+            if not sprint_row or str(sprint_row.team_id) != str(team_id):
+                raise ValueError("sprint_not_in_project")
+
+        # 3. If a custom status_id is provided, ensure it's either a workspace
+        # default (project_id IS NULL) or scoped to *this* project — never one
+        # belonging to a sibling project.
+        if status_id:
+            st_stmt = select(WorkspaceTaskStatus).where(
+                WorkspaceTaskStatus.id == status_id,
+                WorkspaceTaskStatus.workspace_id == workspace_id,
+            )
+            status_row = (await self.db.execute(st_stmt)).scalar_one_or_none()
+            if not status_row:
+                raise ValueError("status_not_found")
+            if status_row.project_id and str(status_row.project_id) != str(project_id):
+                raise ValueError("status_belongs_to_other_project")
+
+        task = SprintTask(
+            id=str(uuid4()),
+            sprint_id=sprint_id,
+            team_id=team_id,
+            workspace_id=workspace_id,
+            source_type="manual",
+            source_id=str(uuid4()),
+            title=title,
+            description=description,
+            description_json=description_json,
+            story_points=story_points,
+            priority=priority,
+            labels=labels or [],
+            assignee_id=assignee_id,
+            status=status,
+            status_id=status_id,
+            epic_id=epic_id,
+            parent_task_id=parent_task_id,
+            mentioned_user_ids=mentioned_user_ids or [],
+            mentioned_file_paths=mentioned_file_paths or [],
+            start_date=start_date,
+            end_date=end_date,
+            estimated_hours=estimated_hours,
+        )
+        self.db.add(task)
+        await self.db.flush()
+        await GitHubTaskSyncService(self.db).auto_link_issue_references(task)
+
+        stmt = (
+            select(SprintTask)
+            .where(SprintTask.id == task.id)
+            .options(
+                selectinload(SprintTask.assignee),
+                selectinload(SprintTask.subtasks),
+            )
+        )
+        created_task = (await self.db.execute(stmt)).scalar_one()
+
+        await log_activity(
+            self.db,
+            workspace_id=workspace_id,
+            entity_type="task",
+            entity_id=str(created_task.id),
+            activity_type="created",
+            actor_id=actor_id,
+            title=f"Created task '{title}'",
+            metadata={
+                "sprint_id": sprint_id,
+                "project_id": project_id,
+                "source_type": "manual",
+            },
+        )
+        await self.log_activity(
+            task_id=str(created_task.id),
+            action="created",
+            actor_id=actor_id,
+        )
+        await dispatch_automation_event(
+            db=self.db,
+            workspace_id=workspace_id,
+            module="sprints",
+            trigger_type="task.created",
+            entity_id=created_task.id,
+            trigger_data={
+                "task_id": created_task.id,
+                "task_title": created_task.title,
+                "sprint_id": sprint_id,
+                "project_id": project_id,
+                "status": created_task.status,
+                "priority": created_task.priority,
+                "assignee_id": created_task.assignee_id,
+                "assignee_email": created_task.assignee.email if created_task.assignee else None,
+                "epic_id": created_task.epic_id,
+                "story_points": created_task.story_points,
+                "workspace_id": workspace_id,
+            },
+        )
+        return created_task
+
     async def _import_project_task_items(
         self,
         team_id: str,

@@ -5,6 +5,569 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.28] - 2026-05-22
+
+Workspace All-Tasks gains inline create, statuses become per-project
+(with a workspace fallback), and the kanban picks up a round of
+Linear-style polish. Backend tests now run against SQLite without
+the previous `ARRAY`/`JSONB` schema-compile blocker.
+
+### Inline task create on the workspace kanban
+
+- `WorkspaceTasksTab` (`/sprints?tab=tasks`) was read-only. Adds a
+  hover-only `+` button per column, a Trello-style dashed "+ New
+  task" row at the bottom of every column (Enter to submit, Esc to
+  cancel, refocus on success for rapid entry), and a global "+ Add
+  task" button in the filter bar.
+- New `AddWorkspaceTaskModal` (`components/planning/AddWorkspaceTaskModal.tsx`)
+  — compact, keyboard-first form with Project, Sprint, Status,
+  Priority, Assignee, Story points, dates, and Estimate. Status
+  renders as a locked chip when the modal is opened from a column,
+  so the new card lands in the column the user clicked.
+- Backend: new `POST /api/v1/workspaces/{ws_id}/tasks` endpoint
+  (`api/workspace_tasks.py`) backed by `SprintTaskService.add_workspace_task`.
+  Resolves `team_id` from `project_teams`, validates that the sprint
+  (if any) belongs to that team, and rejects a `status_id` that
+  belongs to a different project (returns one of the stable error
+  codes `project_has_no_team` / `sprint_not_in_project` /
+  `status_belongs_to_other_project` so the frontend can branch on
+  the detail string).
+- Last-used project persists in `localStorage` so successive
+  quick-adds land on the same project without re-picking.
+
+### Project-scoped task statuses (with workspace fallback)
+
+- New migration `migrate_project_task_statuses.sql`: adds a nullable
+  `project_id UUID` column to `workspace_task_statuses` and replaces
+  the workspace+slug unique constraint with a scoped expression
+  index (`workspace_id, COALESCE(project_id, ''), slug`). Existing
+  rows keep `project_id = NULL` and continue to act as workspace
+  defaults; rows with `project_id` set are project overrides.
+- `TaskConfigService.get_statuses_for_project(workspace_id, project_id)`
+  returns the project's own status rows when any exist, falling
+  back to workspace defaults otherwise. This is the single helper
+  the column UI, task-create validation, and the status admin API
+  all share.
+- New `clone_workspace_statuses_to_project` service helper +
+  `POST /workspaces/{ws}/projects/{p}/task-statuses/clone-from-workspace`
+  endpoint — idempotent fork-the-defaults action that powers the
+  new "Customize for this project" CTA on the Statuses settings
+  page.
+- Existing `GET /workspaces/{ws}/task-statuses` now accepts
+  `?project_id=<uuid>`; `POST /task-statuses` accepts `project_id`
+  in the body. Response schema gains a `project_id` field.
+- Frontend `useTaskStatuses(workspaceId, projectId?)` switches
+  scope, exposes `cloneFromWorkspace` and an
+  `isUsingWorkspaceFallback` flag for the CTA.
+- Settings page (`settings/task-config`) gets a project picker; in
+  per-project mode and using fallback statuses, an info banner
+  offers the one-click clone.
+
+### Backfill script (manual, not auto-run)
+
+- `backend/scripts/backfill_project_task_statuses.py` — operator CLI
+  that clones workspace defaults into existing projects. Flags
+  `--workspace-id`, `--project-id`, `--all`, `--dry-run`. Idempotent
+  (skips projects that already have overrides). The non-`migrate*.sql`
+  filename keeps it out of the migration runner so it only runs
+  when invoked explicitly.
+
+### Kanban UX polish
+
+- Bulk-actions toolbar (floats from the bottom when 1+ cards are
+  selected via shift-click / per-card checkbox): bulk "Move to…"
+  status change plus Clear.
+- URL-persisted filters: `?q=`, `?assignee=`, `?priority=`, `?team=`,
+  `?sprint=` round-trip so refresh / back-button / link-sharing
+  reproduces the view.
+- Keyboard shortcuts: `n` opens the new-task modal; `/` focuses the
+  search input.
+- Sticky column headers with backdrop-blur so the column name and
+  count stay visible while scrolling long lists.
+- Loading skeleton swapped from a flat pulsing block to
+  column-shaped placeholders with staggered card animation delays.
+- Mobile kanban: columns stack vertically below `md` (full-width,
+  no max-height) instead of forcing a horizontal scroll on phones.
+- Critical empty-state fix: when a workspace had **zero tasks** the
+  page rendered "No tasks found" and hid the columns — making the
+  new inline quick-add unreachable. The full empty-state now only
+  appears when filters are active and matched nothing.
+
+### Test infrastructure fixes
+
+- `core/database.py` registers SQLite dialect shims via
+  `@compiles(... "sqlite")` for `ARRAY → JSON`, `JSONB → JSON`,
+  `INET → VARCHAR(45)`. Models declared with PG-only types now
+  compile under `sqlite+aiosqlite:///:memory:` so the test suite
+  reaches the test bodies instead of failing in
+  `Base.metadata.create_all()`. 401 previously-blocked tests now
+  run; remaining failures are pre-existing fixture issues
+  unrelated to this PR.
+- Dropped `'::jsonb'` casts from four `server_default` literals in
+  `models/dashboard.py` and `models/crm.py` so SQLite accepts the
+  DDL. PostgreSQL still parses the bare `'[]'` / `'{}'` defaults
+  into JSONB.
+- Playwright fixture `setupTaskBoardMocks` now sets the
+  `aexy_authed` presence cookie via `page.context().addCookies()`,
+  preventing the middleware from bouncing every spec to `/` and on
+  to `/onboarding`. Unblocks `task-card-drag`,
+  `task-create-attachments`, `task-link-clickable`,
+  `task-over-estimate`, `task-attachment-ai-tags`, and
+  `task-overdue-badge` in addition to the two new
+  `workspace-tasks-create` specs.
+
+### New tests
+
+- `backend/tests/unit/test_task_config_project_scope.py` — 5 unit
+  tests covering fallback to workspace defaults, project override
+  preference, no cross-workspace leak, clone copy fidelity, and
+  clone idempotency.
+- `backend/tests/integration/test_workspace_tasks_api.py` — 5 API
+  tests covering the happy path, cross-project status rejection,
+  project-without-team rejection, status-list fallback, and clone
+  idempotency.
+- `frontend/e2e/workspace-tasks-create.spec.ts` — Playwright spec
+  exercising the inline quick-add row (asserts the wire shape:
+  `title`, `project_id`, `status`) and the global "Add task" modal.
+
+### Other
+
+- Frontend `lib/api.ts`: new `workspaceTasksApi.create()`,
+  `taskConfigApi.getStatuses({ projectId })`, and
+  `taskConfigApi.cloneToProject()`.
+- i18n keys: `addTask`, `newTaskPlaceholder`, refreshed
+  `dropTasksHere` copy in both `en` and `hi`.
+
+## [0.8.27] - 2026-05-22
+
+Part B follow-ups: close the three loops Part B's commit message
+flagged as "deferred". All three streams of AI-generated content
+now route through the proposed-edits queue, the doc owner gets a
+notification each time a proposal lands, and the stale-conflict
+view exposes a Regenerate action to refresh against the current
+base.
+
+### Sync service writes proposals
+
+- `DocumentSyncService.regenerate_document` and `process_queue` were
+  referenced by the Temporal `regenerate_document` /
+  `process_document_sync_queue` activities but didn't exist on the
+  service — the whole sync regen path was dead. Implemented both,
+  routing through `ProposedEditsService.create_proposal` with
+  `source=code_change_sync`.
+- `_trigger_real_time_sync` no longer marks the doc
+  `pending_regeneration` and forgets about it — it generates fresh
+  docs and creates a proposal via a new shared `_generate_and_propose`
+  helper.
+
+### suggest_improvements → queue
+
+- New `POST /workspaces/{ws}/documents/{doc_id}/suggest-improvements/apply`.
+  Takes a `suggestion_summary` query string (copy/pasted from the
+  `improvements[].suggestion` field returned by the existing
+  `suggest-improvements` endpoint), runs it through
+  `DocumentGenerationService.update_documentation`, and lands the
+  result as a pending proposal with `source=suggest_improvements`.
+  The legacy GET-style `suggest-improvements` keeps its
+  "return-suggestions-list" contract; the new endpoint is the
+  "apply this one" action.
+
+### Notifications on every new proposal
+
+- `ProposedEditSource` lifecycle now fires a `DocumentNotification`
+  to the document's `created_by_id` with the new `AI_PROPOSAL`
+  type. Self-notifications (proposer == owner, e.g. owner-triggered
+  manual regenerate) are suppressed. Best-effort: if the doc has no
+  `created_by_id`, the notification step is a no-op (legacy fixture
+  safety).
+- New `DocumentNotificationType.AI_PROPOSAL` enum value
+  (`backend/src/aexy/models/documentation.py`).
+
+### Stale-conflict UX: Regenerate action
+
+- `ProposedEditReview` gets a new optional `onRegenerate` prop. When
+  the proposal is stale AND a handler is wired, the merge-conflict
+  view renders a third action between Reject and "Apply anyway":
+  Regenerate.
+- `ProposedEditsBanner` wires this to a new `regenerate` mutation
+  that calls `documentApi.generate(workspaceId, documentId)` — the
+  new proposal supersedes the stale one server-side via
+  `create_proposal`'s supersede sweep, so we just invalidate the
+  query cache afterwards.
+- Non-stale proposals never see the Regenerate button (test
+  asserts this).
+
+### Tests
+
+- **Backend**: `test_proposed_edits_service.py` extended with
+  `TestNotificationOnCreate` (3 specs): notification fired for
+  owner, no self-notification, no notification when owner is
+  missing.
+- **Frontend**: `docs-proposed-edits.spec.ts` extended with two
+  specs: stale conflict renders Regenerate + clicking it calls
+  `POST /generate`; non-stale proposals don't show the button.
+  Total docs E2E: 29 specs, ~60 s.
+
+### Versions
+
+Bumped both `backend/pyproject.toml` and `frontend/package.json`
+to 0.8.27.
+
+## [0.8.26] - 2026-05-22
+
+Part B of the AI documentation initiative: the **proposed-edits
+review queue**. AI-generated content no longer overwrites
+`document.content` directly — it lands in a pending queue the user
+approves or rejects through a banner above the editor.
+
+### Data model
+
+- **New table `document_proposed_edits`**
+  (`backend/scripts/migrate_document_proposed_edits.sql`). Columns:
+  `id, document_id, source, proposed_content (jsonb),
+  base_content_sha, diff_summary (jsonb), status, proposed_by_id,
+  proposed_at, reviewed_by_id, reviewed_at, reason`. Indexed on
+  `(document_id, status)` for the banner's hot read path and on
+  `(document_id, base_content_sha)` for stale-detection lookups.
+- **`DocumentProposedEdit` SQLAlchemy model** in
+  `aexy.models.documentation` + `ProposedEditSource` and
+  `ProposedEditStatus` enums. Wired into `models/__init__.py`'s
+  `__all__`.
+- **Pydantic schemas** — `ProposedEditCreate`, `ProposedEditResponse`
+  (carries computed `is_stale`), `ProposedEditReject`.
+
+### Service
+
+- **`ProposedEditsService`** (`backend/src/aexy/services/proposed_edits_service.py`)
+  - `create_proposal` snapshots the current `content_sha` if the
+    caller didn't supply one, then auto-supersedes prior pending
+    proposals on the same document. The new row is flushed before
+    the supersede UPDATE runs, so the new proposal's id can be
+    referenced in the supersede `reason` without a null-id race.
+  - `approve` routes through `DocumentService.update_document`
+    which creates a `DocumentVersion` automatically — every approved
+    proposal lands as a versioned change.
+  - `reject` records an optional human-readable reason.
+  - `is_stale` compares the proposal's `base_content_sha` against
+    the document's current SHA; rows without a base are never
+    flagged (legacy / migration safety).
+  - `compute_content_sha` is key-order invariant (`sort_keys=True`)
+    so JS round-trips that re-serialize equivalent content don't
+    spuriously trigger the stale badge.
+
+### API
+
+- **`POST /workspaces/{ws}/documents/{doc_id}/generate`** default
+  changed: now creates a pending `proposed_edit` instead of writing
+  to `document.content`. Legacy overwrite behaviour is preserved
+  behind `?apply=true` for scripted / migration callers.
+- **`GET /workspaces/{ws}/documents/{doc_id}/proposed-edits`** —
+  list pending (default), or `?status=approved|rejected|superseded|all`.
+- **`POST .../proposed-edits/{id}/approve`** — applies and
+  transitions; bumps the version chain via DocumentService.
+- **`POST .../proposed-edits/{id}/reject`** — records reason.
+
+### Frontend
+
+- **`ProposedEditsBanner.tsx`** — banner above the editor when
+  pending proposals exist. Groups by source (`regenerate`,
+  `code_change_sync`, `suggest_improvements`, `manual_ai_edit`)
+  with distinct icons/labels per group. Click a proposal to expand
+  the review inline.
+- **`ProposedEditReview.tsx`** — three diff modes:
+  - **Summary (default)**: sections added / removed / headings
+    changed, scannable, no scrolling.
+  - **Unified**: full JSON view in a scroll container.
+  - **Side-by-side**: current vs proposed columns.
+  Approve / Reject actions live in the footer; Reject opens an
+  inline reason input. When `proposal.is_stale` is true, the
+  banner shows the merge-conflict UX and the Approve button copy
+  flips to "Apply anyway".
+- **Wired into `app/(app)/docs/[documentId]/page.tsx`** above the
+  editor. The component self-hides when there are no pending
+  proposals — no layout shift on docs that don't have AI edits.
+- **`documentApi.{listProposedEdits, approveProposedEdit,
+  rejectProposedEdit}`** added to `lib/api.ts` plus `ProposedEdit`,
+  `ProposedEditSource`, `ProposedEditStatus` types.
+
+### Tests
+
+- **Backend**: `tests/unit/test_proposed_edits_service.py` — 10
+  unit tests covering `compute_content_sha` invariants
+  (deterministic, key-order invariant, None == {}), `create_proposal`
+  (SHA snapshotting, flush-before-supersede ordering, string-source
+  acceptance), and `is_stale` (no-base / matching / diverged).
+- **Frontend**: `e2e/docs-proposed-edits.spec.ts` — 5 specs covering
+  banner rendering, all three diff modes (summary / unified /
+  side-by-side toggle), approve flow, reject-with-reason flow, and
+  the stale conflict UX.
+
+Full backend unit suite for docs: 10 specs pass.
+Full docs E2E: 27 specs, ~58 s.
+
+### Migration order
+
+Run `python scripts/run_migrations.py` (the new
+`migrate_document_proposed_edits.sql` is the only pending change).
+No backfill needed — proposals only land going forward, legacy
+generate callers that pass `?apply=true` keep working unchanged.
+
+## [0.8.25] - 2026-05-22
+
+Part A of the AI documentation testing initiative: TDD coverage for
+autogenerate flows + the autoupdate plumbing. The audit had flagged
+that the entire docs-AI surface had zero tests; this commit closes
+that with 11 specs and surfaces three bugs along the way, two of
+which are fixed in the same change.
+
+Part B (`proposed_edits` model + approval UX) lands separately.
+
+### Bugs caught + fixed
+
+- **`PlanTier.TEAM` AttributeError in DocumentSyncService**
+  (`backend/src/aexy/services/document_sync_service.py:68`).
+  Line referenced `PlanTier.TEAM.value` but the enum has no `TEAM`
+  member. Every free-tier or pro-tier-without-realtime developer
+  hit AttributeError when `get_sync_type_for_developer` was called.
+  Fixed to `PlanTier.ENTERPRISE.value`, matching the convention used
+  in `api/knowledge_graph.py`, `api/notifications.py`,
+  `api/app_access.py`. Caught by `test_document_sync_service.py`.
+- **`suggest_improvements` schema drift** (multi-line fix).
+  `DocumentGenerationService.suggest_improvements` claims to return
+  `{quality_score, improvements[], missing_sections[],
+  overall_assessment}` but was returning generic code-analysis JSON
+  (`languages, frameworks, code_quality, summary`) because:
+  1. `lmstudio_provider._build_analysis_prompts` had no branch for
+     `AnalysisType.DOC_*` types — they fell through to
+     `CODE_ANALYSIS_PROMPT`, dropping the service's custom prompt.
+     Fixed by adding a DOC_* branch that honours
+     `request.context["system_prompt"]` + uses the pre-formatted
+     `request.content` verbatim.
+  2. The service's `json.loads(result.raw_response)` blew up on
+     markdown-fenced LLM output. Extracted `_parse_llm_json` helper
+     that strips ```json fences before parsing. Applied to all four
+     `raw_response` parse sites in the service.
+  3. Tightened `DOC_IMPROVEMENT_SYSTEM_PROMPT` to say "Respond ONLY
+     with valid JSON … No preamble, no analysis, no markdown fences".
+  4. Bumped `lmstudio_config` `max_tokens` in the AI test conftest
+     from 2048 → 8192 so Qwen "thinking" models don't run out of
+     budget before producing JSON.
+  Caught by `test_suggest_improvements.py::test_returns_documented_contract_shape`.
+- **Orphan `SyncStatusPanel`** (`frontend/src/components/docs/SyncStatusPanel.tsx`).
+  221 LOC of pending-changes UI implemented but never mounted in
+  any page. Wired into `app/(app)/docs/[documentId]/page.tsx`:
+  uses `useDocumentCodeLinks` to compute the pending count, renders
+  above the editor when the doc has any code links, exposes a
+  manual-sync button that calls `documentApi.generate`. Caught while
+  writing the FE pending-banner spec.
+
+### Coverage added — 5 backend specs
+
+| File | What it covers |
+| --- | --- |
+| `backend/tests/ai/services/test_document_generation_paste.py` | `generate_from_code` returns TipTap doc shape with heading + paragraph + matching identifier (real LLM) |
+| `backend/tests/ai/services/test_document_generation_repo.py` | `generate_from_repository` forwards to GitHubService correctly; missing file raises ValueError (mocked GH, real LLM) |
+| `backend/tests/ai/services/test_document_regenerate_from_link.py` | The orchestration the `{doc_id}/generate` endpoint runs: load doc, load links, generate, write content back, flip `generation_status`, clear `has_pending_changes` |
+| `backend/tests/ai/services/test_suggest_improvements.py` | Contract shape (`quality_score`, `improvements[]`, `missing_sections[]`, `overall_assessment`); locks in the fix for the schema drift above |
+| `backend/tests/unit/test_document_sync_service.py` | Plan-tier routing in `get_sync_type_for_developer`: REAL_TIME / DAILY_BATCH / MANUAL for premium / pro+enterprise / free; the previously-dead enterprise branch now reaches DAILY_BATCH |
+
+### Coverage added — 5 frontend specs
+
+| File | What it covers |
+| --- | --- |
+| `docs-autogenerate-paste.spec.ts` | Full live flow: paste TS function, click Generate, real LLM round-trip, lands on new doc with editor visible |
+| `docs-autogenerate-repo.spec.ts` | From Repository tab opens; either repo list or empty state renders; Generate disabled in empty state |
+| `docs-autogenerate-repo-full.spec.ts` | End-to-end repo orchestration with mocked repo/branch/contents APIs; user picks repo → root dir → click Generate → mocked content lands as a new doc |
+| `docs-pending-changes-banner.spec.ts` | SyncStatusPanel renders pending count + manual-sync label when a code-link is dirty (mocked code-links, live doc) |
+| (orphan SyncStatusPanel finding informs this) | — |
+
+### Frontend dev container & test container
+
+- Installed `pytest`, `pytest-asyncio`, `pytest-cov`, `aiosqlite` into
+  the `aexy-backend` image (they weren't there before, blocking any
+  attempt to run the backend test suite via `docker exec`).
+
+## [0.8.24] - 2026-05-22
+
+Docs UI/UX follow-up sweep: the five items the 0.8.23 commit
+deliberately left as "out of cluster scope" — visual gradient
+heroes, ring-spinner duplication, Drive IA confusion, hardcoded
+colour refs, mobile responsiveness on Drive/Files/Knowledge-Graph.
+5 new E2E specs lock the changes in (18 total docs E2E specs now,
+~32 s full pass).
+
+### Visual: gradient heroes gone
+
+- **Replaced the `from-primary-500/20 to-purple-500/20` rounded-2xl
+  icon hero in two places** (`DocsLayoutClient.tsx`, `page.tsx`)
+  with a typography-first treatment: small tracked eyebrow label,
+  semibold tracking-tight headline, one line of supporting copy.
+  The audit called this gradient pattern the strongest "AI-slop"
+  tell in the surface — `docs-no-gradient-hero.spec.ts` regression-
+  guards both heroes.
+- Landing headline shifted from "Documentation / Create, organize,
+  and auto-generate documentation from your code" to an inviting
+  "What do you want to write today?" with shorter supporting copy.
+
+### Spinner consolidation
+
+- **New `components/ui/spinner.tsx`** with `xs|sm|md|lg` size variants,
+  `role="status"`, `data-testid="aexy-spinner"`, and an sr-only
+  label. Replaces four near-identical inline implementations:
+  `DocsLayoutClient.tsx:81` (lg), `[documentId]/page.tsx:45` (md),
+  `CollaborativeEditor.tsx:319` (sm), `TemplateSelector.tsx:140` (xs).
+- Future docs/UI spinners should reuse this component; the old
+  inline pattern accumulated four variants of the same idea across
+  the surface.
+
+### Drive IA: distinct from docs, discoverable from the sidebar
+
+- **Sidebar gains a "Files" link** in `SidebarNavigation.tsx` pointing
+  at `/docs/drive`. Drive was previously reachable only by URL.
+- **Drive page heading renamed to "Files & Storage"** (`drive.page.title`
+  in `messages/en/drive.json` + `messages/hi/drive.json`) with a new
+  subtitle: "Workspace files, task attachments, and compliance
+  documents — separate from your written docs." Makes the relationship
+  to docs explicit.
+- `docs-drive-ia.spec.ts` asserts the sidebar Files link is present,
+  click lands on /docs/drive, and the renamed heading + subtitle
+  render correctly.
+
+### Colour tokens sweep
+
+- **85 → 70 hardcoded colour refs in the docs surface.** Visible
+  destructive/success states replaced with semantic tokens:
+  `text-red-{300,400}` → `text-destructive`, `bg-red-50 dark:bg-red-900/20`
+  → `bg-destructive/10`, `text-emerald-400` (saved indicator) → `text-success`.
+  Touched: `DocumentItem.tsx` (Delete menu item), `[documentId]/page.tsx`
+  (error state), `CodeLinksDisplay.tsx`, `CodeLinkPanel.tsx`,
+  `CreateSpaceModal.tsx`, `GenerationPanel.tsx` (error+success banners),
+  `DocumentEditor.tsx` (Saved indicator). 15 refs collapsed.
+- Remaining ~70 are mostly: `CollaborationAwareness.tsx` (dead code),
+  `VersionHistoryPanel.tsx` (diff visualization where red specifically
+  means "removed"), `SyncStatusPanel`/`GitHubSyncPanel` (domain-specific
+  status palettes), and `DocumentItem.tsx`'s yellow favorite-star.
+
+### Mobile sub-routes
+
+- **Audit at 390×844** of `/docs/drive`, `/docs/files`, and
+  `/docs/knowledge-graph`. All three render usable content on
+  mobile after the Cluster 1 fixes (Drive already had `lg:flex-row`
+  + `lg:w-56` responsive utilities; KnowledgeGraph paywall is
+  naturally vertically-flowed; `/docs/files` redirects to `/docs/drive`).
+- `docs-mobile-sub-routes.spec.ts` locks in the regression: each
+  route's primary content is visible at 390 px and the CTAs/headings
+  don't overflow the viewport.
+
+### Tests
+
+5 new E2E specs (`frontend/e2e/docs-*.spec.ts`):
+
+- `docs-no-gradient-hero` — regression guard
+- `docs-drive-ia` — sidebar link + renamed heading + subtitle
+- `docs-mobile-sub-routes` — 3 routes × 390 px content reachability
+
+Total docs E2E: 18 specs, ~32 s full pass.
+
+## [0.8.23] - 2026-05-22
+
+In-app docs UX bug-fix sweep across three clusters (shell, editor,
+a11y), TDD against 13 new E2E specs. Captures every fix in a failing-
+then-passing test so the regressions can't sneak back. Cmd+K now
+actually searches docs, mobile is no longer unusable, the editor
+gets a real reading measure plus bullets + a floating BubbleMenu,
+and the sidebar exposes tree semantics to assistive tech.
+
+### Cluster 1 — shell fixes
+
+- **`Cmd+K` in `/docs` opens the doc-scoped SearchModal, not the
+  global CommandPalette.** Two `keydown` listeners on `document` were
+  racing — the app-shell global was mounted earlier and won. The docs
+  layout now installs its listener in capture phase and calls
+  `stopImmediatePropagation()`, so the global never sees the event
+  on docs routes. (`DocsLayoutClient.tsx`)
+- **Sidebar collapses to a drawer below `md`.** The hard-coded
+  `w-60 flex-shrink-0` was eating ~62 % of a 390 px viewport. Sidebar
+  now slides off-screen via `-translate-x-full md:translate-x-0`,
+  with a `data-testid="docs-mobile-menu-trigger"` hamburger in a new
+  mobile top bar (`pl-14` so it doesn't collide with the app-shell's
+  fixed-position trigger) and a backdrop that closes on tap.
+  Drawer auto-closes on route change.
+- **Delete confirmation is a styled dialog, not `window.confirm()`.**
+  `NotionSidebar.tsx` now opens the existing `ConfirmDialog` from
+  `components/ui/confirm-dialog.tsx` with `tone="danger"` and a
+  "Delete" primary action. The native browser dialog (which broke
+  visual consistency with the dark theme) is gone.
+- **Inert menu items hidden until implemented.** "Duplicate" and
+  "Manage Space" were `console.log("…")` TODOs surfaced as live
+  affordances. NotionSidebar no longer passes the `onDuplicate` /
+  `onManageSpace` props, so DocumentItem's existing
+  `{onDuplicate && (…)}` guards collapse the rows. Real handlers
+  can be wired later without changing markup.
+- **`/docs/files` no longer strands on "Loading document…".**
+  The bare prefix matched the `[documentId]` catch-all with
+  `documentId="files"` and loaded forever. A new
+  `app/(app)/docs/files/page.tsx` redirects to `/docs/drive`.
+
+### Cluster 2 — editor fixes
+
+- **Reading-measure cap.** `prose ... max-w-none` (which ran ~140
+  cpl on 1440 px viewports) replaced with
+  `prose ... max-w-3xl mx-auto` (~672 px / ~65 cpl). Editor
+  spec asserts `≤ 900 px` at 1440 desktop.
+  (`DocumentEditor.tsx:181`)
+- **Lists render visible markers again.** Tailwind's preflight
+  reset was stripping bullets off bare `<ul>`/`<ol>` inside the
+  ProseMirror because typography-plugin `prose-ul:` modifiers
+  weren't resolving in the cascade. Switched to arbitrary-variant
+  utilities (`[&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal
+  [&_ol]:pl-6 [&_li]:my-1`) which carry enough specificity.
+- **Emoji picker closes on Escape.** Audit caught the picker
+  staying open across three intermediate actions. Added a
+  scoped `keydown` listener while the picker is mounted; on
+  Escape it sets `showEmojiPicker(false)`.
+- **Manual `Save` button removed.** `autoSave` is on by default
+  with a 1 s debounce; the duplicate Save button created
+  "is autosave actually working?" doubt. Drop the `onSave` prop
+  passed to EditorToolbar — the `{onSave && (…)}` guard already
+  collapses the row. `handleManualSave` callback also removed.
+- **Floating BubbleMenu is back in the non-collab path.** The
+  BubbleMenu only existed in `CollaborativeEditor.tsx`, which is
+  hard-disabled by `collaborationEnabled = false`. DocumentEditor
+  now mounts its own BubbleMenu with Bold/Italic/Underline/Code
+  controls. `data-testid="docs-bubble-menu"` lives on an inner
+  wrapper because `@tiptap/react@2.27.1` BubbleMenu only forwards
+  `className` to the rendered div (verified by reading
+  `node_modules/@tiptap/react/dist/index.cjs`).
+
+### Cluster 3 — ARIA / accessibility
+
+- **SearchModal exposes the right contract.** `role="dialog"` +
+  `aria-modal="true"` + `aria-label="Search documents"` on the
+  modal root. Screen-reader users can now identify the overlay.
+- **Sidebar is a real tree.** The scrollable content container
+  gets `role="tree"` + `aria-label="Documents"`. Each
+  DocumentItem row gets `role="treeitem"` + `aria-selected`
+  (driven by `isSelected`) + `aria-expanded` when it has children.
+  Active document is `aria-selected="true"`.
+
+### Tests
+
+13 new E2E specs under `frontend/e2e/docs-*.spec.ts`, all live-
+backend, no LLM (use `backendOnlyReady` + `setupAiLiveAuth`).
+Spec-first per cluster: write specs → run them red → implement
+fixes → run them green. Files:
+
+- `docs-cmdk-doc-search`, `docs-mobile-sidebar` (×2),
+  `docs-styled-confirm-dialog`, `docs-todo-menu-items-hidden`,
+  `docs-files-route-redirect`
+- `docs-editor-reading-measure`, `docs-editor-list-bullets`,
+  `docs-editor-emoji-picker-escape`, `docs-editor-no-save-button`,
+  `docs-editor-bubble-menu`
+- `docs-a11y-search-modal`, `docs-a11y-doc-tree`
+
+Full suite passes in ~22 s.
+
 ## [0.8.22] - 2026-05-22
 
 AI/automation E2E coverage expansion: the workflow builder now has a
