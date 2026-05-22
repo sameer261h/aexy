@@ -661,7 +661,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           </div>
           {filters.teams.length === 1 && (
             <Link
-              href={`/settings/task-config?tab=statuses&project=${filters.teams[0]}`}
+              href={`/settings/projects/${filters.teams[0]}/statuses`}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors"
               title="Edit this project's status columns"
             >

@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.31] - 2026-05-22
+
+Moves the status admin to its semantic home: project-scoped statuses
+now live at `/settings/projects/<id>/statuses` next to General /
+Permissions / Repositories, instead of the workspace settings page
+with a `?project=` query param. The workspace task-config page keeps
+its workspace-defaults mode; the project-scoped UI moves out.
+
+### New project settings sub-route
+
+- `frontend/src/app/(app)/settings/projects/[projectId]/statuses/page.tsx`
+  hosts the project status admin in the same shell as General /
+  Permissions: matching breadcrumb, project header chip, tab nav
+  including the new `Statuses` link.
+- Reuses `useTaskStatuses(workspaceId, projectId)`, the
+  `DeleteStatusModal`, and the auto-fork backend from 0.8.29-0.8.30 —
+  no new service or API.
+- Fallback CTA ("Customize for this project") sits in the same
+  position as the workspace settings page's version. Rows render
+  read-only with a `Workspace default` chip until the fork happens.
+
+### Shared status components
+
+- Extracted `SortableStatusItem` to `frontend/src/components/settings/SortableStatusItem.tsx`
+  — the row component used by both `task-config/page.tsx` and the
+  new project statuses page. Includes the `readOnly` mode introduced
+  in 0.8.30.
+- Extracted `StatusModal` (the add/edit form) to
+  `frontend/src/components/settings/StatusModal.tsx`. Both pages
+  import it; the workspace page's inline copy is gone.
+
+### Tab nav + deep-link re-aim
+
+- Project settings (`/settings/projects/[projectId]` and `.../permissions`)
+  pages grow a `Statuses` tab link. Repositories sub-page keeps its
+  back-button layout untouched.
+- `Columns` deep link on the project board
+  (`/sprints/[projectId]/board`) now points at
+  `/settings/projects/<id>/statuses` instead of
+  `/settings/task-config?tab=statuses&project=<id>`.
+- Same change on the workspace All-Tasks header — the link still
+  only renders when the user has filtered to a single project.
+
+### Notes
+
+- `/settings/task-config` keeps its existing project picker for now;
+  it still works but the project deep links no longer point at it.
+  Once usage shifts to the new route the project-mode dropdown there
+  can be retired.
+- `useProject(workspaceId, projectId)` was already exporting
+  `isLoading` — no hook changes needed for this PR.
+
 ## [0.8.30] - 2026-05-22
 
 Finishes the project-scoped statuses UX: tasks no longer get orphaned
