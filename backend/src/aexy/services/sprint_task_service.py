@@ -22,6 +22,18 @@ from aexy.services.notification_service import (
 from aexy.services.github_task_sync_service import GitHubTaskSyncService
 
 
+class TaskValidationError(Exception):
+    """Raised when task-create/update inputs reference invalid relationships
+    (sprint outside project, status from a sibling project, project without
+    a team, …). Carries a stable ``code`` the API layer maps to a 400 detail
+    so the frontend can branch on the code without parsing prose.
+    """
+
+    def __init__(self, code: str, message: str | None = None) -> None:
+        self.code = code
+        super().__init__(message or code)
+
+
 def _stringify_field(value: object) -> str | None:
     """Render a field value into TaskActivity.old_value / new_value text.
 
@@ -1174,8 +1186,9 @@ class SprintTaskService:
         )
         team_link = (await self.db.execute(pt_stmt)).scalar_one_or_none()
         if not team_link:
-            raise ValueError(
-                "project_has_no_team: attach a team to the project before creating tasks"
+            raise TaskValidationError(
+                "project_has_no_team",
+                "Attach a team to the project before creating tasks.",
             )
         team_id = team_link.team_id
 
@@ -1184,7 +1197,7 @@ class SprintTaskService:
             s_stmt = select(Sprint).where(Sprint.id == sprint_id)
             sprint_row = (await self.db.execute(s_stmt)).scalar_one_or_none()
             if not sprint_row or str(sprint_row.team_id) != str(team_id):
-                raise ValueError("sprint_not_in_project")
+                raise TaskValidationError("sprint_not_in_project")
 
         # 3. If a custom status_id is provided, ensure it's either a workspace
         # default (project_id IS NULL) or scoped to *this* project — never one
@@ -1196,9 +1209,9 @@ class SprintTaskService:
             )
             status_row = (await self.db.execute(st_stmt)).scalar_one_or_none()
             if not status_row:
-                raise ValueError("status_not_found")
+                raise TaskValidationError("status_not_found")
             if status_row.project_id and str(status_row.project_id) != str(project_id):
-                raise ValueError("status_belongs_to_other_project")
+                raise TaskValidationError("status_belongs_to_other_project")
 
         task = SprintTask(
             id=str(uuid4()),

@@ -33,6 +33,13 @@ class TaskConfigService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    @staticmethod
+    def _scope_filter(project_id: str | None):
+        """WHERE clause for the workspace-default vs. project-override scope."""
+        if project_id is None:
+            return WorkspaceTaskStatus.project_id.is_(None)
+        return WorkspaceTaskStatus.project_id == project_id
+
     # ==================== Status Management ====================
 
     async def get_statuses(
@@ -51,8 +58,7 @@ class TaskConfigService:
         stmt = (
             select(WorkspaceTaskStatus)
             .where(WorkspaceTaskStatus.workspace_id == workspace_id)
-            .where(WorkspaceTaskStatus.project_id.is_(project_id) if project_id is None
-                   else WorkspaceTaskStatus.project_id == project_id)
+            .where(self._scope_filter(project_id))
         )
         if not include_inactive:
             stmt = stmt.where(WorkspaceTaskStatus.is_active == True)
@@ -96,8 +102,7 @@ class TaskConfigService:
             select(WorkspaceTaskStatus)
             .where(WorkspaceTaskStatus.workspace_id == workspace_id)
             .where(WorkspaceTaskStatus.slug == slug)
-            .where(WorkspaceTaskStatus.project_id.is_(project_id) if project_id is None
-                   else WorkspaceTaskStatus.project_id == project_id)
+            .where(self._scope_filter(project_id))
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
@@ -126,8 +131,7 @@ class TaskConfigService:
         stmt = (
             select(func.coalesce(func.max(WorkspaceTaskStatus.position), -1) + 1)
             .where(WorkspaceTaskStatus.workspace_id == workspace_id)
-            .where(WorkspaceTaskStatus.project_id.is_(project_id) if project_id is None
-                   else WorkspaceTaskStatus.project_id == project_id)
+            .where(self._scope_filter(project_id))
         )
         result = await self.db.execute(stmt)
         next_position = result.scalar() or 0

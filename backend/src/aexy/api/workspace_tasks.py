@@ -13,7 +13,7 @@ from aexy.schemas.sprint import (
     SprintTaskStatusUpdate,
     WorkspaceTaskCreate,
 )
-from aexy.services.sprint_task_service import SprintTaskService
+from aexy.services.sprint_task_service import SprintTaskService, TaskValidationError
 from aexy.services.workspace_service import WorkspaceService
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/tasks", tags=["Workspace Tasks"])
@@ -109,13 +109,10 @@ async def create_workspace_task(
             estimated_hours=data.estimated_hours,
             actor_id=str(current_user.id),
         )
-    except ValueError as exc:
-        # The service raises ValueError with a stable code (project_has_no_team,
-        # sprint_not_in_project, status_not_found, status_belongs_to_other_project)
-        # so the frontend can branch on the detail string without parsing prose.
+    except TaskValidationError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
+            detail=exc.code,
         )
 
     await db.commit()

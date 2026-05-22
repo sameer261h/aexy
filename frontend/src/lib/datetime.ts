@@ -74,6 +74,21 @@ export function formatDate(value: string | null | undefined): string {
  * Short variant for inline pills / breadcrumbs where the year is
  * obvious from context. Renders `Mar 5`.
  */
+/**
+ * Returns an error string if the date range is inverted, else `null`. Centralised
+ * here because the same check is repeated across every task-create surface
+ * (project board modal, backlog inline modal, workspace all-tasks modal).
+ */
+export function validateDateRange(
+  start: string | null | undefined,
+  end: string | null | undefined,
+): string | null {
+  if (!start || !end) return null;
+  if (new Date(end) < new Date(start)) return "End date must be after the start date.";
+  return null;
+}
+
+
 export function formatDateShort(value: string | null | undefined): string {
   if (!value) return "";
   const date = new Date(value);

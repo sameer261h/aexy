@@ -220,80 +220,18 @@ export function useWorkspaceTasks(workspaceId: string | null) {
     };
   }, [tasks, allSprints, projects, epicMap]);
 
-  // Create-task mutation — drives the column-header "+" modal and the
-  // inline quick-add row on /sprints?tab=tasks. Optimistically inserts the
-  // new card into the appropriate column so the UI feels immediate, then
-  // reconciles with the server result.
+  // Backs the column "+" modal and the inline quick-add row. Skips
+  // optimistic-insert in favour of an invalidate on settle — synthesising
+  // a SprintTask client-side made the team_id-filtered view drop the
+  // pending card and required keeping a ~40-field literal in lockstep
+  // with the server type.
   const createTaskMutation = useMutation({
     mutationFn: (payload: Parameters<typeof workspaceTasksApi.create>[1]) => {
       if (!workspaceId) throw new Error("workspaceId required");
       return workspaceTasksApi.create(workspaceId, payload);
     },
-    onMutate: async (payload) => {
-      await queryClient.cancelQueries({ queryKey: ["workspaceTasks", workspaceId] });
-      const prev = queryClient.getQueryData<SprintTask[]>(["workspaceTasks", workspaceId]);
-      const optimistic: SprintTask = {
-        id: `tmp-${Date.now()}`,
-        title: payload.title,
-        description: payload.description ?? null,
-        description_json: null,
-        story_points: payload.story_points ?? null,
-        priority: (payload.priority ?? "medium") as TaskPriority,
-        status: (payload.status ?? "backlog") as TaskStatus,
-        status_id: payload.status_id ?? null,
-        labels: payload.labels ?? [],
-        assignee_id: payload.assignee_id ?? null,
-        assignee_name: null,
-        assignee_avatar_url: null,
-        assignment_reason: null,
-        assignment_confidence: null,
-        sprint_id: payload.sprint_id ?? null,
-        team_id: null,
-        workspace_id: workspaceId,
-        source_type: "manual",
-        source_id: `tmp-${Date.now()}`,
-        source_url: null,
-        epic_id: payload.epic_id ?? null,
-        parent_task_id: null,
-        subtasks_count: 0,
-        started_at: null,
-        completed_at: null,
-        work_started_at: null,
-        cycle_time_hours: null,
-        lead_time_hours: null,
-        contributes_to_goal: false,
-        carried_over_from_sprint_id: null,
-        mentioned_user_ids: [],
-        mentioned_file_paths: [],
-        is_archived: false,
-        start_date: payload.start_date ?? null,
-        end_date: payload.end_date ?? null,
-        estimated_hours: payload.estimated_hours ?? null,
-        attachments: [],
-        custom_fields: {},
-        task_key: null,
-        workspace_slug: null,
-        identifier: null,
-        public_url: null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as unknown as SprintTask;
-      if (prev) {
-        queryClient.setQueryData<SprintTask[]>(
-          ["workspaceTasks", workspaceId],
-          [optimistic, ...prev],
-        );
-      }
-      return { prev };
-    },
-    onError: (err, _vars, ctx) => {
-      if (ctx?.prev) {
-        queryClient.setQueryData(["workspaceTasks", workspaceId], ctx.prev);
-      }
-      // Surface the backend's stable error code (project_has_no_team etc.) so
-      // the modal can render an inline hint instead of a toast.
-      const message =
-        err instanceof Error ? err.message : "Failed to create task";
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : "Failed to create task";
       toast.error(message);
     },
     onSettled: () => {
