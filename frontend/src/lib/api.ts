@@ -6623,7 +6623,76 @@ export const documentApi = {
   deleteGitHubSync: async (workspaceId: string, documentId: string, syncId: string): Promise<void> => {
     await api.delete(`/workspaces/${workspaceId}/documents/${documentId}/github-sync/${syncId}`);
   },
+
+  // ── Proposed Edits — AI suggestion review queue ─────────────
+  // Wired to backend/scripts/migrate_document_proposed_edits.sql.
+  // The legacy `generate()` overwrites; the default flow now creates
+  // a proposal here that the user approves / rejects via the
+  // banner + diff review UI.
+  listProposedEdits: async (
+    workspaceId: string,
+    documentId: string,
+    statusFilter: string = "pending"
+  ): Promise<ProposedEdit[]> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/documents/${documentId}/proposed-edits`,
+      { params: { status: statusFilter } }
+    );
+    return response.data;
+  },
+
+  approveProposedEdit: async (
+    workspaceId: string,
+    documentId: string,
+    proposalId: string
+  ): Promise<ProposedEdit> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/documents/${documentId}/proposed-edits/${proposalId}/approve`
+    );
+    return response.data;
+  },
+
+  rejectProposedEdit: async (
+    workspaceId: string,
+    documentId: string,
+    proposalId: string,
+    reason?: string
+  ): Promise<ProposedEdit> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/documents/${documentId}/proposed-edits/${proposalId}/reject`,
+      { reason: reason ?? null }
+    );
+    return response.data;
+  },
 };
+
+export type ProposedEditSource =
+  | "code_change_sync"
+  | "regenerate"
+  | "suggest_improvements"
+  | "manual_ai_edit";
+
+export type ProposedEditStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "superseded";
+
+export interface ProposedEdit {
+  id: string;
+  document_id: string;
+  source: ProposedEditSource;
+  proposed_content: Record<string, unknown>;
+  base_content_sha: string | null;
+  diff_summary: { sections_added?: string[]; sections_removed?: string[]; headings_changed?: string[] } | null;
+  status: ProposedEditStatus;
+  proposed_by_id: string | null;
+  proposed_at: string;
+  reviewed_by_id: string | null;
+  reviewed_at: string | null;
+  reason: string | null;
+  is_stale: boolean;
+}
 
 // ============ Template API ============
 

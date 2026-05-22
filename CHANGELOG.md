@@ -5,6 +5,105 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.26] - 2026-05-22
+
+Part B of the AI documentation initiative: the **proposed-edits
+review queue**. AI-generated content no longer overwrites
+`document.content` directly — it lands in a pending queue the user
+approves or rejects through a banner above the editor.
+
+### Data model
+
+- **New table `document_proposed_edits`**
+  (`backend/scripts/migrate_document_proposed_edits.sql`). Columns:
+  `id, document_id, source, proposed_content (jsonb),
+  base_content_sha, diff_summary (jsonb), status, proposed_by_id,
+  proposed_at, reviewed_by_id, reviewed_at, reason`. Indexed on
+  `(document_id, status)` for the banner's hot read path and on
+  `(document_id, base_content_sha)` for stale-detection lookups.
+- **`DocumentProposedEdit` SQLAlchemy model** in
+  `aexy.models.documentation` + `ProposedEditSource` and
+  `ProposedEditStatus` enums. Wired into `models/__init__.py`'s
+  `__all__`.
+- **Pydantic schemas** — `ProposedEditCreate`, `ProposedEditResponse`
+  (carries computed `is_stale`), `ProposedEditReject`.
+
+### Service
+
+- **`ProposedEditsService`** (`backend/src/aexy/services/proposed_edits_service.py`)
+  - `create_proposal` snapshots the current `content_sha` if the
+    caller didn't supply one, then auto-supersedes prior pending
+    proposals on the same document. The new row is flushed before
+    the supersede UPDATE runs, so the new proposal's id can be
+    referenced in the supersede `reason` without a null-id race.
+  - `approve` routes through `DocumentService.update_document`
+    which creates a `DocumentVersion` automatically — every approved
+    proposal lands as a versioned change.
+  - `reject` records an optional human-readable reason.
+  - `is_stale` compares the proposal's `base_content_sha` against
+    the document's current SHA; rows without a base are never
+    flagged (legacy / migration safety).
+  - `compute_content_sha` is key-order invariant (`sort_keys=True`)
+    so JS round-trips that re-serialize equivalent content don't
+    spuriously trigger the stale badge.
+
+### API
+
+- **`POST /workspaces/{ws}/documents/{doc_id}/generate`** default
+  changed: now creates a pending `proposed_edit` instead of writing
+  to `document.content`. Legacy overwrite behaviour is preserved
+  behind `?apply=true` for scripted / migration callers.
+- **`GET /workspaces/{ws}/documents/{doc_id}/proposed-edits`** —
+  list pending (default), or `?status=approved|rejected|superseded|all`.
+- **`POST .../proposed-edits/{id}/approve`** — applies and
+  transitions; bumps the version chain via DocumentService.
+- **`POST .../proposed-edits/{id}/reject`** — records reason.
+
+### Frontend
+
+- **`ProposedEditsBanner.tsx`** — banner above the editor when
+  pending proposals exist. Groups by source (`regenerate`,
+  `code_change_sync`, `suggest_improvements`, `manual_ai_edit`)
+  with distinct icons/labels per group. Click a proposal to expand
+  the review inline.
+- **`ProposedEditReview.tsx`** — three diff modes:
+  - **Summary (default)**: sections added / removed / headings
+    changed, scannable, no scrolling.
+  - **Unified**: full JSON view in a scroll container.
+  - **Side-by-side**: current vs proposed columns.
+  Approve / Reject actions live in the footer; Reject opens an
+  inline reason input. When `proposal.is_stale` is true, the
+  banner shows the merge-conflict UX and the Approve button copy
+  flips to "Apply anyway".
+- **Wired into `app/(app)/docs/[documentId]/page.tsx`** above the
+  editor. The component self-hides when there are no pending
+  proposals — no layout shift on docs that don't have AI edits.
+- **`documentApi.{listProposedEdits, approveProposedEdit,
+  rejectProposedEdit}`** added to `lib/api.ts` plus `ProposedEdit`,
+  `ProposedEditSource`, `ProposedEditStatus` types.
+
+### Tests
+
+- **Backend**: `tests/unit/test_proposed_edits_service.py` — 10
+  unit tests covering `compute_content_sha` invariants
+  (deterministic, key-order invariant, None == {}), `create_proposal`
+  (SHA snapshotting, flush-before-supersede ordering, string-source
+  acceptance), and `is_stale` (no-base / matching / diverged).
+- **Frontend**: `e2e/docs-proposed-edits.spec.ts` — 5 specs covering
+  banner rendering, all three diff modes (summary / unified /
+  side-by-side toggle), approve flow, reject-with-reason flow, and
+  the stale conflict UX.
+
+Full backend unit suite for docs: 10 specs pass.
+Full docs E2E: 27 specs, ~58 s.
+
+### Migration order
+
+Run `python scripts/run_migrations.py` (the new
+`migrate_document_proposed_edits.sql` is the only pending change).
+No backfill needed — proposals only land going forward, legacy
+generate callers that pass `?apply=true` keep working unchanged.
+
 ## [0.8.25] - 2026-05-22
 
 Part A of the AI documentation testing initiative: TDD coverage for

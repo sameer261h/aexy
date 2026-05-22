@@ -9,6 +9,7 @@ import { CollaborativeEditor } from "@/components/docs/CollaborativeEditor";
 import { DocumentEditor } from "@/components/docs/DocumentEditor";
 import { DocumentBreadcrumb } from "@/components/docs/DocumentBreadcrumb";
 import { SyncStatusPanel } from "@/components/docs/SyncStatusPanel";
+import { ProposedEditsBanner } from "@/components/docs/ProposedEditsBanner";
 import { Spinner } from "@/components/ui/spinner";
 import { documentApi } from "@/lib/api";
 
@@ -131,16 +132,23 @@ export default function DocumentPage() {
 
   return (
     <div className="flex flex-col h-full">
-      {hasCodeLinks && currentWorkspaceId ? (
-        <div className="px-4 pt-4">
-          <SyncStatusPanel
+      {currentWorkspaceId ? (
+        <div className="px-4 pt-4 space-y-3">
+          {/* Proposed edits — banner is self-hiding when none exist */}
+          <ProposedEditsBanner
             workspaceId={currentWorkspaceId}
             documentId={documentId}
-            syncType="manual"
-            pendingChanges={pendingChanges}
-            lastSyncedAt={lastSyncedAt}
-            onManualSync={handleManualSync}
           />
+          {hasCodeLinks ? (
+            <SyncStatusPanel
+              workspaceId={currentWorkspaceId}
+              documentId={documentId}
+              syncType="manual"
+              pendingChanges={pendingChanges}
+              lastSyncedAt={lastSyncedAt}
+              onManualSync={handleManualSync}
+            />
+          ) : null}
         </div>
       ) : null}
       <DocumentEditor

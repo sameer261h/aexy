@@ -1025,3 +1025,113 @@ SYSTEM_TEMPLATES = [
         "is_system": True,
     },
 ]
+
+
+# ---------------------------------------------------------------------------
+# Proposed Edits — AI suggestion review queue
+# ---------------------------------------------------------------------------
+#
+# Sits between AI output (regenerate / sync / suggest_improvements / future
+# manual_ai_edit) and the canonical Document.content. The previous flow
+# overwrote content directly on regenerate; this puts a review step in
+# between so the user approves or rejects each proposal.
+#
+# See backend/scripts/migrate_document_proposed_edits.sql for the schema.
+
+
+class ProposedEditSource(str, Enum):
+    CODE_CHANGE_SYNC = "code_change_sync"
+    REGENERATE = "regenerate"
+    SUGGEST_IMPROVEMENTS = "suggest_improvements"
+    MANUAL_AI_EDIT = "manual_ai_edit"
+
+
+class ProposedEditStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    SUPERSEDED = "superseded"
+
+
+class DocumentProposedEdit(Base):
+    """A pending AI-proposed change to a Document's content.
+
+    The frontend renders these as a banner above the editor (grouped by
+    `source`) with section-summary + expandable diff UI. Approving
+    replaces `documents.content` and creates a new `DocumentVersion`;
+    rejecting records a reason; a fresh proposal supersedes older
+    pending ones on the same document.
+    """
+
+    __tablename__ = "document_proposed_edits"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+
+    document_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    # ProposedEditSource enum value
+
+    # Full proposed TipTap doc; JSONB so the editor schema can evolve
+    # without a migration.
+    proposed_content: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+    # SHA of `documents.content` at proposal authoring time. Mismatch
+    # at approve-time means the user has hand-edited since — the FE
+    # surfaces the merge-conflict UI.
+    base_content_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Section-level diff summary the FE renders as the default view.
+    # Shape: {"sections_added": [...], "sections_removed": [...],
+    #         "headings_changed": [...]}
+    diff_summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    status: Mapped[str] = mapped_column(
+        String(20), default="pending", nullable=False
+    )
+
+    proposed_by_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("developers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    proposed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    reviewed_by_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("developers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Free-text reason; used for rejects (user explanation) and for
+    # 'superseded' (system-recorded: superseded by id=...).
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    # Relationships
+    document: Mapped["Document"] = relationship("Document", lazy="selectin")
