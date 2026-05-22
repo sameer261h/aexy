@@ -26,6 +26,7 @@ import {
   Layers,
   Plus,
   Search,
+  Settings2,
   User,
   X,
 } from "lucide-react";
@@ -47,6 +48,10 @@ import {
   InlineQuickAddRow,
 } from "@/components/planning/AddWorkspaceTaskModal";
 import { useWorkspaceMembers } from "@/hooks/useWorkspace";
+import { useShortcut } from "@/hooks/useKeyboardShortcuts";
+
+const KANBAN_ROW_CLASSES =
+  "flex flex-col gap-3 md:flex-row md:overflow-x-auto md:pb-4";
 
 interface WorkspaceTasksTabProps {
   workspaceId: string | null;
@@ -404,11 +409,8 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
     return projects[0]?.id ?? null;
   }, [filters.teams, projects]);
 
-  // Modal state — when null, modal is closed.
   const [addModalStatus, setAddModalStatus] = useState<TaskStatus | null>(null);
 
-  // Selection — driven by shift-click + the per-card checkbox. Bulk actions
-  // are surfaced in a floating toolbar when 1+ cards are selected.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const toggleSelected = (taskId: string) => {
     setSelectedIds((prev) => {
@@ -420,15 +422,28 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
   };
   const clearSelection = () => setSelectedIds(new Set());
   const applyBulkStatus = async (next: TaskStatus) => {
-    const ids = Array.from(selectedIds);
-    // Optimistic-friendly: fire all updates in parallel; the mutation hook
-    // patches the cache per call so the kanban reflects each move as it
-    // resolves. Errors per task are toasted by the hook.
+    // Fire N updates in parallel. Cost is N round-trips; a workspace-level
+    // bulk-status endpoint would collapse to one — tracked as a follow-up.
     await Promise.allSettled(
-      ids.map((taskId) => updateTaskStatus({ taskId, status: next })),
+      Array.from(visibleSelectedIds).map((taskId) =>
+        updateTaskStatus({ taskId, status: next }),
+      ),
     );
     clearSelection();
   };
+
+  // Drop selected ids that aren't in the current filtered view so the
+  // toolbar's "N selected" count matches what the user can see and the
+  // bulk action doesn't no-op on hidden rows.
+  const visibleSelectedIds = useMemo(() => {
+    if (selectedIds.size === 0) return selectedIds;
+    const visible = new Set(filteredTasks.map((t) => t.id));
+    const next = new Set<string>();
+    selectedIds.forEach((id) => {
+      if (visible.has(id)) next.add(id);
+    });
+    return next;
+  }, [selectedIds, filteredTasks]);
 
   // Sync filter state ↔ URL. We persist a small whitelist of filter dimensions
   // (`q`, `assignee`, `priority`, `team`, `sprint`) plus the `tab` so refreshing
@@ -456,56 +471,40 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Debounce the URL write so the search field doesn't push a `router.replace`
+  // on every keystroke. We deliberately don't take `searchParams` as a
+  // dep — it changes after every replace and would create a feedback loop;
+  // we re-read the current URL inline.
   useEffect(() => {
     if (!initialUrlSyncedRef.current) return;
-    const params = new URLSearchParams(searchParams.toString());
-    // Preserve `tab` and any unrelated keys (current tab is "tasks").
-    params.delete("q");
-    params.delete("assignee");
-    params.delete("priority");
-    params.delete("team");
-    params.delete("sprint");
-    if (filters.search) params.set("q", filters.search);
-    filters.assignees.forEach((a) => params.append("assignee", a));
-    filters.priorities.forEach((p) => params.append("priority", p));
-    filters.teams.forEach((t) => params.append("team", t));
-    filters.sprints.forEach((s) => params.append("sprint", s));
-    const next = params.toString();
-    // Use replace, not push, so we don't pollute browser history with every
-    // keystroke in the search box. Skip if the URL hasn't actually changed.
-    const current = searchParams.toString();
-    if (next !== current) {
-      router.replace(`${pathname}${next ? `?${next}` : ""}`, { scroll: false });
-    }
-  }, [filters, pathname, router, searchParams]);
+    const handle = setTimeout(() => {
+      const current = window.location.search.replace(/^\?/, "");
+      const params = new URLSearchParams(current);
+      params.delete("q");
+      params.delete("assignee");
+      params.delete("priority");
+      params.delete("team");
+      params.delete("sprint");
+      if (filters.search) params.set("q", filters.search);
+      filters.assignees.forEach((a) => params.append("assignee", a));
+      filters.priorities.forEach((p) => params.append("priority", p));
+      filters.teams.forEach((t) => params.append("team", t));
+      filters.sprints.forEach((s) => params.append("sprint", s));
+      const next = params.toString();
+      if (next !== current) {
+        router.replace(`${pathname}${next ? `?${next}` : ""}`, { scroll: false });
+      }
+    }, 200);
+    return () => clearTimeout(handle);
+  }, [filters, pathname, router]);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Hotkeys (only when the user isn't typing in a field):
-  //   n        → open the add-task modal pre-filtered to "To Do"
-  //   /        → focus the search input
-  //   Escape   → close the modal (handled inside the modal itself)
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      const inField =
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable);
-      if (inField) return;
-      if (addModalStatus !== null) return;
-      if (e.key === "n" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        e.preventDefault();
-        setAddModalStatus("todo");
-      } else if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        e.preventDefault();
-        searchInputRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [addModalStatus]);
+  // `n` opens the add-task modal pre-filtered to "To Do"; `/` focuses search.
+  // The modal handles its own Esc.
+  const hotkeysEnabled = addModalStatus === null;
+  useShortcut("n", () => setAddModalStatus("todo"), { enabled: hotkeysEnabled });
+  useShortcut("/", () => searchInputRef.current?.focus(), { enabled: hotkeysEnabled });
 
   // Precompute localized labels so we pass plain strings down to dumb children.
   const statusLabel = useMemo<Record<TaskStatus, string>>(
@@ -660,6 +659,16 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
               ? t("taskCount", { count: filteredTasks.length })
               : t("taskCountPlural", { count: filteredTasks.length })}
           </div>
+          {filters.teams.length === 1 && (
+            <Link
+              href={`/settings/task-config?tab=statuses&project=${filters.teams[0]}`}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors"
+              title="Edit this project's status columns"
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+              Columns
+            </Link>
+          )}
           <button
             type="button"
             onClick={() => setAddModalStatus("todo")}
@@ -687,7 +696,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
 
       {/* Kanban */}
       {isLoading ? (
-        <div className="flex flex-col gap-3 md:flex-row md:overflow-x-auto md:pb-4">
+        <div className={KANBAN_ROW_CLASSES}>
           {STATUSES.map((s, colIdx) => (
             <div
               key={s}
@@ -732,7 +741,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
-          <div className="flex flex-col gap-3 md:flex-row md:overflow-x-auto md:pb-4">
+          <div className={KANBAN_ROW_CLASSES}>
             {STATUSES.map((status) => (
               <KanbanColumn
                 key={status}
@@ -747,7 +756,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
                 }}
                 isCreating={isCreatingTask}
                 defaultProjectId={defaultProjectId}
-                selectedIds={selectedIds}
+                selectedIds={visibleSelectedIds}
                 onToggleSelected={toggleSelected}
               />
             ))}
@@ -768,7 +777,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
       )}
 
       <AnimatePresence>
-        {selectedIds.size > 0 && (
+        {visibleSelectedIds.size > 0 && (
           <motion.div
             initial={{ y: 24, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
@@ -779,7 +788,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
             aria-label="Bulk actions"
           >
             <span className="px-2 text-xs font-medium text-foreground">
-              {selectedIds.size} selected
+              {visibleSelectedIds.size} selected
             </span>
             <div className="h-4 w-px bg-border/60" />
             <select

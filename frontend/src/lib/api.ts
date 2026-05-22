@@ -4065,8 +4065,25 @@ export const taskConfigApi = {
     return response.data;
   },
 
-  deleteStatus: async (workspaceId: string, statusId: string): Promise<void> => {
-    await api.delete(`/workspaces/${workspaceId}/task-statuses/${statusId}`);
+  deleteStatus: async (
+    workspaceId: string,
+    statusId: string,
+    options?: { migrateTo?: string },
+  ): Promise<void> => {
+    await api.delete(`/workspaces/${workspaceId}/task-statuses/${statusId}`, {
+      params: options?.migrateTo ? { migrate_to: options.migrateTo } : undefined,
+    });
+  },
+
+  /** How many active tasks currently use this status. Powers the delete modal. */
+  getStatusUsage: async (
+    workspaceId: string,
+    statusId: string,
+  ): Promise<{ count: number }> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/task-statuses/${statusId}/usage`,
+    );
+    return response.data;
   },
 
   reorderStatuses: async (workspaceId: string, statusIds: string[]): Promise<TaskStatusConfig[]> => {

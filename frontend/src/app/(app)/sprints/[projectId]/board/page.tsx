@@ -2837,6 +2837,18 @@ export default function ProjectBoardPage({
                 </button>
               )}
 
+              {/* Columns — deep-link to workspace settings, pre-scoped to
+                  this project. Visible to all members; the settings page
+                  itself enforces admin permission for mutations. */}
+              <Link
+                href={`/settings/task-config?tab=statuses&project=${projectId}`}
+                className="flex items-center gap-2 px-3 py-1.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg text-sm transition"
+                title="Edit this project's status columns"
+              >
+                <Settings2 className="h-4 w-4" />
+                Columns
+              </Link>
+
               {/* Add Task */}
               <button
                 onClick={() => setShowAddTask(true)}

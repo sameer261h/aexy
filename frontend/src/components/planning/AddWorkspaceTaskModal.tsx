@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import Image from "next/image";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   X,
@@ -14,6 +13,8 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { validateDateRange } from "@/lib/datetime";
+import { useShortcut } from "@/hooks/useKeyboardShortcuts";
 import {
   SprintListItem,
   TaskPriority,
@@ -98,19 +99,6 @@ export function AddWorkspaceTaskModal({
   const [error, setError] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
 
-  // Sprints scoped to the selected project — empty means "no sprints in this
-  // project" (e.g. backlog-only project) and we just hide the sprint picker.
-  const sprintsForProject = useMemo(
-    () =>
-      sprints.filter((s) =>
-        // SprintListItem has team_id, not project_id, so fall back to "show
-        // all sprints" if we can't tell — better than hiding a real choice.
-        projectId ? true : true,
-      ),
-    [sprints, projectId],
-  );
-
-  // Autofocus the title — this is a fast-entry surface, every keystroke matters.
   useEffect(() => {
     titleRef.current?.focus();
   }, []);
@@ -127,14 +115,7 @@ export function AddWorkspaceTaskModal({
     }
   }, [projectId]);
 
-  // Esc to close — defer-bound so it doesn't fight with native form Esc-blur.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isSubmitting) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, isSubmitting]);
+  useShortcut("escape", onClose, { enabled: !isSubmitting });
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -147,8 +128,9 @@ export function AddWorkspaceTaskModal({
       setError("Pick a project.");
       return;
     }
-    if (startDate && endDate && new Date(endDate) < new Date(startDate)) {
-      setError("End date must be after the start date.");
+    const dateError = validateDateRange(startDate, endDate);
+    if (dateError) {
+      setError(dateError);
       return;
     }
     try {
@@ -265,7 +247,7 @@ export function AddWorkspaceTaskModal({
               className={fieldInputClasses}
             >
               <option value="">Backlog</option>
-              {sprintsForProject.map((s) => (
+              {sprints.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>

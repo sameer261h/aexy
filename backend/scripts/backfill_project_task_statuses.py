@@ -46,7 +46,6 @@ from sqlalchemy import select  # noqa: E402
 
 from aexy.core.database import async_session_maker  # noqa: E402
 from aexy.models.project import Project  # noqa: E402
-from aexy.models.sprint import WorkspaceTaskStatus  # noqa: E402
 from aexy.services.task_config_service import TaskConfigService  # noqa: E402
 
 
@@ -60,22 +59,16 @@ async def _projects_in_all_workspaces(db) -> list[Project]:
     return list((await db.execute(stmt)).scalars().all())
 
 
-async def _has_project_statuses(db, workspace_id: str, project_id: str) -> bool:
-    stmt = (
-        select(WorkspaceTaskStatus.id)
-        .where(WorkspaceTaskStatus.workspace_id == workspace_id)
-        .where(WorkspaceTaskStatus.project_id == project_id)
-        .limit(1)
-    )
-    return (await db.execute(stmt)).scalar_one_or_none() is not None
-
-
 async def _backfill_one(db, workspace_id: str, project_id: str, dry_run: bool) -> str:
     """Returns one of: 'skipped', 'copied N', 'no_defaults'."""
-    if await _has_project_statuses(db, workspace_id, project_id):
+    service = TaskConfigService(db)
+
+    existing = await service.get_statuses(
+        workspace_id, project_id=project_id, include_inactive=True
+    )
+    if existing:
         return "skipped (already has overrides)"
 
-    service = TaskConfigService(db)
     defaults = await service.get_statuses(workspace_id, include_inactive=True)
     if not defaults:
         return "no_defaults (workspace has no task statuses to clone)"

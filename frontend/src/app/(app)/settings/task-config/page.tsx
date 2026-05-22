@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   Check,
   ChevronDown,
@@ -26,6 +27,7 @@ import { useWorkspace, useWorkspaceMembers } from "@/hooks/useWorkspace";
 import { useTaskStatuses, useCustomFields } from "@/hooks/useTaskConfig";
 import { useProjects } from "@/hooks/useProjects";
 import { useAuth } from "@/hooks/useAuth";
+import { DeleteStatusModal } from "@/components/settings/DeleteStatusModal";
 import { TaskStatusConfig, CustomField, StatusCategory, CustomFieldType, CustomFieldOption } from "@/lib/api";
 import {
   DndContext,
@@ -91,9 +93,20 @@ interface SortableStatusItemProps {
   isAdmin: boolean;
   onEdit: (status: TaskStatusConfig) => void;
   onDelete: (statusId: string) => void;
+  /** When true the row renders with a "Workspace default" chip and no
+      edit/delete affordances. Used in per-project mode before the admin
+      has clicked "Customize for this project". */
+  readOnly?: boolean;
 }
 
-function SortableStatusItem({ status, isAdmin, onEdit, onDelete }: SortableStatusItemProps) {
+function SortableStatusItem({
+  status,
+  isAdmin,
+  onEdit,
+  onDelete,
+  readOnly = false,
+}: SortableStatusItemProps) {
+  const interactive = isAdmin && !readOnly;
   const [showMenu, setShowMenu] = useState(false);
   const {
     attributes,
@@ -114,9 +127,11 @@ function SortableStatusItem({ status, isAdmin, onEdit, onDelete }: SortableStatu
     <div
       ref={setNodeRef}
       style={style}
-      className="bg-card rounded-lg p-3 flex items-center gap-3"
+      className={`bg-card rounded-lg p-3 flex items-center gap-3 ${
+        readOnly ? "opacity-80" : ""
+      }`}
     >
-      {isAdmin && (
+      {interactive && (
         <button
           {...attributes}
           {...listeners}
@@ -140,10 +155,15 @@ function SortableStatusItem({ status, isAdmin, onEdit, onDelete }: SortableStatu
               Default
             </span>
           )}
+          {readOnly && (
+            <span className="px-2 py-0.5 rounded text-xs bg-muted text-muted-foreground border border-border">
+              Workspace default
+            </span>
+          )}
         </div>
         <p className="text-muted-foreground text-xs">slug: {status.slug}</p>
       </div>
-      {isAdmin && (
+      {interactive && (
         <div className="relative">
           <button
             onClick={() => setShowMenu(!showMenu)}
@@ -673,7 +693,26 @@ export default function TaskConfigPage() {
   // Project picker for the Statuses tab. `null` = workspace defaults
   // (legacy behavior); a project id = that project's status set, with the
   // backend falling back to workspace defaults until the admin customizes.
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  // Hydrate from `?project=<id>` so deep links from the project board land
+  // pre-scoped to the right project.
+  const searchParams = useSearchParams();
+  const initialProjectFromUrl = searchParams.get("project");
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    initialProjectFromUrl,
+  );
+
+  // If the projects list arrives after mount and the URL-supplied id matches
+  // a real project, keep the selection. If it doesn't match, clear so the
+  // dropdown doesn't sit on a dangling value.
+  useEffect(() => {
+    if (initialProjectFromUrl && projects.length > 0) {
+      const exists = projects.some((p) => p.id === initialProjectFromUrl);
+      if (!exists) setSelectedProjectId(null);
+    }
+    // We only react to the projects list resolving — the URL param is
+    // captured once via initial state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects]);
 
   const {
     statuses,
@@ -687,6 +726,7 @@ export default function TaskConfigPage() {
     isCloning,
     isCreating: isCreatingStatus,
     isUpdating: isUpdatingStatus,
+    isDeleting: isDeletingStatus,
   } = useTaskStatuses(currentWorkspaceId, selectedProjectId);
 
   const {
@@ -705,6 +745,8 @@ export default function TaskConfigPage() {
   const [showFieldModal, setShowFieldModal] = useState(false);
   const [editingStatus, setEditingStatus] = useState<TaskStatusConfig | null>(null);
   const [editingField, setEditingField] = useState<CustomField | null>(null);
+  // The status the operator clicked Delete on — drives the confirm modal.
+  const [deletingStatus, setDeletingStatus] = useState<TaskStatusConfig | null>(null);
 
   const currentMember = workspaceMembers.find((m) => m.developer_id === user?.id);
   const isAdmin = currentMember?.role === "owner" || currentMember?.role === "admin";
@@ -738,15 +780,24 @@ export default function TaskConfigPage() {
     await reorderFields(newOrder.map((f) => f.id));
   };
 
-  const handleDeleteStatus = async (statusId: string) => {
-    if (confirm("Are you sure you want to delete this status? Tasks with this status will be moved to the default status.")) {
-      try {
-        await deleteStatus(statusId);
-        toast.success("Status deleted");
-      } catch (error) {
-        console.error("Failed to delete status:", error);
-        toast.error("Failed to delete status");
-      }
+  const handleDeleteStatus = (statusId: string) => {
+    const target = statuses.find((s) => s.id === statusId) ?? null;
+    setDeletingStatus(target);
+  };
+
+  const handleConfirmDelete = async (migrateTo: string | null) => {
+    if (!deletingStatus) return;
+    try {
+      await deleteStatus({
+        statusId: deletingStatus.id,
+        migrateTo: migrateTo ?? undefined,
+      });
+      toast.success("Status deleted");
+      setDeletingStatus(null);
+    } catch (error) {
+      console.error("Failed to delete status:", error);
+      const message = error instanceof Error ? error.message : "Failed to delete status";
+      toast.error(message);
     }
   };
 
@@ -964,6 +1015,9 @@ export default function TaskConfigPage() {
                               setShowStatusModal(true);
                             }}
                             onDelete={handleDeleteStatus}
+                            readOnly={
+                              !!selectedProjectId && isUsingWorkspaceFallback
+                            }
                           />
                         ))}
                       </div>
@@ -1125,6 +1179,17 @@ export default function TaskConfigPage() {
           }}
           onSave={handleSaveField}
           isSaving={isCreatingField || isUpdatingField}
+        />
+      )}
+
+      {deletingStatus && currentWorkspaceId && (
+        <DeleteStatusModal
+          workspaceId={currentWorkspaceId}
+          status={deletingStatus}
+          candidates={statuses}
+          onClose={() => setDeletingStatus(null)}
+          onConfirm={handleConfirmDelete}
+          isDeleting={isDeletingStatus}
         />
       )}
     </div>

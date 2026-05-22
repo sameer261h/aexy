@@ -6,7 +6,8 @@ from uuid import uuid4
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from aexy.models.sprint import WorkspaceTaskStatus, WorkspaceCustomField
+from aexy.models.sprint import SprintTask, WorkspaceTaskStatus, WorkspaceCustomField
+from aexy.services.sprint_task_service import TaskValidationError
 
 
 def slugify(text: str) -> str:
@@ -33,6 +34,13 @@ class TaskConfigService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    @staticmethod
+    def _scope_filter(project_id: str | None):
+        """WHERE clause for the workspace-default vs. project-override scope."""
+        if project_id is None:
+            return WorkspaceTaskStatus.project_id.is_(None)
+        return WorkspaceTaskStatus.project_id == project_id
+
     # ==================== Status Management ====================
 
     async def get_statuses(
@@ -51,8 +59,7 @@ class TaskConfigService:
         stmt = (
             select(WorkspaceTaskStatus)
             .where(WorkspaceTaskStatus.workspace_id == workspace_id)
-            .where(WorkspaceTaskStatus.project_id.is_(project_id) if project_id is None
-                   else WorkspaceTaskStatus.project_id == project_id)
+            .where(self._scope_filter(project_id))
         )
         if not include_inactive:
             stmt = stmt.where(WorkspaceTaskStatus.is_active == True)
@@ -96,8 +103,7 @@ class TaskConfigService:
             select(WorkspaceTaskStatus)
             .where(WorkspaceTaskStatus.workspace_id == workspace_id)
             .where(WorkspaceTaskStatus.slug == slug)
-            .where(WorkspaceTaskStatus.project_id.is_(project_id) if project_id is None
-                   else WorkspaceTaskStatus.project_id == project_id)
+            .where(self._scope_filter(project_id))
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
@@ -112,7 +118,20 @@ class TaskConfigService:
         is_default: bool = False,
         project_id: str | None = None,
     ) -> WorkspaceTaskStatus:
-        """Create a new task status (workspace default if project_id is None)."""
+        """Create a new task status (workspace default if project_id is None).
+
+        For a project-scoped create on a project that's currently on fallback
+        (zero project rows), clone the workspace defaults in first so the
+        project doesn't suddenly drop from "N inherited statuses" down to
+        "1 manually-added status" via the resolver.
+        """
+        if project_id is not None:
+            # `clone_workspace_statuses_to_project` is a single-project
+            # snapshot — `_snapshot_fallback_projects` would scan every
+            # project in the workspace, which is wasteful here. The clone
+            # helper is idempotent, so no pre-check needed.
+            await self.clone_workspace_statuses_to_project(workspace_id, project_id)
+
         # Generate unique slug within the (workspace, project) scope.
         base_slug = slugify(name)
         slug = base_slug
@@ -126,8 +145,7 @@ class TaskConfigService:
         stmt = (
             select(func.coalesce(func.max(WorkspaceTaskStatus.position), -1) + 1)
             .where(WorkspaceTaskStatus.workspace_id == workspace_id)
-            .where(WorkspaceTaskStatus.project_id.is_(project_id) if project_id is None
-                   else WorkspaceTaskStatus.project_id == project_id)
+            .where(self._scope_filter(project_id))
         )
         result = await self.db.execute(stmt)
         next_position = result.scalar() or 0
@@ -184,6 +202,56 @@ class TaskConfigService:
         await self.db.flush()
         return cloned
 
+    async def _snapshot_fallback_projects(self, workspace_id: str) -> int:
+        """Capture the current workspace defaults into every fallback project
+        before a destructive workspace-default edit. Returns the number of
+        projects snapshotted.
+
+        This is the mechanism that makes "workspace edits don't affect project
+        statuses" hold even for projects that haven't yet customized — they
+        get an automatic clone the moment a workspace admin renames/deletes/
+        reorders, capturing the pre-edit state. Projects that already
+        customized are detected (any row with this project_id) and skipped.
+
+        Additive edits (a new workspace status) are *not* destructive and
+        should call sites bypass this helper; fallback projects will pick up
+        the new status via the resolver and that's the intended behavior.
+        """
+        # Lazy import — Project lives in a sibling models package and would
+        # create a circular import if imported at module top.
+        from aexy.models.project import Project
+
+        project_ids_stmt = select(Project.id).where(
+            Project.workspace_id == workspace_id
+        )
+        all_project_ids = list(
+            (await self.db.execute(project_ids_stmt)).scalars().all()
+        )
+        if not all_project_ids:
+            return 0
+
+        customized_stmt = (
+            select(WorkspaceTaskStatus.project_id)
+            .where(WorkspaceTaskStatus.workspace_id == workspace_id)
+            .where(WorkspaceTaskStatus.project_id.is_not(None))
+            .distinct()
+        )
+        customized_ids = {
+            str(pid)
+            for pid in (await self.db.execute(customized_stmt)).scalars().all()
+        }
+
+        fallback_ids = [
+            str(pid) for pid in all_project_ids if str(pid) not in customized_ids
+        ]
+        if not fallback_ids:
+            return 0
+
+        for pid in fallback_ids:
+            await self.clone_workspace_statuses_to_project(workspace_id, pid)
+
+        return len(fallback_ids)
+
     async def update_status(
         self,
         status_id: str,
@@ -193,10 +261,18 @@ class TaskConfigService:
         icon: str | None = None,
         is_default: bool | None = None,
     ) -> WorkspaceTaskStatus | None:
-        """Update a task status."""
+        """Update a task status.
+
+        If the row being edited is a workspace default, fallback projects are
+        snapshotted first so they retain the pre-edit state. See
+        ``_snapshot_fallback_projects`` for why.
+        """
         status = await self.get_status(status_id)
         if not status:
             return None
+
+        if status.project_id is None:
+            await self._snapshot_fallback_projects(str(status.workspace_id))
 
         if name is not None:
             status.name = name
@@ -215,11 +291,66 @@ class TaskConfigService:
         await self.db.refresh(status)
         return status
 
-    async def delete_status(self, status_id: str) -> bool:
-        """Soft delete a status (mark as inactive)."""
+    async def count_tasks_using_status(self, status_id: str) -> int:
+        """How many active (non-archived) tasks currently point at this status row."""
+        stmt = (
+            select(func.count(SprintTask.id))
+            .where(SprintTask.status_id == status_id)
+            .where(SprintTask.is_archived == False)
+        )
+        return int((await self.db.execute(stmt)).scalar() or 0)
+
+    async def delete_status(
+        self,
+        status_id: str,
+        migrate_to_status_id: str | None = None,
+    ) -> bool:
+        """Soft delete a status (mark as inactive).
+
+        For workspace defaults: snapshot fallback projects first so they keep
+        the to-be-deleted status as a project override.
+
+        ``migrate_to_status_id``: when provided, rewrites every task currently
+        pointing at this status row to the target row's id (and legacy slug
+        string) before the soft delete. The target must belong to the same
+        workspace; for project-scoped sources the target must be either a
+        workspace default or scoped to the same project — otherwise the
+        migration is refused so tasks can't end up cross-project.
+        """
         status = await self.get_status(status_id)
         if not status:
             return False
+
+        if migrate_to_status_id:
+            target = await self.get_status(migrate_to_status_id)
+            if not target:
+                raise TaskValidationError("migration_target_not_found")
+            if str(target.workspace_id) != str(status.workspace_id):
+                raise TaskValidationError("migration_target_other_workspace")
+            if target.id == status.id:
+                raise TaskValidationError("migration_target_same_as_source")
+            # A workspace-default delete pulls tasks from every project that
+            # used it — they can't all land on one project's column. The
+            # target must be another workspace default.
+            if status.project_id is None and target.project_id is not None:
+                raise TaskValidationError("migration_target_other_project")
+            # A project-scoped delete must land in the same project (or in
+            # workspace-default scope, which is shared and safe).
+            if (
+                status.project_id is not None
+                and target.project_id is not None
+                and str(target.project_id) != str(status.project_id)
+            ):
+                raise TaskValidationError("migration_target_other_project")
+
+            await self.db.execute(
+                update(SprintTask)
+                .where(SprintTask.status_id == status_id)
+                .values(status_id=target.id, status=target.slug)
+            )
+
+        if status.project_id is None:
+            await self._snapshot_fallback_projects(str(status.workspace_id))
 
         status.is_active = False
         await self.db.flush()
@@ -230,7 +361,24 @@ class TaskConfigService:
         workspace_id: str,
         status_ids: list[str],
     ) -> list[WorkspaceTaskStatus]:
-        """Reorder statuses by providing new order of IDs."""
+        """Reorder statuses by providing new order of IDs.
+
+        If any of the IDs are workspace defaults, fallback projects are
+        snapshotted first — reordering changes a project's visual workflow
+        and counts as destructive in the same sense as a rename.
+        """
+        if status_ids:
+            scope_stmt = select(WorkspaceTaskStatus.project_id).where(
+                WorkspaceTaskStatus.id.in_(status_ids),
+                WorkspaceTaskStatus.workspace_id == workspace_id,
+            )
+            touches_workspace_defaults = any(
+                pid is None
+                for pid in (await self.db.execute(scope_stmt)).scalars().all()
+            )
+            if touches_workspace_defaults:
+                await self._snapshot_fallback_projects(workspace_id)
+
         for position, status_id in enumerate(status_ids):
             await self.db.execute(
                 update(WorkspaceTaskStatus)
