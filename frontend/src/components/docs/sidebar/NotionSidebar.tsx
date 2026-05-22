@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Star, Lock, Users, Plus } from "lucide-react";
+import { Star, Lock, Users, Plus, LayoutGrid } from "lucide-react";
 
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { SidebarNavigation } from "./SidebarNavigation";
@@ -14,6 +15,9 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useNotionDocs, useDocumentNotifications } from "@/hooks/useNotionDocs";
 import { useDocumentSpaces } from "@/hooks/useDocumentSpaces";
 import { useWorkspace } from "@/hooks/useWorkspace";
+import { useAuth } from "@/hooks/useAuth";
+import { useAppAccess } from "@/hooks/useAppAccess";
+import { APP_CATALOG } from "@/config/appDefinitions";
 
 interface NotionSidebarProps {
   selectedDocumentId?: string;
@@ -29,6 +33,14 @@ export function NotionSidebar({
   const router = useRouter();
   const { workspaces, currentWorkspace, switchWorkspace } = useWorkspace();
   const workspaceId = currentWorkspace?.id || null;
+  const { user } = useAuth();
+  // The main app sidebar is hidden on /docs routes, so the docs sidebar is
+  // the user's only escape hatch to other modules. We list every app they
+  // have access to (via useAppAccess) inside a collapsed "Apps" section.
+  const { accessibleApps } = useAppAccess(workspaceId, user?.id ?? null);
+  const apps = accessibleApps
+    .map((appId) => APP_CATALOG[appId])
+    .filter((app): app is NonNullable<typeof app> => Boolean(app));
 
   // Document spaces
   const {
@@ -283,6 +295,35 @@ export function NotionSidebar({
                 <span className="text-xs">Add space</span>
               </button>
             </div>
+
+            {/* Divider before apps */}
+            <div className="h-px bg-muted/50 mx-3 my-2" />
+
+            {/* Apps — escape hatch to the rest of the product. Collapsed
+                by default so docs stays the focus; expand to jump to
+                Sprints / CRM / etc without leaving the docs surface. */}
+            {apps.length > 0 && (
+              <SidebarSection
+                title="Apps"
+                icon={<LayoutGrid className="h-3.5 w-3.5" />}
+                count={apps.length}
+                defaultExpanded={false}
+              >
+                {apps.map((app) => {
+                  const Icon = app.icon;
+                  return (
+                    <Link
+                      key={app.id}
+                      href={app.baseRoute}
+                      className="flex items-center gap-2 px-2 py-1.5 mx-1 hover:bg-accent/50 rounded-md transition-colors text-foreground/80 hover:text-foreground text-sm"
+                    >
+                      <Icon className="h-4 w-4 text-muted-foreground" />
+                      <span>{app.name}</span>
+                    </Link>
+                  );
+                })}
+              </SidebarSection>
+            )}
           </>
         )}
       </div>
