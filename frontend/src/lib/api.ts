@@ -2434,7 +2434,13 @@ export interface TeamSkillCoverage {
 
 // Sprint Types
 export type SprintStatus = "planning" | "active" | "review" | "retrospective" | "completed";
-export type TaskStatus = "backlog" | "todo" | "in_progress" | "review" | "done";
+// Free-form status slug — workspaces define their own statuses via the
+// `workspace_task_statuses` table (with optional per-project overrides).
+// The canonical five (backlog/todo/in_progress/review/done) are the seed
+// defaults; the type is string so custom slugs like "on_hold" round-trip
+// without TS gymnastics. Use `useTaskStatuses(workspaceId, projectId)` to
+// enumerate the legal set for a given scope.
+export type TaskStatus = string;
 export type TaskPriority = "critical" | "high" | "medium" | "low";
 export type TaskSourceType = "github_issue" | "jira" | "linear" | "manual";
 

@@ -7,7 +7,7 @@ from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from aexy.models.sprint import Sprint, SprintTask, TaskActivity, TaskAttachment
+from aexy.models.sprint import Sprint, SprintTask, TaskActivity, TaskAttachment, WorkspaceTaskStatus
 from aexy.services.task_sources.base import TaskItem, TaskSourceConfig, TaskStatus
 from aexy.services.task_sources.github_issues import GitHubIssuesSource
 from aexy.services.task_sources.jira import JiraSource
@@ -400,6 +400,7 @@ class SprintTaskService:
             _record("priority_changed", "priority", task.priority, priority)
             task.priority = priority
         if status is not None:
+            await self.validate_status_slug(task, status)
             old_status = task.status
             _record("status_changed", "status", old_status, status)
             task.status = status
@@ -819,6 +820,41 @@ class SprintTaskService:
 
         return updated_tasks
 
+    async def validate_status_slug(self, task: SprintTask, slug: str) -> None:
+        """Reject a status update whose slug isn't defined for the task's scope.
+
+        Status slugs live in ``workspace_task_statuses`` and may be either
+        workspace-default (project_id IS NULL) or project-scoped. A task's
+        valid slug set is the union: project rows for its project, plus
+        workspace defaults as a fallback. Anything else is rejected with
+        ``unknown_status`` so the operator gets a stable error code.
+        """
+        # The canonical seed slugs are accepted unconditionally so we don't
+        # break workspaces that pre-date the status table (and whose tasks
+        # carry a slug but no matching row yet).
+        if slug in ("backlog", "todo", "in_progress", "review", "done"):
+            return
+        if not task.workspace_id:
+            return  # Pre-table data — nothing to validate against.
+
+        scope = (
+            or_(
+                WorkspaceTaskStatus.project_id.is_(None),
+                WorkspaceTaskStatus.project_id == task.team_id,
+            )
+            if task.team_id
+            else WorkspaceTaskStatus.project_id.is_(None)
+        )
+        stmt = (
+            select(WorkspaceTaskStatus.id)
+            .where(WorkspaceTaskStatus.workspace_id == task.workspace_id)
+            .where(WorkspaceTaskStatus.slug == slug)
+            .where(WorkspaceTaskStatus.is_active.is_(True))
+            .where(scope)
+        )
+        if (await self.db.execute(stmt)).first() is None:
+            raise TaskValidationError("unknown_status")
+
     # Status management
     async def update_task_status(
         self,
@@ -840,6 +876,7 @@ class SprintTaskService:
         if not task:
             return None
 
+        await self.validate_status_slug(task, new_status)
         old_status = task.status
         task.status = new_status
 

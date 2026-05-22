@@ -5,6 +5,77 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.33] - 2026-05-22
+
+Follow-up sweep on the 0.8.32 status work — two production bugs and the
+missing admin surface for editing categories themselves.
+
+### Custom status slugs now round-trip through the API (bug fix)
+
+`PATCH /teams/{id}/tasks/{id}` was rejecting any non-canonical slug
+with a Pydantic `literal_error`:
+
+```
+Input should be 'backlog', 'todo', 'in_progress', 'review' or 'done'
+```
+
+Root cause: `TaskStatus` was still a `Literal[...]` at the schema
+layer, defeating the whole point of project-scoped custom statuses
+from 0.8.32. Two-part fix:
+
+- `TaskStatus = str` in both `backend/src/aexy/schemas/sprint.py` and
+  `frontend/src/lib/api.ts`. Any slug parses; validity is decided at
+  write time, not parse time.
+- New `SprintTaskService.validate_status_slug(task, slug)` checks the
+  slug exists in the task's scope (`workspace_task_statuses` rows for
+  the project OR workspace defaults). On miss → `400 unknown_status`.
+  Wired into both `update_task` and `update_task_status`, on both
+  PATCH endpoints (`/teams/.../tasks/...` and
+  `/sprints/.../tasks/...`).
+
+The canonical five seed slugs (`backlog`, `todo`, `in_progress`,
+`review`, `done`) are accepted unconditionally so workspaces that
+pre-date the status table aren't bricked by tasks carrying slugs
+without matching rows.
+
+### Duplicate "On Hold" columns can no longer be created (bug fix)
+
+Production was showing two columns titled `On Hold` on a kanban — the
+admin had typed the name twice and `create_status` had silently
+deduplicated only the *slug* (storing `on_hold` and `on_hold_1`).
+Both rendered because the column title comes from `name`, not `slug`.
+
+`create_status` and `update_status` now share an `_assert_name_unique`
+helper that rejects case-insensitive name collisions within a scope
+(workspace + project): error code `status_name_exists`, HTTP 400.
+
+This prevents the future occurrence but does **not** clean up existing
+duplicate rows in production data — admins need to delete one of the
+duplicates via the new admin UI (below).
+
+### Category admin UI on the per-project statuses page
+
+`/settings/projects/{projectId}/statuses` gains a "Categories" section
+above the existing statuses list:
+
+- `CategoryModal` — create / edit a category with label, semantics
+  (Open / Active / Done / Cancelled), and color. Slug is auto-derived
+  from the label on create and locked on edit (existing statuses
+  reference it as a string).
+- `SortableCategoryItem` — compact row with color swatch, semantics
+  badge, edit/delete menu.
+- Delete is guarded both client-side (block if any status uses the
+  category) and server-side (`category_in_use` error, HTTP 400).
+
+### Tests
+
+- `backend/tests/unit/test_task_status_validation.py` (new, 4 tests) —
+  canonical slug accepted, project-scoped custom slug accepted,
+  unknown slug rejected, slug scoped to a different project rejected.
+- `backend/tests/unit/test_status_categories.py` (+1) —
+  `test_create_status_rejects_duplicate_display_name` pins the
+  case-insensitive name uniqueness check.
+
 ## [0.8.32] - 2026-05-22
 
 Two threads landing together:

@@ -7,7 +7,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # Sprint Status Types
 SprintStatus = Literal["planning", "active", "review", "retrospective", "completed"]
-TaskStatus = Literal["backlog", "todo", "in_progress", "review", "done"]
+# Free-form status slug — workspaces define their own via
+# workspace_task_statuses (with optional per-project overrides). The
+# canonical five (backlog, todo, in_progress, review, done) are the seed
+# defaults; validation that a slug is known happens at write time against
+# the workspace's status set, not at schema parsing.
+TaskStatus = str
 TaskPriority = Literal["critical", "high", "medium", "low"]
 TaskSourceType = Literal["github_issue", "jira", "linear", "manual", "ticket", "automation"]
 # Status category is a free-form slug validated at write time against the

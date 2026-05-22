@@ -31,7 +31,7 @@ from aexy.schemas.sprint import (
     WipLimitsConfig,
 )
 from aexy.services.sprint_service import SprintService
-from aexy.services.sprint_task_service import SprintTaskService
+from aexy.services.sprint_task_service import SprintTaskService, TaskValidationError
 from aexy.services.github_task_sync_service import GitHubTaskSyncService
 from aexy.services.workspace_service import WorkspaceService
 
@@ -780,7 +780,10 @@ async def update_task(
     if "estimated_hours" in data.model_fields_set:
         update_kwargs["estimated_hours"] = data.estimated_hours
 
-    task = await task_service.update_task(**update_kwargs)
+    try:
+        task = await task_service.update_task(**update_kwargs)
+    except TaskValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.code)
 
     if not task or task.sprint_id != sprint_id:
         raise HTTPException(
