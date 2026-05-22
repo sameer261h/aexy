@@ -398,7 +398,7 @@ export function DocumentEditor({
                       </div>
                     )}
                     {showSaved && !isSaving && (
-                      <div className="flex items-center gap-1.5 text-emerald-400 text-xs animate-fade-in">
+                      <div className="flex items-center gap-1.5 text-success text-xs animate-fade-in">
                         <Check className="h-3.5 w-3.5" />
                         <span>Saved</span>
                       </div>

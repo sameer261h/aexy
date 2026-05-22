@@ -1,7 +1,8 @@
 {
   "drive": {
     "page": {
-      "title": "Drive",
+      "title": "Files & Storage",
+      "subtitle": "Workspace files, task attachments, and compliance documents — separate from your written docs.",
       "newFolder": "New folder",
       "folderNamePrompt": "Folder name",
       "smartViewsHeading": "Smart Views",

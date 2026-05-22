@@ -1,7 +1,8 @@
 {
   "drive": {
     "page": {
-      "title": "Drive",
+      "title": "फ़ाइलें और स्टोरेज",
+      "subtitle": "Workspace files, task attachments, and compliance documents — आपके लिखित docs से अलग।",
       "newFolder": "नया फ़ोल्डर",
       "folderNamePrompt": "फ़ोल्डर का नाम",
       "smartViewsHeading": "Smart Views",

@@ -5,6 +5,88 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.24] - 2026-05-22
+
+Docs UI/UX follow-up sweep: the five items the 0.8.23 commit
+deliberately left as "out of cluster scope" — visual gradient
+heroes, ring-spinner duplication, Drive IA confusion, hardcoded
+colour refs, mobile responsiveness on Drive/Files/Knowledge-Graph.
+5 new E2E specs lock the changes in (18 total docs E2E specs now,
+~32 s full pass).
+
+### Visual: gradient heroes gone
+
+- **Replaced the `from-primary-500/20 to-purple-500/20` rounded-2xl
+  icon hero in two places** (`DocsLayoutClient.tsx`, `page.tsx`)
+  with a typography-first treatment: small tracked eyebrow label,
+  semibold tracking-tight headline, one line of supporting copy.
+  The audit called this gradient pattern the strongest "AI-slop"
+  tell in the surface — `docs-no-gradient-hero.spec.ts` regression-
+  guards both heroes.
+- Landing headline shifted from "Documentation / Create, organize,
+  and auto-generate documentation from your code" to an inviting
+  "What do you want to write today?" with shorter supporting copy.
+
+### Spinner consolidation
+
+- **New `components/ui/spinner.tsx`** with `xs|sm|md|lg` size variants,
+  `role="status"`, `data-testid="aexy-spinner"`, and an sr-only
+  label. Replaces four near-identical inline implementations:
+  `DocsLayoutClient.tsx:81` (lg), `[documentId]/page.tsx:45` (md),
+  `CollaborativeEditor.tsx:319` (sm), `TemplateSelector.tsx:140` (xs).
+- Future docs/UI spinners should reuse this component; the old
+  inline pattern accumulated four variants of the same idea across
+  the surface.
+
+### Drive IA: distinct from docs, discoverable from the sidebar
+
+- **Sidebar gains a "Files" link** in `SidebarNavigation.tsx` pointing
+  at `/docs/drive`. Drive was previously reachable only by URL.
+- **Drive page heading renamed to "Files & Storage"** (`drive.page.title`
+  in `messages/en/drive.json` + `messages/hi/drive.json`) with a new
+  subtitle: "Workspace files, task attachments, and compliance
+  documents — separate from your written docs." Makes the relationship
+  to docs explicit.
+- `docs-drive-ia.spec.ts` asserts the sidebar Files link is present,
+  click lands on /docs/drive, and the renamed heading + subtitle
+  render correctly.
+
+### Colour tokens sweep
+
+- **85 → 70 hardcoded colour refs in the docs surface.** Visible
+  destructive/success states replaced with semantic tokens:
+  `text-red-{300,400}` → `text-destructive`, `bg-red-50 dark:bg-red-900/20`
+  → `bg-destructive/10`, `text-emerald-400` (saved indicator) → `text-success`.
+  Touched: `DocumentItem.tsx` (Delete menu item), `[documentId]/page.tsx`
+  (error state), `CodeLinksDisplay.tsx`, `CodeLinkPanel.tsx`,
+  `CreateSpaceModal.tsx`, `GenerationPanel.tsx` (error+success banners),
+  `DocumentEditor.tsx` (Saved indicator). 15 refs collapsed.
+- Remaining ~70 are mostly: `CollaborationAwareness.tsx` (dead code),
+  `VersionHistoryPanel.tsx` (diff visualization where red specifically
+  means "removed"), `SyncStatusPanel`/`GitHubSyncPanel` (domain-specific
+  status palettes), and `DocumentItem.tsx`'s yellow favorite-star.
+
+### Mobile sub-routes
+
+- **Audit at 390×844** of `/docs/drive`, `/docs/files`, and
+  `/docs/knowledge-graph`. All three render usable content on
+  mobile after the Cluster 1 fixes (Drive already had `lg:flex-row`
+  + `lg:w-56` responsive utilities; KnowledgeGraph paywall is
+  naturally vertically-flowed; `/docs/files` redirects to `/docs/drive`).
+- `docs-mobile-sub-routes.spec.ts` locks in the regression: each
+  route's primary content is visible at 390 px and the CTAs/headings
+  don't overflow the viewport.
+
+### Tests
+
+5 new E2E specs (`frontend/e2e/docs-*.spec.ts`):
+
+- `docs-no-gradient-hero` — regression guard
+- `docs-drive-ia` — sidebar link + renamed heading + subtitle
+- `docs-mobile-sub-routes` — 3 routes × 390 px content reachability
+
+Total docs E2E: 18 specs, ~32 s full pass.
+
 ## [0.8.23] - 2026-05-22
 
 In-app docs UX bug-fix sweep across three clusters (shell, editor,

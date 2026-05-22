@@ -164,7 +164,7 @@ export function DocumentItem({
                         onDelete(document.id);
                         setShowMenu(false);
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-red-400 hover:bg-accent"
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:bg-accent"
                     >
                       <Trash2 className="h-4 w-4" />
                       Delete

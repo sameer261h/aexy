@@ -6,8 +6,9 @@ import { useWorkspace } from "@/hooks/useWorkspace";
 import { NotionSidebar } from "@/components/docs/sidebar";
 import { SearchModal } from "@/components/docs/SearchModal";
 import { NotificationInbox } from "@/components/docs/NotificationInbox";
+import { Spinner } from "@/components/ui/spinner";
 import { useRouter, useParams } from "next/navigation";
-import { Building2, Plus, Menu, X } from "lucide-react";
+import { Plus, Menu, X } from "lucide-react";
 
 export default function DocsLayoutClient({
   children,
@@ -91,11 +92,8 @@ export default function DocsLayoutClient({
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
-          <div className="relative">
-            <div className="w-12 h-12 border-4 border-primary-500/20 rounded-full"></div>
-            <div className="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin absolute top-0 left-0"></div>
-          </div>
-          <p className="text-muted-foreground text-sm">Loading...</p>
+          <Spinner size="lg" />
+          <p className="text-muted-foreground text-sm">Loading…</p>
         </div>
       </div>
     );
@@ -105,20 +103,25 @@ export default function DocsLayoutClient({
     return null;
   }
 
-  // Show workspace creation prompt if no workspaces exist
+  // Show workspace creation prompt if no workspaces exist.
+  // Typography-first: an eyebrow label, a confident headline, one
+  // line of supporting copy, one primary action. No decorative
+  // gradient square — that pattern was the audit's strongest
+  // AI-slop tell and added nothing the headline doesn't.
   if (workspaces.length === 0) {
     return (
       <div className="min-h-screen bg-background flex flex-col">
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center max-w-md mx-auto px-4">
-            <div className="w-16 h-16 bg-gradient-to-br from-primary-500/20 to-purple-500/20 rounded-2xl flex items-center justify-center mx-auto mb-6">
-              <Building2 className="h-8 w-8 text-primary-400" />
-            </div>
-            <h2 className="text-2xl font-bold text-foreground mb-3">
-              Create a Workspace
+        <div className="flex-1 flex items-center justify-center px-6">
+          <div className="text-center max-w-lg mx-auto">
+            <p className="text-xs font-medium tracking-[0.18em] uppercase text-muted-foreground mb-4">
+              First step
+            </p>
+            <h2 className="text-4xl md:text-5xl font-semibold text-foreground tracking-tight mb-4">
+              Set up your workspace
             </h2>
-            <p className="text-muted-foreground mb-6">
-              You need a workspace to start creating documentation. Workspaces help you organize documents and collaborate with your team.
+            <p className="text-muted-foreground text-base mb-8 max-w-md mx-auto">
+              Workspaces are where your docs live. Set one up to start
+              writing, organising, and sharing with your team.
             </p>
             <button
               onClick={handleCreateWorkspace}
@@ -128,12 +131,12 @@ export default function DocsLayoutClient({
               {isCreatingWorkspace || isCreating ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Creating...
+                  Creating…
                 </>
               ) : (
                 <>
                   <Plus className="h-5 w-5" />
-                  Create Workspace
+                  Create workspace
                 </>
               )}
             </button>
