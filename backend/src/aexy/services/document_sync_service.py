@@ -64,8 +64,12 @@ class DocumentSyncService:
         if plan.enable_real_time_sync:
             return SyncTriggerType.REAL_TIME
 
-        # Check tier for batch sync (pro plans)
-        if plan.tier in [PlanTier.PRO.value, PlanTier.TEAM.value]:
+        # Check tier for batch sync (pro / enterprise plans).
+        # NOTE: previously referenced `PlanTier.TEAM` which does not
+        # exist on the enum — every call from a non-premium developer
+        # hit AttributeError. Fixed to ENTERPRISE, matching the rest
+        # of the codebase (knowledge_graph / notifications / app_access).
+        if plan.tier in [PlanTier.PRO.value, PlanTier.ENTERPRISE.value]:
             return SyncTriggerType.DAILY_BATCH
 
         # Default to manual sync (free tier)

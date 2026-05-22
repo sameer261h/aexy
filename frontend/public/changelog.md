@@ -5,6 +5,163 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.25] - 2026-05-22
+
+Part A of the AI documentation testing initiative: TDD coverage for
+autogenerate flows + the autoupdate plumbing. The audit had flagged
+that the entire docs-AI surface had zero tests; this commit closes
+that with 11 specs and surfaces three bugs along the way, two of
+which are fixed in the same change.
+
+Part B (`proposed_edits` model + approval UX) lands separately.
+
+### Bugs caught + fixed
+
+- **`PlanTier.TEAM` AttributeError in DocumentSyncService**
+  (`backend/src/aexy/services/document_sync_service.py:68`).
+  Line referenced `PlanTier.TEAM.value` but the enum has no `TEAM`
+  member. Every free-tier or pro-tier-without-realtime developer
+  hit AttributeError when `get_sync_type_for_developer` was called.
+  Fixed to `PlanTier.ENTERPRISE.value`, matching the convention used
+  in `api/knowledge_graph.py`, `api/notifications.py`,
+  `api/app_access.py`. Caught by `test_document_sync_service.py`.
+- **`suggest_improvements` schema drift** (multi-line fix).
+  `DocumentGenerationService.suggest_improvements` claims to return
+  `{quality_score, improvements[], missing_sections[],
+  overall_assessment}` but was returning generic code-analysis JSON
+  (`languages, frameworks, code_quality, summary`) because:
+  1. `lmstudio_provider._build_analysis_prompts` had no branch for
+     `AnalysisType.DOC_*` types — they fell through to
+     `CODE_ANALYSIS_PROMPT`, dropping the service's custom prompt.
+     Fixed by adding a DOC_* branch that honours
+     `request.context["system_prompt"]` + uses the pre-formatted
+     `request.content` verbatim.
+  2. The service's `json.loads(result.raw_response)` blew up on
+     markdown-fenced LLM output. Extracted `_parse_llm_json` helper
+     that strips ```json fences before parsing. Applied to all four
+     `raw_response` parse sites in the service.
+  3. Tightened `DOC_IMPROVEMENT_SYSTEM_PROMPT` to say "Respond ONLY
+     with valid JSON … No preamble, no analysis, no markdown fences".
+  4. Bumped `lmstudio_config` `max_tokens` in the AI test conftest
+     from 2048 → 8192 so Qwen "thinking" models don't run out of
+     budget before producing JSON.
+  Caught by `test_suggest_improvements.py::test_returns_documented_contract_shape`.
+- **Orphan `SyncStatusPanel`** (`frontend/src/components/docs/SyncStatusPanel.tsx`).
+  221 LOC of pending-changes UI implemented but never mounted in
+  any page. Wired into `app/(app)/docs/[documentId]/page.tsx`:
+  uses `useDocumentCodeLinks` to compute the pending count, renders
+  above the editor when the doc has any code links, exposes a
+  manual-sync button that calls `documentApi.generate`. Caught while
+  writing the FE pending-banner spec.
+
+### Coverage added — 5 backend specs
+
+| File | What it covers |
+| --- | --- |
+| `backend/tests/ai/services/test_document_generation_paste.py` | `generate_from_code` returns TipTap doc shape with heading + paragraph + matching identifier (real LLM) |
+| `backend/tests/ai/services/test_document_generation_repo.py` | `generate_from_repository` forwards to GitHubService correctly; missing file raises ValueError (mocked GH, real LLM) |
+| `backend/tests/ai/services/test_document_regenerate_from_link.py` | The orchestration the `{doc_id}/generate` endpoint runs: load doc, load links, generate, write content back, flip `generation_status`, clear `has_pending_changes` |
+| `backend/tests/ai/services/test_suggest_improvements.py` | Contract shape (`quality_score`, `improvements[]`, `missing_sections[]`, `overall_assessment`); locks in the fix for the schema drift above |
+| `backend/tests/unit/test_document_sync_service.py` | Plan-tier routing in `get_sync_type_for_developer`: REAL_TIME / DAILY_BATCH / MANUAL for premium / pro+enterprise / free; the previously-dead enterprise branch now reaches DAILY_BATCH |
+
+### Coverage added — 5 frontend specs
+
+| File | What it covers |
+| --- | --- |
+| `docs-autogenerate-paste.spec.ts` | Full live flow: paste TS function, click Generate, real LLM round-trip, lands on new doc with editor visible |
+| `docs-autogenerate-repo.spec.ts` | From Repository tab opens; either repo list or empty state renders; Generate disabled in empty state |
+| `docs-autogenerate-repo-full.spec.ts` | End-to-end repo orchestration with mocked repo/branch/contents APIs; user picks repo → root dir → click Generate → mocked content lands as a new doc |
+| `docs-pending-changes-banner.spec.ts` | SyncStatusPanel renders pending count + manual-sync label when a code-link is dirty (mocked code-links, live doc) |
+| (orphan SyncStatusPanel finding informs this) | — |
+
+### Frontend dev container & test container
+
+- Installed `pytest`, `pytest-asyncio`, `pytest-cov`, `aiosqlite` into
+  the `aexy-backend` image (they weren't there before, blocking any
+  attempt to run the backend test suite via `docker exec`).
+
+## [0.8.24] - 2026-05-22
+
+Docs UI/UX follow-up sweep: the five items the 0.8.23 commit
+deliberately left as "out of cluster scope" — visual gradient
+heroes, ring-spinner duplication, Drive IA confusion, hardcoded
+colour refs, mobile responsiveness on Drive/Files/Knowledge-Graph.
+5 new E2E specs lock the changes in (18 total docs E2E specs now,
+~32 s full pass).
+
+### Visual: gradient heroes gone
+
+- **Replaced the `from-primary-500/20 to-purple-500/20` rounded-2xl
+  icon hero in two places** (`DocsLayoutClient.tsx`, `page.tsx`)
+  with a typography-first treatment: small tracked eyebrow label,
+  semibold tracking-tight headline, one line of supporting copy.
+  The audit called this gradient pattern the strongest "AI-slop"
+  tell in the surface — `docs-no-gradient-hero.spec.ts` regression-
+  guards both heroes.
+- Landing headline shifted from "Documentation / Create, organize,
+  and auto-generate documentation from your code" to an inviting
+  "What do you want to write today?" with shorter supporting copy.
+
+### Spinner consolidation
+
+- **New `components/ui/spinner.tsx`** with `xs|sm|md|lg` size variants,
+  `role="status"`, `data-testid="aexy-spinner"`, and an sr-only
+  label. Replaces four near-identical inline implementations:
+  `DocsLayoutClient.tsx:81` (lg), `[documentId]/page.tsx:45` (md),
+  `CollaborativeEditor.tsx:319` (sm), `TemplateSelector.tsx:140` (xs).
+- Future docs/UI spinners should reuse this component; the old
+  inline pattern accumulated four variants of the same idea across
+  the surface.
+
+### Drive IA: distinct from docs, discoverable from the sidebar
+
+- **Sidebar gains a "Files" link** in `SidebarNavigation.tsx` pointing
+  at `/docs/drive`. Drive was previously reachable only by URL.
+- **Drive page heading renamed to "Files & Storage"** (`drive.page.title`
+  in `messages/en/drive.json` + `messages/hi/drive.json`) with a new
+  subtitle: "Workspace files, task attachments, and compliance
+  documents — separate from your written docs." Makes the relationship
+  to docs explicit.
+- `docs-drive-ia.spec.ts` asserts the sidebar Files link is present,
+  click lands on /docs/drive, and the renamed heading + subtitle
+  render correctly.
+
+### Colour tokens sweep
+
+- **85 → 70 hardcoded colour refs in the docs surface.** Visible
+  destructive/success states replaced with semantic tokens:
+  `text-red-{300,400}` → `text-destructive`, `bg-red-50 dark:bg-red-900/20`
+  → `bg-destructive/10`, `text-emerald-400` (saved indicator) → `text-success`.
+  Touched: `DocumentItem.tsx` (Delete menu item), `[documentId]/page.tsx`
+  (error state), `CodeLinksDisplay.tsx`, `CodeLinkPanel.tsx`,
+  `CreateSpaceModal.tsx`, `GenerationPanel.tsx` (error+success banners),
+  `DocumentEditor.tsx` (Saved indicator). 15 refs collapsed.
+- Remaining ~70 are mostly: `CollaborationAwareness.tsx` (dead code),
+  `VersionHistoryPanel.tsx` (diff visualization where red specifically
+  means "removed"), `SyncStatusPanel`/`GitHubSyncPanel` (domain-specific
+  status palettes), and `DocumentItem.tsx`'s yellow favorite-star.
+
+### Mobile sub-routes
+
+- **Audit at 390×844** of `/docs/drive`, `/docs/files`, and
+  `/docs/knowledge-graph`. All three render usable content on
+  mobile after the Cluster 1 fixes (Drive already had `lg:flex-row`
+  + `lg:w-56` responsive utilities; KnowledgeGraph paywall is
+  naturally vertically-flowed; `/docs/files` redirects to `/docs/drive`).
+- `docs-mobile-sub-routes.spec.ts` locks in the regression: each
+  route's primary content is visible at 390 px and the CTAs/headings
+  don't overflow the viewport.
+
+### Tests
+
+5 new E2E specs (`frontend/e2e/docs-*.spec.ts`):
+
+- `docs-no-gradient-hero` — regression guard
+- `docs-drive-ia` — sidebar link + renamed heading + subtitle
+- `docs-mobile-sub-routes` — 3 routes × 390 px content reachability
+
+Total docs E2E: 18 specs, ~32 s full pass.
+
 ## [0.8.23] - 2026-05-22
 
 In-app docs UX bug-fix sweep across three clusters (shell, editor,

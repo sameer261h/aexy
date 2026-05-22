@@ -1,14 +1,16 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useWorkspace } from "@/hooks/useWorkspace";
-import { useDocument } from "@/hooks/useDocuments";
+import { useDocument, useDocumentCodeLinks } from "@/hooks/useDocuments";
 import { useAuth } from "@/hooks/useAuth";
 import { CollaborativeEditor } from "@/components/docs/CollaborativeEditor";
 import { DocumentEditor } from "@/components/docs/DocumentEditor";
 import { DocumentBreadcrumb } from "@/components/docs/DocumentBreadcrumb";
+import { SyncStatusPanel } from "@/components/docs/SyncStatusPanel";
 import { Spinner } from "@/components/ui/spinner";
+import { documentApi } from "@/lib/api";
 
 export default function DocumentPage() {
   const params = useParams();
@@ -25,6 +27,34 @@ export default function DocumentPage() {
     updateContent,
     isUpdating,
   } = useDocument(currentWorkspaceId, documentId);
+
+  // Surface autoupdate state: how many code-links flag pending changes,
+  // and the most recent sync. We don't currently expose a per-developer
+  // syncType from the backend, so default to "manual" — the panel still
+  // shows the pending count and a regenerate button regardless of tier.
+  const { codeLinks } = useDocumentCodeLinks(currentWorkspaceId, documentId);
+  const { pendingChanges, lastSyncedAt } = useMemo(() => {
+    const links = codeLinks ?? [];
+    const pending = links.filter((l) => l.has_pending_changes).length;
+    const lastSync = links
+      .map((l) => l.last_synced_at)
+      .filter((d): d is string => !!d)
+      .sort()
+      .pop();
+    return { pendingChanges: pending, lastSyncedAt: lastSync };
+  }, [codeLinks]);
+
+  const handleManualSync = useCallback(async () => {
+    if (!currentWorkspaceId || !documentId) return;
+    try {
+      await documentApi.generate(currentWorkspaceId, documentId);
+      // The document content is updated server-side; refetch by
+      // invalidating the document query via mutate.
+      await updateContent.mutateAsync({});
+    } catch (err) {
+      console.error("Failed to regenerate document:", err);
+    }
+  }, [currentWorkspaceId, documentId, updateContent]);
 
   const handleSave = useCallback(
     async (data: { title?: string; content?: Record<string, unknown> }) => {
@@ -93,9 +123,26 @@ export default function DocumentPage() {
     );
   }
 
-  // Fallback to regular editor
+  // Fallback to regular editor.
+  // Sync panel only renders when the doc has code links — otherwise
+  // there's nothing to be "out of date" with. Was orphaned in the
+  // component tree before this wiring.
+  const hasCodeLinks = (codeLinks?.length ?? 0) > 0;
+
   return (
     <div className="flex flex-col h-full">
+      {hasCodeLinks && currentWorkspaceId ? (
+        <div className="px-4 pt-4">
+          <SyncStatusPanel
+            workspaceId={currentWorkspaceId}
+            documentId={documentId}
+            syncType="manual"
+            pendingChanges={pendingChanges}
+            lastSyncedAt={lastSyncedAt}
+            onManualSync={handleManualSync}
+          />
+        </div>
+      ) : null}
       <DocumentEditor
         content={document.content || { type: "doc", content: [] }}
         title={document.title}

@@ -1002,7 +1002,8 @@ Respond with JSON containing:
 DOC_IMPROVEMENT_SYSTEM_PROMPT = """You are an expert technical documentation reviewer.
 Analyze documentation quality and suggest specific improvements.
 Focus on clarity, completeness, accuracy, and developer experience.
-Always respond with valid JSON."""
+Respond ONLY with valid JSON matching the requested schema.
+No preamble, no analysis, no markdown fences — JSON object only."""
 
 DOC_IMPROVEMENT_PROMPT = """Analyze this documentation and suggest improvements.
 

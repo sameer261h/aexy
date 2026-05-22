@@ -314,6 +314,27 @@ class LMStudioProvider(LLMProvider):
                 ),
             )
 
+        # Doc-related analysis types arrive with `request.content` already
+        # formatted by the calling service (DocumentGenerationService bakes
+        # the prompt template before sending) and the system prompt is
+        # passed via `request.context["system_prompt"]`. Without this
+        # branch they fell through to CODE_ANALYSIS_PROMPT below and the
+        # LLM returned code-analysis JSON (languages/frameworks/...) for
+        # every suggest_improvements / update_documentation call. Found
+        # via tests/ai/services/test_suggest_improvements.py.
+        elif request.analysis_type in (
+            AnalysisType.DOC_API,
+            AnalysisType.DOC_README,
+            AnalysisType.DOC_FUNCTION,
+            AnalysisType.DOC_MODULE,
+            AnalysisType.DOC_UPDATE,
+            AnalysisType.DOC_IMPROVEMENT,
+        ):
+            return (
+                request.context.get("system_prompt") or CODE_ANALYSIS_SYSTEM_PROMPT,
+                request.content,
+            )
+
         else:
             return (
                 CODE_ANALYSIS_SYSTEM_PROMPT,

@@ -168,7 +168,10 @@ def lmstudio_config() -> LLMConfig:
         model=LMSTUDIO_MODEL,
         api_key=os.environ.get("LMSTUDIO_API_KEY", ""),
         base_url=LMSTUDIO_BASE,
-        max_tokens=2048,
+        # Qwen "thinking" models burn through the budget on chain-of-thought
+        # before producing the requested JSON; 8192 leaves headroom even
+        # when /no_think isn't fully suppressing the reasoning trace.
+        max_tokens=8192,
         temperature=0.0,
         timeout=180,
     )
