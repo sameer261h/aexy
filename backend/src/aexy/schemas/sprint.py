@@ -845,3 +845,43 @@ class TaskFromTemplateCreate(BaseModel):
     create_subtasks: bool = True
 
 
+# ==================== Cross-project Move Schemas ====================
+
+# "Move" semantics: a new task is created in the target project linked
+# back to the source as a "duplicates" dependency. The source is either
+# archived or marked done at the operator's choice. See
+# SprintTaskService.move_to_project for the contract.
+
+SourceAction = Literal["archive", "mark_done"]
+SubtaskStrategy = Literal["block", "cascade", "orphan"]
+
+
+class TaskMoveToProjectRequest(BaseModel):
+    """Move a single task to another project in the same workspace."""
+
+    target_project_id: str
+    source_action: SourceAction
+    subtask_strategy: SubtaskStrategy = "block"
+
+
+class TaskBulkMoveToProjectRequest(BaseModel):
+    """Move many tasks to another project. Lenient — per-task failures
+    are reported in the response rather than aborting the batch."""
+
+    task_ids: list[str] = Field(..., min_length=1)
+    target_project_id: str
+    source_action: SourceAction
+    subtask_strategy: SubtaskStrategy = "block"
+
+
+class BulkMoveResult(BaseModel):
+    task_id: str
+    status: Literal["moved", "skipped"]
+    new_task_id: str | None = None
+    error_code: str | None = None
+
+
+class BulkMoveResponse(BaseModel):
+    results: list[BulkMoveResult]
+
+

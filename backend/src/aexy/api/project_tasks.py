@@ -18,6 +18,7 @@ from aexy.models.developer import Developer
 from aexy.models.sprint import SprintTask, TaskGitHubLink
 from aexy.models.notification import NotificationEventType
 from aexy.schemas.sprint import (
+    BulkMoveResponse,
     ProjectTaskCreate,
     SprintTaskUpdate,
     SprintTaskStatusUpdate,
@@ -26,8 +27,10 @@ from aexy.schemas.sprint import (
     TaskActivityListResponse,
     TaskActivityResponse,
     TaskAttachmentListResponse,
+    TaskBulkMoveToProjectRequest,
     TaskImportRequest,
     TaskImportResponse,
+    TaskMoveToProjectRequest,
     TaskStatus,
 )
 from aexy.services.workspace_service import WorkspaceService
@@ -587,6 +590,60 @@ async def move_task_to_sprint(
     await db.refresh(task)
 
     return task_to_response(task)
+
+
+@router.post("/{task_id}/move-to-project", response_model=SprintTaskResponse)
+async def move_task_to_project(
+    team_id: str,
+    task_id: str,
+    body: TaskMoveToProjectRequest,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fork-and-link move of a task to another project in the same
+    workspace. Returns the newly created task; the source is either
+    archived or marked done per `body.source_action`."""
+    await get_team_and_check_permission(team_id, current_user, db, "member")
+
+    task_service = SprintTaskService(db)
+    try:
+        new_task = await task_service.move_to_project(
+            task_id=task_id,
+            target_project_id=body.target_project_id,
+            source_action=body.source_action,
+            subtask_strategy=body.subtask_strategy,
+            actor_id=str(current_user.id),
+        )
+    except TaskValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=exc.code
+        )
+
+    await db.commit()
+    return task_to_response(new_task)
+
+
+@router.post("/bulk-move-to-project", response_model=BulkMoveResponse)
+async def bulk_move_tasks_to_project(
+    team_id: str,
+    body: TaskBulkMoveToProjectRequest,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-task fork-and-link move. Failures are reported per task; the
+    batch is not aborted on the first error."""
+    await get_team_and_check_permission(team_id, current_user, db, "member")
+
+    task_service = SprintTaskService(db)
+    results = await task_service.bulk_move_to_project(
+        task_ids=body.task_ids,
+        target_project_id=body.target_project_id,
+        source_action=body.source_action,
+        subtask_strategy=body.subtask_strategy,
+        actor_id=str(current_user.id),
+    )
+    await db.commit()
+    return {"results": results}
 
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)

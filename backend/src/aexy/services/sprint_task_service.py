@@ -820,6 +820,342 @@ class SprintTaskService:
 
         return updated_tasks
 
+    # ---- Cross-project move (fork + link) ----
+    #
+    # "Move" here is fork-and-link, not a row update. A new SprintTask is
+    # created in the target project, linked back to the source via a
+    # `task_dependencies` row with `dependency_type="duplicates"`, and the
+    # source is either archived or marked done — caller's choice. See
+    # `move_to_project` for the full contract.
+
+    async def _resolve_open_status_slug(
+        self,
+        workspace_id: str,
+        project_id: str,
+    ) -> str:
+        """First active status whose category has semantics='open' in this
+        project's scope (or workspace fallback). Falls back to canonical
+        "todo" if the workspace has no categories table yet."""
+        from aexy.models.sprint import WorkspaceStatusCategory
+
+        cat_stmt = (
+            select(WorkspaceStatusCategory.slug)
+            .where(WorkspaceStatusCategory.workspace_id == workspace_id)
+            .where(WorkspaceStatusCategory.semantics == "open")
+        )
+        cat_slugs = [row[0] for row in (await self.db.execute(cat_stmt)).all()]
+        if not cat_slugs:
+            return "todo"
+
+        scope = or_(
+            WorkspaceTaskStatus.project_id.is_(None),
+            WorkspaceTaskStatus.project_id == project_id,
+        )
+        stmt = (
+            select(WorkspaceTaskStatus.slug)
+            .where(WorkspaceTaskStatus.workspace_id == workspace_id)
+            .where(WorkspaceTaskStatus.is_active.is_(True))
+            .where(WorkspaceTaskStatus.category.in_(cat_slugs))
+            .where(scope)
+            .order_by(
+                # Prefer project-scoped rows over workspace defaults so the
+                # project's customized open column wins.
+                WorkspaceTaskStatus.project_id.is_(None),
+                WorkspaceTaskStatus.position,
+            )
+            .limit(1)
+        )
+        row = (await self.db.execute(stmt)).first()
+        return row[0] if row else "todo"
+
+    async def _resolve_done_status_slug(
+        self,
+        workspace_id: str,
+        project_id: str,
+    ) -> str:
+        """Mirror of `_resolve_open_status_slug` but for `semantics='done'`."""
+        from aexy.models.sprint import WorkspaceStatusCategory
+
+        cat_stmt = (
+            select(WorkspaceStatusCategory.slug)
+            .where(WorkspaceStatusCategory.workspace_id == workspace_id)
+            .where(WorkspaceStatusCategory.semantics == "done")
+        )
+        cat_slugs = [row[0] for row in (await self.db.execute(cat_stmt)).all()]
+        if not cat_slugs:
+            return "done"
+
+        scope = or_(
+            WorkspaceTaskStatus.project_id.is_(None),
+            WorkspaceTaskStatus.project_id == project_id,
+        )
+        stmt = (
+            select(WorkspaceTaskStatus.slug)
+            .where(WorkspaceTaskStatus.workspace_id == workspace_id)
+            .where(WorkspaceTaskStatus.is_active.is_(True))
+            .where(WorkspaceTaskStatus.category.in_(cat_slugs))
+            .where(scope)
+            .order_by(
+                WorkspaceTaskStatus.project_id.is_(None),
+                WorkspaceTaskStatus.position,
+            )
+            .limit(1)
+        )
+        row = (await self.db.execute(stmt)).first()
+        return row[0] if row else "done"
+
+    async def _is_project_member(
+        self, project_id: str, developer_id: str
+    ) -> bool:
+        from aexy.models.project import ProjectMember
+
+        stmt = (
+            select(ProjectMember.id)
+            .where(ProjectMember.project_id == project_id)
+            .where(ProjectMember.developer_id == developer_id)
+            .limit(1)
+        )
+        return (await self.db.execute(stmt)).first() is not None
+
+    async def _clone_task_to_project(
+        self,
+        *,
+        source: SprintTask,
+        target_project_id: str,
+        new_parent_id: str | None,
+        actor_id: str | None,
+    ) -> SprintTask:
+        """Create a new task in the target project copying the carry-over
+        fields from `source`. Used by `move_to_project` for the parent task
+        and (under `cascade`) recursively for each subtask.
+
+        Fields explicitly NOT copied — see plan for rationale:
+        - source_type/source_id/source_url (new task is fresh; the link is
+          via task_dependencies)
+        - started_at/completed_at, cycle_time_hours, lead_time_hours
+        - epic_id/story_id (project-scoped, won't resolve in target)
+        - sprint_id, carried_over_from_sprint_id (no target sprint)
+        - parent_task_id — caller passes `new_parent_id` explicitly so the
+          cascade case can wire the new subtree
+        - attachments, comments — left on the source for history
+        """
+        assignee_id: str | None = None
+        if source.assignee_id and await self._is_project_member(
+            target_project_id, str(source.assignee_id)
+        ):
+            assignee_id = str(source.assignee_id)
+
+        open_slug = await self._resolve_open_status_slug(
+            str(source.workspace_id), target_project_id
+        )
+
+        new_task = SprintTask(
+            id=str(uuid4()),
+            workspace_id=source.workspace_id,
+            team_id=target_project_id,
+            sprint_id=None,
+            source_type="manual",
+            source_id=str(uuid4()),
+            title=source.title,
+            description=source.description,
+            description_json=source.description_json,
+            story_points=source.story_points,
+            priority=source.priority,
+            labels=list(source.labels or []),
+            assignee_id=assignee_id,
+            status=open_slug,
+            custom_fields=dict(source.custom_fields or {}),
+            task_type=source.task_type,
+            start_date=source.start_date,
+            end_date=source.end_date,
+            estimated_hours=source.estimated_hours,
+            parent_task_id=new_parent_id,
+        )
+        self.db.add(new_task)
+        await self.db.flush()
+
+        # Link back to source via task_dependencies. The convention used by
+        # the rest of the codebase: `blocking_task_id` is the upstream task
+        # (the original), `dependent_task_id` is the downstream (the new
+        # task). With `dependency_type="duplicates"` this reads as
+        # "new task duplicates source".
+        from aexy.models.dependency import TaskDependency
+
+        link = TaskDependency(
+            id=str(uuid4()),
+            workspace_id=source.workspace_id,
+            dependent_task_id=new_task.id,
+            blocking_task_id=source.id,
+            dependency_type="duplicates",
+            created_by_id=actor_id,
+        )
+        self.db.add(link)
+        await self.db.flush()
+
+        await self.log_activity(
+            task_id=new_task.id,
+            action="created_from_move",
+            actor_id=actor_id,
+            metadata={
+                "source_task_id": str(source.id),
+                "source_task_key": source.task_key,
+                "source_project_id": str(source.team_id) if source.team_id else None,
+            },
+        )
+        return new_task
+
+    async def move_to_project(
+        self,
+        *,
+        task_id: str,
+        target_project_id: str,
+        source_action: str,
+        subtask_strategy: str = "block",
+        actor_id: str | None = None,
+    ) -> SprintTask:
+        """Fork a task into another project in the same workspace.
+
+        Returns the newly created task. The source task is either archived
+        or marked done depending on `source_action`. See the plan file
+        `mutable-herding-flute.md` for full semantics.
+        """
+        if source_action not in ("archive", "mark_done"):
+            raise TaskValidationError("invalid_source_action")
+        if subtask_strategy not in ("block", "cascade", "orphan"):
+            raise TaskValidationError("invalid_subtask_strategy")
+
+        source = await self.get_task(task_id)
+        if not source:
+            raise TaskValidationError("source_task_not_found")
+        if source.is_archived:
+            raise TaskValidationError("task_already_archived")
+        if str(source.team_id) == str(target_project_id):
+            raise TaskValidationError("same_project_move")
+
+        from aexy.models.project import Project
+
+        target_stmt = select(Project).where(Project.id == target_project_id)
+        target = (await self.db.execute(target_stmt)).scalar_one_or_none()
+        if not target:
+            raise TaskValidationError("target_project_not_found")
+        if str(target.workspace_id) != str(source.workspace_id):
+            raise TaskValidationError("cross_workspace_move")
+
+        # Detect live subtasks (one level — recursion deeper is deferred).
+        sub_stmt = (
+            select(SprintTask)
+            .where(SprintTask.parent_task_id == source.id)
+            .where(SprintTask.is_archived.is_(False))
+        )
+        subtasks = list((await self.db.execute(sub_stmt)).scalars().all())
+
+        if subtasks and subtask_strategy == "block":
+            raise TaskValidationError("task_has_subtasks")
+
+        new_parent = await self._clone_task_to_project(
+            source=source,
+            target_project_id=target_project_id,
+            new_parent_id=None,
+            actor_id=actor_id,
+        )
+
+        if subtasks and subtask_strategy == "cascade":
+            for sub in subtasks:
+                # Recurse one level. Subtasks themselves having subtasks is
+                # already an edge case in this codebase; we treat any
+                # grand-children as orphans on the source side.
+                await self._clone_task_to_project(
+                    source=sub,
+                    target_project_id=target_project_id,
+                    new_parent_id=new_parent.id,
+                    actor_id=actor_id,
+                )
+                sub.is_archived = True
+        # `orphan` strategy leaves subtasks alone — parent_task_id still
+        # points to the now-archived/done source. The UI surfaces this as
+        # "parent archived" but the data stays consistent.
+
+        if source_action == "archive":
+            source.is_archived = True
+        else:  # mark_done
+            done_slug = await self._resolve_done_status_slug(
+                str(source.workspace_id), str(source.team_id)
+            )
+            source.status = done_slug
+            if source.completed_at is None:
+                source.completed_at = datetime.now(timezone.utc)
+
+        await self.log_activity(
+            task_id=source.id,
+            action="moved_to_project",
+            actor_id=actor_id,
+            field_name="project",
+            old_value=str(source.team_id) if source.team_id else None,
+            new_value=str(target_project_id),
+            metadata={
+                "new_task_id": str(new_parent.id),
+                "new_task_key": new_parent.task_key,
+                "source_action": source_action,
+                "subtask_strategy": subtask_strategy,
+                "subtask_count": len(subtasks),
+            },
+        )
+
+        await self.db.flush()
+        # Re-fetch so relationships are populated for the API response.
+        fresh = await self.get_task(new_parent.id)
+        return fresh or new_parent
+
+    async def bulk_move_to_project(
+        self,
+        *,
+        task_ids: list[str],
+        target_project_id: str,
+        source_action: str,
+        subtask_strategy: str = "block",
+        actor_id: str | None = None,
+    ) -> list[dict]:
+        """Per-task move; never aborts the whole batch on one failure.
+
+        Returns a list of result dicts shaped:
+            {"task_id": ..., "status": "moved" | "skipped",
+             "new_task_id": ..., "error_code": ...}
+        Mirrors the lenient pattern in `bulk_move_to_sprint` — a partial
+        batch is more useful to the operator than an all-or-nothing rollback
+        when half the tasks have subtasks and the rest don't.
+        """
+        results: list[dict] = []
+        for tid in task_ids:
+            try:
+                new_task = await self.move_to_project(
+                    task_id=tid,
+                    target_project_id=target_project_id,
+                    source_action=source_action,
+                    subtask_strategy=subtask_strategy,
+                    actor_id=actor_id,
+                )
+                results.append({
+                    "task_id": tid,
+                    "status": "moved",
+                    "new_task_id": str(new_task.id),
+                    "error_code": None,
+                })
+            except TaskValidationError as exc:
+                # Roll back any partial mutations from this task so the next
+                # iteration starts clean. `db.flush` has already pushed
+                # earlier successes; we only need a savepoint-style guard
+                # if a future failure mid-create leaves dangling rows. For
+                # now `move_to_project` validates up-front before any write,
+                # so a thrown error means nothing has been persisted for
+                # *this* task.
+                results.append({
+                    "task_id": tid,
+                    "status": "skipped",
+                    "new_task_id": None,
+                    "error_code": exc.code,
+                })
+        return results
+
     async def validate_status_slug(self, task: SprintTask, slug: str) -> None:
         """Reject a status update whose slug isn't defined for the task's scope.
 

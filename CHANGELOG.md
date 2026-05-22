@@ -5,6 +5,80 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.34] - 2026-05-22
+
+New: cross-project task move (fork + link). A task can now be moved to
+another project in the same workspace; a fresh task is created in the
+destination, linked back to the source as a "duplicates" dependency,
+and the source is either archived or marked done at the operator's
+choice.
+
+### Why fork instead of true move
+
+Moving the row in place would orphan the source's history, sprint
+membership, comments, and attachments — and `task_key` is workspace-
+scoped but tasks reference sprint/epic/story IDs that don't translate
+across projects. A new task in the destination plus a `task_dependencies`
+link preserves provenance while letting the destination start fresh.
+
+### Backend
+
+- `SprintTaskService.move_to_project(task_id, target_project_id,
+  source_action, subtask_strategy, actor_id)` and a `bulk_move_to_project`
+  variant that returns per-task results (one failure doesn't abort the
+  batch). See plan `mutable-herding-flute.md` for the full contract.
+- New endpoints in `api/project_tasks.py`:
+  - `POST /teams/{team_id}/tasks/{task_id}/move-to-project`
+  - `POST /teams/{team_id}/tasks/bulk-move-to-project`
+- Stable error codes mapped to HTTP 400: `cross_workspace_move`,
+  `same_project_move`, `target_project_not_found`,
+  `task_already_archived`, `task_has_subtasks`,
+  `source_task_not_found`, `invalid_source_action`,
+  `invalid_subtask_strategy`.
+- Subtask handling — caller picks per move:
+  - `block` (default, safest) — reject the move if subtasks exist.
+  - `cascade` — clone every active subtask into the destination under
+    the new parent; archive each original subtask.
+  - `orphan` — leave subtasks in place; their `parent_task_id` still
+    points at the archived/done source.
+- Source-action — caller picks per move:
+  - `archive` — `is_archived=True` on the source.
+  - `mark_done` — set the source's status to its project's first
+    `semantics="done"` slug (workspace fallback, then canonical "done")
+    and set `completed_at = now()` if null.
+- Assignee on the new task is preserved only if the developer is a
+  member of the target project; otherwise cleared. Sprint, started_at,
+  completed_at, cycle/lead time, epic, story, and parent_task_id are
+  intentionally not copied — see the plan for the rationale.
+- Activity log on both ends: `moved_to_project` on the source (carries
+  new task's id/key and the chosen strategies in `activity_metadata`)
+  and `created_from_move` on the new task (carries source's id/key).
+- No schema migration — existing `task_dependencies` with
+  `dependency_type="duplicates"` is the link mechanism.
+
+### Frontend
+
+- New shared `MoveToProjectModal` (`components/planning/MoveToProjectModal.tsx`)
+  used by both single-task and bulk entry points. Project picker excludes
+  the source project and any archived project. Subtask-strategy radio
+  shows only on single-task moves when the task has subtasks.
+- New `useTaskMove` hook (`hooks/useTaskMove.ts`) wrapping both the
+  single and bulk mutations, with `invalidateTaskCaches` integration and
+  friendly toast messages mapped from each stable error code.
+- `EditTaskModal` sidebar (project board) gains a "Move to project…"
+  button above "Archive Task".
+- The board's multi-select bulk toolbar gains a "Move to Project"
+  button next to the existing "Move to Sprint" dropdown.
+
+### Tests
+
+- 12 unit tests in `backend/tests/unit/test_task_move_to_project.py`:
+  happy path, mark-done variant, cross-workspace reject, same-project
+  reject, archived-source reject, subtask block / cascade / orphan,
+  assignee membership rule, sprint+timing fields not copied,
+  activity logged on both tasks, bulk-move continues on per-task
+  failure.
+
 ## [0.8.33] - 2026-05-22
 
 Follow-up sweep on the 0.8.32 status work — two production bugs and the
