@@ -82,10 +82,20 @@ export function useTaskStatuses(
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (statusId: string) =>
-      taskConfigApi.deleteStatus(workspaceId!, statusId),
+    mutationFn: ({
+      statusId,
+      migrateTo,
+    }: {
+      statusId: string;
+      migrateTo?: string;
+    }) => taskConfigApi.deleteStatus(workspaceId!, statusId, { migrateTo }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId, projectId] });
+      // Migrated tasks moved between status_id values — refetch any board
+      // that's grouping by status.
+      queryClient.invalidateQueries({ queryKey: ["workspaceTasks", workspaceId] });
+      queryClient.invalidateQueries({ queryKey: ["sprintTasks"] });
+      queryClient.invalidateQueries({ queryKey: ["projectTasks"] });
     },
   });
 

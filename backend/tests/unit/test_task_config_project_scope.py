@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.models.developer import Developer
 from aexy.models.project import Project
+from aexy.models.sprint import SprintTask
 from aexy.models.workspace import Workspace
 from aexy.services.task_config_service import TaskConfigService
 
@@ -78,13 +79,20 @@ async def test_get_statuses_for_project_falls_back_to_workspace_defaults(
 async def test_get_statuses_for_project_prefers_project_rows_when_present(
     db_session: AsyncSession,
 ) -> None:
+    """When a project has its own status rows, the resolver returns them.
+
+    Note: `create_status(project_id=...)` against a fallback project also
+    auto-snapshots the workspace defaults first (so the project doesn't
+    silently lose its inherited columns) — so creating one project status
+    actually yields ``len(defaults) + 1`` rows. The invariant we're asserting
+    is that the resolver returns *project-scoped* rows (not workspace
+    defaults) once any project rows exist.
+    """
     ws = await _make_workspace(db_session, "ws-override")
     project = await _make_project(db_session, ws, "p-override")
 
     service = TaskConfigService(db_session)
     await service.seed_default_statuses(ws.id)
-    # Create one project-scoped custom status. The presence of any project row
-    # should switch the resolver from "fallback to workspace" to "use project".
     await service.create_status(
         workspace_id=ws.id,
         name="Triage",
@@ -95,9 +103,10 @@ async def test_get_statuses_for_project_prefers_project_rows_when_present(
 
     resolved = await service.get_statuses_for_project(ws.id, project.id)
 
-    assert len(resolved) == 1
-    assert resolved[0].slug == "triage"
-    assert resolved[0].project_id == project.id
+    # All resolved rows belong to the project (no workspace-default leakage).
+    assert all(r.project_id == project.id for r in resolved)
+    # The new status is in there.
+    assert "triage" in {r.slug for r in resolved}
 
 
 @pytest.mark.asyncio
@@ -314,3 +323,162 @@ async def test_workspace_edit_does_not_touch_customized_projects(
     # Fallback project did get snapshotted with the pre-rename row set.
     fallback_own = await service.get_statuses(ws.id, project_id=fallback.id)
     assert {s.slug for s in fallback_own} == original_slugs
+
+
+# ====================================================================
+# Delete with task migration: tasks pointing at the deleted status get
+# rewritten to a chosen target before the soft delete fires.
+# ====================================================================
+
+
+async def _make_task(
+    db: AsyncSession,
+    workspace_id: str,
+    status_id: str,
+    status_slug: str,
+    title: str = "T",
+) -> SprintTask:
+    task = SprintTask(
+        id=str(uuid.uuid4()),
+        workspace_id=workspace_id,
+        source_type="manual",
+        source_id=str(uuid.uuid4()),
+        title=title,
+        status=status_slug,
+        status_id=status_id,
+    )
+    db.add(task)
+    await db.flush()
+    return task
+
+
+@pytest.mark.asyncio
+async def test_count_tasks_using_status(db_session: AsyncSession) -> None:
+    ws = await _make_workspace(db_session, "ws-count")
+    service = TaskConfigService(db_session)
+    seeded = await service.seed_default_statuses(ws.id)
+    todo = next(s for s in seeded if s.slug == "todo")
+
+    await _make_task(db_session, ws.id, todo.id, "todo", "A")
+    await _make_task(db_session, ws.id, todo.id, "todo", "B")
+    await db_session.commit()
+
+    assert await service.count_tasks_using_status(todo.id) == 2
+
+
+@pytest.mark.asyncio
+async def test_delete_status_migrates_tasks_to_target(
+    db_session: AsyncSession,
+) -> None:
+    ws = await _make_workspace(db_session, "ws-del-mig")
+    service = TaskConfigService(db_session)
+    seeded = await service.seed_default_statuses(ws.id)
+    todo = next(s for s in seeded if s.slug == "todo")
+    backlog = next(s for s in seeded if s.slug == "backlog")
+
+    task = await _make_task(db_session, ws.id, todo.id, "todo", "Doomed")
+    await db_session.commit()
+
+    await service.delete_status(todo.id, migrate_to_status_id=backlog.id)
+    await db_session.commit()
+
+    await db_session.refresh(task)
+    assert task.status_id == backlog.id
+    assert task.status == "backlog"
+
+    deleted = await service.get_status(todo.id)
+    assert deleted is not None and deleted.is_active is False
+
+
+@pytest.mark.asyncio
+async def test_delete_status_without_migrate_leaves_tasks(
+    db_session: AsyncSession,
+) -> None:
+    """Calling delete with no migration target leaves task.status_id pointing
+    at the now-inactive row. The legacy slug column still renders the card."""
+    ws = await _make_workspace(db_session, "ws-del-nomig")
+    service = TaskConfigService(db_session)
+    seeded = await service.seed_default_statuses(ws.id)
+    todo = next(s for s in seeded if s.slug == "todo")
+
+    task = await _make_task(db_session, ws.id, todo.id, "todo", "Orphan")
+    await db_session.commit()
+
+    await service.delete_status(todo.id)
+    await db_session.commit()
+
+    await db_session.refresh(task)
+    assert task.status_id == todo.id
+    assert task.status == "todo"
+
+
+@pytest.mark.asyncio
+async def test_delete_status_rejects_target_in_other_workspace(
+    db_session: AsyncSession,
+) -> None:
+    ws_a = await _make_workspace(db_session, "ws-a-del")
+    ws_b = await _make_workspace(db_session, "ws-b-del")
+    service = TaskConfigService(db_session)
+    a_statuses = await service.seed_default_statuses(ws_a.id)
+    b_statuses = await service.seed_default_statuses(ws_b.id)
+    await db_session.commit()
+
+    a_todo = next(s for s in a_statuses if s.slug == "todo")
+    b_backlog = next(s for s in b_statuses if s.slug == "backlog")
+
+    with pytest.raises(ValueError, match="migration_target_other_workspace"):
+        await service.delete_status(a_todo.id, migrate_to_status_id=b_backlog.id)
+
+
+@pytest.mark.asyncio
+async def test_project_create_status_in_fallback_snapshots_first(
+    db_session: AsyncSession,
+) -> None:
+    """Adding a project-scoped status to a fallback project must snapshot
+    the workspace defaults first so the project doesn't drop from N inherited
+    statuses to just the 1 newly-added one."""
+    ws = await _make_workspace(db_session, "ws-create-fallback")
+    project = await _make_project(db_session, ws, "p-create-fallback")
+    service = TaskConfigService(db_session)
+    seeded = await service.seed_default_statuses(ws.id)
+    await db_session.commit()
+    seeded_slugs = {s.slug for s in seeded}
+
+    await service.create_status(
+        workspace_id=ws.id,
+        name="Blocked",
+        category="todo",
+        project_id=project.id,
+    )
+    await db_session.commit()
+
+    own = await service.get_statuses(ws.id, project_id=project.id)
+    own_slugs = {s.slug for s in own}
+    # Snapshot copied every workspace default plus the new one.
+    assert seeded_slugs.issubset(own_slugs)
+    assert "blocked" in own_slugs
+
+
+@pytest.mark.asyncio
+async def test_delete_workspace_default_rejects_project_target(
+    db_session: AsyncSession,
+) -> None:
+    """A workspace-default delete can't migrate tasks to a single project's
+    column — tasks come from across the workspace."""
+    ws = await _make_workspace(db_session, "ws-cross")
+    project = await _make_project(db_session, ws, "p-cross")
+    service = TaskConfigService(db_session)
+    seeded = await service.seed_default_statuses(ws.id)
+    await service.clone_workspace_statuses_to_project(ws.id, project.id)
+    await db_session.commit()
+
+    ws_todo = next(s for s in seeded if s.slug == "todo")
+    project_backlog = next(
+        s for s in await service.get_statuses(ws.id, project_id=project.id)
+        if s.slug == "backlog"
+    )
+
+    with pytest.raises(ValueError, match="migration_target_other_project"):
+        await service.delete_status(
+            ws_todo.id, migrate_to_status_id=project_backlog.id
+        )

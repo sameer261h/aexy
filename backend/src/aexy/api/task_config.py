@@ -201,14 +201,47 @@ async def update_task_status(
     return status_to_response(task_status)
 
 
-@router.delete("/task-statuses/{status_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_task_status(
+@router.get("/task-statuses/{status_id}/usage")
+async def get_task_status_usage(
     workspace_id: str,
     status_id: str,
     current_user: Developer = Depends(get_current_developer),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a task status (soft delete)."""
+    """Count of active tasks currently linked to this status.
+
+    Powers the delete-with-migration modal so it can render
+    'N tasks use this status — move them to: …' before the operator commits.
+    """
+    await check_workspace_permission(workspace_id, current_user, db, "viewer")
+
+    service = TaskConfigService(db)
+    existing = await service.get_status(status_id)
+    if not existing or existing.workspace_id != workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task status not found",
+        )
+
+    count = await service.count_tasks_using_status(status_id)
+    return {"count": count}
+
+
+@router.delete("/task-statuses/{status_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_task_status(
+    workspace_id: str,
+    status_id: str,
+    migrate_to: str | None = Query(
+        None,
+        description="If set, rewrite every task pointing at this status to "
+        "the target status (same workspace; same project for project-scoped "
+        "sources) before the soft delete. Avoids orphaning tasks in a column "
+        "that no longer renders.",
+    ),
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a task status (soft delete), optionally migrating tasks first."""
     await check_workspace_permission(workspace_id, current_user, db, "admin")
 
     service = TaskConfigService(db)
@@ -221,7 +254,13 @@ async def delete_task_status(
             detail="Task status not found",
         )
 
-    await service.delete_status(status_id)
+    try:
+        await service.delete_status(status_id, migrate_to_status_id=migrate_to)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
     await db.commit()
 
 

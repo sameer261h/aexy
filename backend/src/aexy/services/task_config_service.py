@@ -6,7 +6,7 @@ from uuid import uuid4
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from aexy.models.sprint import WorkspaceTaskStatus, WorkspaceCustomField
+from aexy.models.sprint import SprintTask, WorkspaceTaskStatus, WorkspaceCustomField
 
 
 def slugify(text: str) -> str:
@@ -117,7 +117,20 @@ class TaskConfigService:
         is_default: bool = False,
         project_id: str | None = None,
     ) -> WorkspaceTaskStatus:
-        """Create a new task status (workspace default if project_id is None)."""
+        """Create a new task status (workspace default if project_id is None).
+
+        For a project-scoped create on a project that's currently on fallback
+        (zero project rows), clone the workspace defaults in first so the
+        project doesn't suddenly drop from "N inherited statuses" down to
+        "1 manually-added status" via the resolver.
+        """
+        if project_id is not None:
+            existing_for_project = await self.get_statuses(
+                workspace_id, project_id=project_id, include_inactive=True
+            )
+            if not existing_for_project:
+                await self.clone_workspace_statuses_to_project(workspace_id, project_id)
+
         # Generate unique slug within the (workspace, project) scope.
         base_slug = slugify(name)
         slug = base_slug
@@ -277,15 +290,63 @@ class TaskConfigService:
         await self.db.refresh(status)
         return status
 
-    async def delete_status(self, status_id: str) -> bool:
+    async def count_tasks_using_status(self, status_id: str) -> int:
+        """How many active (non-archived) tasks currently point at this status row."""
+        stmt = (
+            select(func.count(SprintTask.id))
+            .where(SprintTask.status_id == status_id)
+            .where(SprintTask.is_archived == False)
+        )
+        return int((await self.db.execute(stmt)).scalar() or 0)
+
+    async def delete_status(
+        self,
+        status_id: str,
+        migrate_to_status_id: str | None = None,
+    ) -> bool:
         """Soft delete a status (mark as inactive).
 
         For workspace defaults: snapshot fallback projects first so they keep
         the to-be-deleted status as a project override.
+
+        ``migrate_to_status_id``: when provided, rewrites every task currently
+        pointing at this status row to the target row's id (and legacy slug
+        string) before the soft delete. The target must belong to the same
+        workspace; for project-scoped sources the target must be either a
+        workspace default or scoped to the same project — otherwise the
+        migration is refused so tasks can't end up cross-project.
         """
         status = await self.get_status(status_id)
         if not status:
             return False
+
+        if migrate_to_status_id:
+            target = await self.get_status(migrate_to_status_id)
+            if not target:
+                raise ValueError("migration_target_not_found")
+            if str(target.workspace_id) != str(status.workspace_id):
+                raise ValueError("migration_target_other_workspace")
+            if target.id == status.id:
+                raise ValueError("migration_target_same_as_source")
+            # A workspace-default delete pulls tasks from every project that
+            # used it — they can't all land on one project's column. The
+            # target must be another workspace default.
+            if status.project_id is None and target.project_id is not None:
+                raise ValueError("migration_target_other_project")
+            # A project-scoped delete must land in the same project (or in
+            # workspace-default scope, which is shared and safe).
+            if (
+                status.project_id is not None
+                and target.project_id is not None
+                and str(target.project_id) != str(status.project_id)
+            ):
+                raise ValueError("migration_target_other_project")
+
+            await self.db.execute(
+                update(SprintTask)
+                .where(SprintTask.status_id == status_id)
+                .values(status_id=target.id, status=target.slug)
+            )
 
         if status.project_id is None:
             await self._snapshot_fallback_projects(str(status.workspace_id))

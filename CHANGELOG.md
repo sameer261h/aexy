@@ -5,6 +5,82 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.30] - 2026-05-22
+
+Finishes the project-scoped statuses UX: tasks no longer get orphaned
+when a column is deleted; the project board has a direct entry point
+into status editing; fallback projects render their inherited columns
+as visually read-only; and adding a project status from fallback now
+snapshots the workspace defaults first so the project doesn't lose
+its inherited columns.
+
+### Delete-with-migration (backend + UI)
+
+- `TaskConfigService.delete_status(status_id, migrate_to_status_id=None)`
+  now optionally rewrites every task pointing at the source status
+  (`sprint_tasks.status_id` and the legacy `status` slug column) to
+  the chosen target before the soft delete. Validation refuses a
+  cross-workspace target, refuses a project-scoped target for a
+  workspace-default delete (tasks come from across the workspace),
+  refuses a different project's target for a project-scoped delete,
+  and refuses self-target.
+- New `GET /api/v1/workspaces/{ws}/task-statuses/{id}/usage` returns
+  `{ count }` — powers the delete modal's "N tasks use this status"
+  copy.
+- `DELETE /api/v1/workspaces/{ws}/task-statuses/{id}` now accepts a
+  `?migrate_to=<uuid>` query param.
+- `frontend/src/components/settings/DeleteStatusModal.tsx` replaces
+  the previous `confirm()` dialog. Renders the usage count, requires
+  a target status when count > 0, defaults the target to a same-
+  category sibling for sensible fallback, and surfaces the backend's
+  stable error codes inline.
+
+### Auto-snapshot on first project-scoped create
+
+- `create_status(project_id=...)` for a project that's currently on
+  fallback now clones the workspace defaults into that project before
+  inserting the new row. Without this, the resolver would flip from
+  "5 inherited statuses" to "1 manually-added status" the moment an
+  admin clicked Add Status from a per-project view — silent column
+  loss.
+
+### Entry points from the project board
+
+- `frontend/src/app/(app)/sprints/[projectId]/board/page.tsx` gets a
+  "Columns" link in the toolbar (next to Add Task) that deep-links
+  to `/settings/task-config?tab=statuses&project=<projectId>`.
+- `frontend/src/components/planning/WorkspaceTasksTab.tsx` shows the
+  same link in the All-Tasks header when filtered to a single project.
+- `task-config/page.tsx` reads `?project=<uuid>` from the URL and
+  preselects the scope dropdown so the deep links land where they
+  promise.
+
+### Read-only workspace-default preview
+
+- `SortableStatusItem` gains a `readOnly` prop. When the page is in
+  per-project mode and the project is in fallback (`isUsingWorkspaceFallback`),
+  rows render with a `Workspace default` chip and the drag-handle /
+  edit / delete affordances hide. The single primary action becomes
+  the existing "Customize for this project" CTA.
+
+### Tests
+
+- 5 new unit tests in `test_task_config_project_scope.py`:
+  - `count_tasks_using_status` returns the count.
+  - `delete_status` with a target rewrites both `status_id` and the
+    legacy `status` slug on every affected task.
+  - `delete_status` without a target leaves tasks pointing at the
+    now-inactive row (legacy slug still renders the card).
+  - Cross-workspace / cross-project migration targets are rejected
+    with `migration_target_other_workspace` / `migration_target_other_project`.
+  - `create_status(project_id=...)` on a fallback project copies the
+    workspace defaults in before adding.
+- Test that previously asserted "creating one project status yields
+  exactly one row" was updated to match the new auto-snapshot
+  behavior; the invariant it now expresses is "the resolver returns
+  project-scoped rows once any exist", which is what the codebase
+  actually relies on.
+
 ## [0.8.29] - 2026-05-22
 
 Project statuses are now genuinely isolated from workspace edits. The
