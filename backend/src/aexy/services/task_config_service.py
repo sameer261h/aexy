@@ -6,7 +6,12 @@ from uuid import uuid4
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from aexy.models.sprint import SprintTask, WorkspaceTaskStatus, WorkspaceCustomField
+from aexy.models.sprint import (
+    SprintTask,
+    WorkspaceCustomField,
+    WorkspaceStatusCategory,
+    WorkspaceTaskStatus,
+)
 from aexy.services.sprint_task_service import TaskValidationError
 
 
@@ -20,11 +25,23 @@ def slugify(text: str) -> str:
 
 # Default statuses to seed for new workspaces
 DEFAULT_STATUSES = [
-    {"name": "Backlog", "slug": "backlog", "category": "todo", "color": "#9CA3AF", "position": 0, "is_default": True},
+    {"name": "Backlog", "slug": "backlog", "category": "backlog", "color": "#9CA3AF", "position": 0, "is_default": True},
     {"name": "To Do", "slug": "todo", "category": "todo", "color": "#3B82F6", "position": 1, "is_default": False},
     {"name": "In Progress", "slug": "in_progress", "category": "in_progress", "color": "#F59E0B", "position": 2, "is_default": False},
-    {"name": "In Review", "slug": "in_review", "category": "in_progress", "color": "#8B5CF6", "position": 3, "is_default": False},
+    {"name": "In Review", "slug": "in_review", "category": "in_review", "color": "#8B5CF6", "position": 3, "is_default": False},
     {"name": "Done", "slug": "done", "category": "done", "color": "#10B981", "position": 4, "is_default": False},
+]
+
+# Canonical workspace-default categories. Every new workspace starts with
+# this set; admins can rename, recolor, or add more from the status admin.
+# `semantics` is what burndown/velocity branches on — slugs are user-facing.
+DEFAULT_CATEGORIES = [
+    {"slug": "backlog",     "label": "Backlog",     "color": "#9CA3AF", "semantics": "open",      "position": 0, "is_default": True},
+    {"slug": "todo",        "label": "To Do",       "color": "#3B82F6", "semantics": "open",      "position": 1, "is_default": False},
+    {"slug": "in_progress", "label": "In Progress", "color": "#F59E0B", "semantics": "active",    "position": 2, "is_default": False},
+    {"slug": "in_review",   "label": "In Review",   "color": "#8B5CF6", "semantics": "active",    "position": 3, "is_default": False},
+    {"slug": "done",        "label": "Done",        "color": "#10B981", "semantics": "done",      "position": 4, "is_default": False},
+    {"slug": "cancelled",   "label": "Cancelled",   "color": "#EF4444", "semantics": "cancelled", "position": 5, "is_default": False},
 ]
 
 
@@ -131,6 +148,14 @@ class TaskConfigService:
             # project in the workspace, which is wasteful here. The clone
             # helper is idempotent, so no pre-check needed.
             await self.clone_workspace_statuses_to_project(workspace_id, project_id)
+
+        # Validate category against this workspace's category set (with
+        # project fallback). Workspaces created before the categories table
+        # was introduced may be missing rows — lazy-seed.
+        if not await self._resolve_category_slug(workspace_id, category, project_id):
+            await self.seed_default_categories(workspace_id)
+            if not await self._resolve_category_slug(workspace_id, category, project_id):
+                raise TaskValidationError("unknown_category")
 
         # Generate unique slug within the (workspace, project) scope.
         base_slug = slugify(name)
@@ -279,6 +304,12 @@ class TaskConfigService:
             # Update slug if name changes
             status.slug = slugify(name)
         if category is not None:
+            if not await self._resolve_category_slug(
+                str(status.workspace_id),
+                category,
+                project_id=status.project_id,
+            ):
+                raise TaskValidationError("unknown_category")
             status.category = category
         if color is not None:
             status.color = color
@@ -390,7 +421,9 @@ class TaskConfigService:
         return await self.get_statuses(workspace_id)
 
     async def seed_default_statuses(self, workspace_id: str) -> list[WorkspaceTaskStatus]:
-        """Seed default statuses for a new workspace."""
+        """Seed default statuses (and categories) for a new workspace."""
+        await self.seed_default_categories(workspace_id)
+
         statuses = []
         for status_data in DEFAULT_STATUSES:
             status = WorkspaceTaskStatus(
@@ -404,6 +437,196 @@ class TaskConfigService:
 
         await self.db.flush()
         return statuses
+
+    # ==================== Status Category Management ====================
+
+    @staticmethod
+    def _category_scope_filter(project_id: str | None):
+        """Same shape as ``_scope_filter`` but for the categories table."""
+        if project_id is None:
+            return WorkspaceStatusCategory.project_id.is_(None)
+        return WorkspaceStatusCategory.project_id == project_id
+
+    async def get_categories(
+        self,
+        workspace_id: str,
+        project_id: str | None = None,
+    ) -> list[WorkspaceStatusCategory]:
+        """Return categories in a single scope (workspace defaults, or one project)."""
+        stmt = (
+            select(WorkspaceStatusCategory)
+            .where(WorkspaceStatusCategory.workspace_id == workspace_id)
+            .where(self._category_scope_filter(project_id))
+            .order_by(WorkspaceStatusCategory.position)
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_categories_for_project(
+        self,
+        workspace_id: str,
+        project_id: str,
+    ) -> list[WorkspaceStatusCategory]:
+        """Resolve the effective category set for a project (project rows or workspace fallback)."""
+        project_rows = await self.get_categories(workspace_id, project_id=project_id)
+        if project_rows:
+            return project_rows
+        return await self.get_categories(workspace_id, project_id=None)
+
+    async def get_category(self, category_id: str) -> WorkspaceStatusCategory | None:
+        stmt = select(WorkspaceStatusCategory).where(WorkspaceStatusCategory.id == category_id)
+        return (await self.db.execute(stmt)).scalar_one_or_none()
+
+    async def get_category_by_slug(
+        self,
+        workspace_id: str,
+        slug: str,
+        project_id: str | None = None,
+    ) -> WorkspaceStatusCategory | None:
+        stmt = (
+            select(WorkspaceStatusCategory)
+            .where(WorkspaceStatusCategory.workspace_id == workspace_id)
+            .where(WorkspaceStatusCategory.slug == slug)
+            .where(self._category_scope_filter(project_id))
+        )
+        return (await self.db.execute(stmt)).scalar_one_or_none()
+
+    async def _resolve_category_slug(
+        self,
+        workspace_id: str,
+        slug: str,
+        project_id: str | None = None,
+    ) -> WorkspaceStatusCategory | None:
+        """Resolve a category slug against (project scope → workspace fallback)."""
+        if project_id is not None:
+            in_project = await self.get_category_by_slug(workspace_id, slug, project_id=project_id)
+            if in_project is not None:
+                return in_project
+        return await self.get_category_by_slug(workspace_id, slug, project_id=None)
+
+    async def create_category(
+        self,
+        workspace_id: str,
+        slug: str,
+        label: str,
+        color: str = "#6B7280",
+        semantics: str = "open",
+        is_default: bool = False,
+        project_id: str | None = None,
+    ) -> WorkspaceStatusCategory:
+        """Create a category in a workspace (or project) scope."""
+        existing = await self.get_category_by_slug(workspace_id, slug, project_id=project_id)
+        if existing is not None:
+            raise TaskValidationError("category_slug_exists")
+
+        stmt = (
+            select(func.coalesce(func.max(WorkspaceStatusCategory.position), -1) + 1)
+            .where(WorkspaceStatusCategory.workspace_id == workspace_id)
+            .where(self._category_scope_filter(project_id))
+        )
+        next_position = (await self.db.execute(stmt)).scalar() or 0
+
+        category = WorkspaceStatusCategory(
+            id=str(uuid4()),
+            workspace_id=workspace_id,
+            project_id=project_id,
+            slug=slug,
+            label=label,
+            color=color,
+            semantics=semantics,
+            position=next_position,
+            is_default=is_default,
+        )
+        self.db.add(category)
+        await self.db.flush()
+        await self.db.refresh(category)
+        return category
+
+    async def update_category(
+        self,
+        category_id: str,
+        label: str | None = None,
+        color: str | None = None,
+        semantics: str | None = None,
+        is_default: bool | None = None,
+    ) -> WorkspaceStatusCategory | None:
+        category = await self.get_category(category_id)
+        if not category:
+            return None
+        if label is not None:
+            category.label = label
+        if color is not None:
+            category.color = color
+        if semantics is not None:
+            category.semantics = semantics
+        if is_default is not None:
+            category.is_default = is_default
+        await self.db.flush()
+        await self.db.refresh(category)
+        return category
+
+    async def delete_category(self, category_id: str) -> bool:
+        """Delete a category. Refuses if any status row still references it.
+
+        We don't migrate statuses automatically — admins should reassign the
+        affected statuses to another category first. The error code carries
+        enough context for the UI to render a "reassign N statuses" prompt.
+        """
+        category = await self.get_category(category_id)
+        if not category:
+            return False
+
+        in_use_stmt = (
+            select(func.count(WorkspaceTaskStatus.id))
+            .where(WorkspaceTaskStatus.workspace_id == category.workspace_id)
+            .where(WorkspaceTaskStatus.category == category.slug)
+        )
+        if (await self.db.execute(in_use_stmt)).scalar():
+            raise TaskValidationError("category_in_use")
+
+        await self.db.delete(category)
+        await self.db.flush()
+        return True
+
+    async def reorder_categories(
+        self,
+        workspace_id: str,
+        category_ids: list[str],
+        project_id: str | None = None,
+    ) -> list[WorkspaceStatusCategory]:
+        for position, cat_id in enumerate(category_ids):
+            await self.db.execute(
+                update(WorkspaceStatusCategory)
+                .where(WorkspaceStatusCategory.id == cat_id)
+                .where(WorkspaceStatusCategory.workspace_id == workspace_id)
+                .values(position=position)
+            )
+        await self.db.flush()
+        return await self.get_categories(workspace_id, project_id=project_id)
+
+    async def seed_default_categories(
+        self,
+        workspace_id: str,
+    ) -> list[WorkspaceStatusCategory]:
+        """Seed the 6 canonical workspace-default categories. Idempotent."""
+        existing = await self.get_categories(workspace_id, project_id=None)
+        existing_slugs = {c.slug for c in existing}
+
+        created: list[WorkspaceStatusCategory] = []
+        for cat in DEFAULT_CATEGORIES:
+            if cat["slug"] in existing_slugs:
+                continue
+            row = WorkspaceStatusCategory(
+                id=str(uuid4()),
+                workspace_id=workspace_id,
+                project_id=None,
+                **cat,
+            )
+            self.db.add(row)
+            created.append(row)
+        if created:
+            await self.db.flush()
+        return created + existing
 
     # ==================== Custom Field Management ====================
 

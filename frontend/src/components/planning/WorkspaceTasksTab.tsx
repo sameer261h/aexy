@@ -24,9 +24,11 @@ import {
   Filter,
   Folder,
   Layers,
+  LayoutGrid,
   Plus,
   Search,
   Settings2,
+  Table2,
   User,
   X,
 } from "lucide-react";
@@ -49,6 +51,9 @@ import {
 } from "@/components/planning/AddWorkspaceTaskModal";
 import { useWorkspaceMembers } from "@/hooks/useWorkspace";
 import { useShortcut } from "@/hooks/useKeyboardShortcuts";
+import { useTaskStatuses } from "@/hooks/useTaskConfig";
+import { useTasksLayout } from "@/hooks/useTasksLayout";
+import { TaskTableView } from "@/components/planning/TaskTableView";
 
 const KANBAN_ROW_CLASSES =
   "flex flex-col gap-3 md:flex-row md:overflow-x-auto md:pb-4";
@@ -409,6 +414,18 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
     return projects[0]?.id ?? null;
   }, [filters.teams, projects]);
 
+  // When exactly one project is filtered in we scope the kanban to that
+  // project's statuses (including any custom buckets); otherwise we render
+  // the workspace defaults. `task.status` is still a slug string, so the
+  // tasksByStatus map indexes the right column regardless.
+  const scopedProjectId =
+    filters.teams.length === 1 ? filters.teams[0] : null;
+  const { statuses: projectStatuses } = useTaskStatuses(workspaceId, scopedProjectId);
+
+  // Layout state is per-workspace (one preference for the All-Tasks tab,
+  // independent of any project-board layout pick).
+  const [tasksLayout, setTasksLayout] = useTasksLayout("workspaceTasks", "board");
+
   const [addModalStatus, setAddModalStatus] = useState<TaskStatus | null>(null);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -507,15 +524,30 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
   useShortcut("/", () => searchInputRef.current?.focus(), { enabled: hotkeysEnabled });
 
   // Precompute localized labels so we pass plain strings down to dumb children.
-  const statusLabel = useMemo<Record<TaskStatus, string>>(
-    () => ({
+  // For canonical slugs we use the i18n catalog; custom project statuses fall
+  // through to the row's `name` (already user-supplied, not translatable).
+  const statusLabel = useMemo<Record<string, string>>(() => {
+    const labels: Record<string, string> = {
       backlog: tStatus(STATUS_I18N_KEY.backlog),
       todo: tStatus(STATUS_I18N_KEY.todo),
       in_progress: tStatus(STATUS_I18N_KEY.in_progress),
       review: tStatus(STATUS_I18N_KEY.review),
       done: tStatus(STATUS_I18N_KEY.done),
-    }),
-    [tStatus],
+    };
+    for (const s of projectStatuses) {
+      if (!(s.slug in labels)) labels[s.slug] = s.name;
+    }
+    return labels;
+  }, [tStatus, projectStatuses]);
+
+  // Status slugs in render order. Falls back to the canonical five only when
+  // the hook hasn't returned rows yet (mid-fetch on first paint).
+  const renderStatuses: string[] = useMemo(
+    () =>
+      projectStatuses.length > 0
+        ? projectStatuses.map((s) => s.slug)
+        : (STATUSES as string[]),
+    [projectStatuses],
   );
   const priorityLabel = useMemo<Record<TaskPriority, string>>(
     () => ({
@@ -551,7 +583,9 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
 
     const dropTargetId = over.id as string;
     // Either dropped directly on a column (status slug) or on a card inside one.
-    let targetStatus: TaskStatus | undefined = STATUSES.find((s) => s === dropTargetId);
+    let targetStatus: TaskStatus | undefined = (
+      renderStatuses.find((s) => s === dropTargetId) as TaskStatus | undefined
+    );
     if (!targetStatus) {
       const targetTask = filteredTasks.find((t) => t.id === dropTargetId);
       if (targetTask) targetStatus = targetTask.status;
@@ -659,6 +693,37 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
               ? t("taskCount", { count: filteredTasks.length })
               : t("taskCountPlural", { count: filteredTasks.length })}
           </div>
+
+          {/* Board vs Table layout toggle */}
+          <div className="flex items-center bg-muted border border-border rounded-lg p-0.5">
+            <button
+              onClick={() => setTasksLayout("board")}
+              title={t("viewBoard")}
+              aria-pressed={tasksLayout === "board"}
+              className={cn(
+                "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-all",
+                tasksLayout === "board"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => setTasksLayout("table")}
+              title={t("viewTable")}
+              aria-pressed={tasksLayout === "table"}
+              className={cn(
+                "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-all",
+                tasksLayout === "table"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Table2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
           {filters.teams.length === 1 && (
             <Link
               href={`/settings/projects/${filters.teams[0]}/statuses`}
@@ -697,7 +762,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
       {/* Kanban */}
       {isLoading ? (
         <div className={KANBAN_ROW_CLASSES}>
-          {STATUSES.map((s, colIdx) => (
+          {renderStatuses.map((s, colIdx) => (
             <div
               key={s}
               className="flex-shrink-0 w-full md:w-[320px] rounded-xl bg-muted/30 border border-border/30 overflow-hidden"
@@ -718,6 +783,15 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
             </div>
           ))}
         </div>
+      ) : tasksLayout === "table" ? (
+        <TaskTableView
+          tasks={filteredTasks}
+          statuses={projectStatuses}
+          onRowClick={handleTaskClick}
+          selectedIds={selectedIds}
+          onToggleSelected={toggleSelected}
+          showSprintColumn
+        />
       ) : filteredTasks.length === 0 && hasActiveFilters ? (
         // Filters are active and matched nothing → offer to clear. We only
         // hide the kanban here, not on a truly-empty workspace, so the user
@@ -742,13 +816,13 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           onDragEnd={handleDragEnd}
         >
           <div className={KANBAN_ROW_CLASSES}>
-            {STATUSES.map((status) => (
+            {renderStatuses.map((status) => (
               <KanbanColumn
                 key={status}
-                status={status}
-                label={statusLabel[status]}
+                status={status as TaskStatus}
+                label={statusLabel[status] ?? status}
                 emptyLabel={t("dropTasksHere")}
-                tasks={tasksByStatus[status]}
+                tasks={tasksByStatus[status] ?? []}
                 onTaskClick={handleTaskClick}
                 onOpenAddModal={(s) => setAddModalStatus(s)}
                 onInlineCreate={async (payload) => {
@@ -804,9 +878,9 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
               <option value="" disabled>
                 Move to…
               </option>
-              {STATUSES.map((s) => (
+              {renderStatuses.map((s) => (
                 <option key={s} value={s}>
-                  {statusLabel[s]}
+                  {statusLabel[s] ?? s}
                 </option>
               ))}
             </select>

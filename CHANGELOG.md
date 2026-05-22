@@ -5,6 +5,119 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.32] - 2026-05-22
+
+Two threads landing together:
+
+  1. **DB-driven status categories.** The `category` on each task status
+     was previously locked to three Literal values (`todo`,
+     `in_progress`, `done`). It's now a free-form slug validated
+     against a new `workspace_status_categories` table that ships six
+     canonical buckets per workspace (`backlog`, `todo`, `in_progress`,
+     `in_review`, `done`, `cancelled`) and is open to admin additions.
+  2. **Project-scoped statuses actually reach the board.** The
+     `useTaskStatuses(workspaceId, projectId)` hook + endpoint existed
+     since 0.8.29, but both the project board (`sprints/[id]/board`)
+     and the workspace All-Tasks tab were silently rendering hardcoded
+     5-status arrays. They now call the hook and render whichever
+     statuses the project (or workspace fallback) defines.
+  3. **Board ↔ Table layout toggle.** The orphaned `Settings2` button
+     in the board toolbar is replaced with a `LayoutGrid | Table2`
+     pill; the workspace All-Tasks tab gains the same toggle. Layout
+     is persisted per scope via the new `useTasksLayout` hook.
+
+### Status categories from the database
+
+- `backend/scripts/migrate_status_categories.sql` creates
+  `workspace_status_categories` and seeds the six canonical buckets
+  for every existing workspace. The unique index uses
+  `COALESCE(project_id::text, '')` so workspace defaults and project
+  overrides occupy separate uniqueness buckets, matching the pattern
+  already in use for `workspace_task_statuses`.
+- Each category carries a `semantics` field (one of `open`, `active`,
+  `done`, `cancelled`). All business logic that needs to branch on
+  completion (burndown, velocity) should read `semantics` — slugs
+  are user-facing and renameable.
+- `StatusCategory` in `backend/src/aexy/schemas/sprint.py` becomes
+  `str`; `CategorySemantics` is the new `Literal`. The frontend
+  mirror in `lib/api.ts` matches.
+- New service helpers in `TaskConfigService`:
+  `get_categories`, `get_categories_for_project`,
+  `create_category`, `update_category`, `delete_category`,
+  `reorder_categories`, `seed_default_categories`.
+- New endpoints under `/workspaces/{id}/status-categories` with the
+  same `?project_id=` scope filter as `/task-statuses`.
+- `create_status` / `update_status` validate the category slug
+  against the workspace's category set (with project fallback) and
+  raise `TaskValidationError("unknown_category")` on miss.
+  Workspaces created before the categories table existed get
+  lazy-seeded on first write so legacy data never trips.
+
+### Status modal, dynamic now
+
+- `StatusModal` accepts a `categories` prop instead of a hardcoded
+  array. Each cell renders the category color, label, and a small
+  `semantics` chip; the title attribute carries the burndown hint.
+  Both consumers (project statuses page + workspace task-config
+  page) wire `useStatusCategories` and thread it through.
+
+### Project-scoped statuses on the kanban
+
+- `frontend/src/app/(app)/sprints/[projectId]/board/page.tsx` calls
+  `useTaskStatuses(workspaceId, projectId)` and renders status
+  columns from the resolved set (project rows or workspace
+  fallback). The hardcoded five-column `STATUS_CONFIG` is kept only
+  as a label/color fallback for the canonical slugs.
+- `WorkspaceTasksTab.tsx` does the same when exactly one project is
+  filtered in; otherwise it falls back to workspace defaults.
+- `useProjectBoard.tasksByStatus` and
+  `useWorkspaceTasks.tasksByStatus` are now `Record<string, _>`
+  instead of `Record<TaskStatus, _>` so custom slugs bucket correctly.
+
+### Board / Table view toggle
+
+- `frontend/src/hooks/useTasksLayout.ts` — localStorage-backed
+  `"board" | "table"` preference, scoped per surface
+  (`board:<projectId>` for each project, `workspaceTasks` for the
+  All-Tasks tab).
+- `frontend/src/components/planning/TaskTableView.tsx` — shared
+  dense table view used by both pages. Columns: Key, Title, Status
+  (with the project-scoped color dot), Priority, Assignee, Sprint,
+  Pts, Updated. Sticky header, hover row, bulk-select column,
+  row-click opens the same detail surface as the kanban cards.
+- The board page swaps its orphaned `Settings2` button for a
+  segmented Board/Table pill; `WorkspaceTasksTab` adds the same
+  pill in its toolbar alongside the existing project-statuses link.
+
+### Tests
+
+- New backend suite `tests/unit/test_status_categories.py` (7 tests)
+  covers: canonical seed, fallback resolver, project override,
+  unknown-category rejection on create + update, lazy-seed for
+  legacy workspaces, and refusal to delete a category in use.
+- New frontend Vitest specs:
+  - `src/test/useTasksLayout.test.ts` — persistence, hydration,
+    malformed-value guard, scope isolation.
+  - `src/test/StatusModal.test.tsx` — dynamic categories rendering,
+    submit payload uses the selected slug, empty-state hint.
+- New Playwright spec `e2e/tasks-view-toggle.spec.ts` — a custom
+  project status (`design_review`) surfaces as a kanban column on
+  the board; the Board ↔ Table toggle swaps content and persists
+  across reload via the scoped localStorage key.
+
+### Migration notes
+
+- The new SQL migration is idempotent and safe to re-run; it uses
+  `CREATE TABLE IF NOT EXISTS` + `ON CONFLICT DO NOTHING` for the
+  seed.
+- Existing status rows keep their category strings unchanged. The
+  migration also retags the seeded "Backlog" status from
+  `category=todo` → `backlog` and "In Review" from `in_progress` →
+  `in_review` for workspaces that hadn't renamed those rows.
+- Pre-existing pre-existing pre-existing tests in
+  `test_task_config_project_scope.py` continue to pass against the
+  updated seed (it already used the `in_review` slug).
+
 ## [0.8.31] - 2026-05-22
 
 Moves the status admin to its semantic home: project-scoped statuses

@@ -24,6 +24,18 @@
       "cancel": "Cancel"
     },
 
+    "taskTable": {
+      "key": "Key",
+      "title": "Title",
+      "status": "Status",
+      "priority": "Priority",
+      "assignee": "Assignee",
+      "sprint": "Sprint",
+      "points": "Pts",
+      "updated": "Updated",
+      "empty": "No tasks match the current filters."
+    },
+
     "projectCard": {
       "public": "Public",
       "private": "Private",
@@ -184,7 +196,9 @@
       "noTasksHintEmpty": "Create a project and add tasks to see them here.",
       "clearFilters": "Clear filters",
       "goToProjects": "Go to Projects",
-      "truncatedNotice": "Showing the first {limit} tasks. Use filters to narrow the view."
+      "truncatedNotice": "Showing the first {limit} tasks. Use filters to narrow the view.",
+      "viewBoard": "Board",
+      "viewTable": "Table"
     }
   }
 }

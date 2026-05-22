@@ -85,6 +85,68 @@ class WorkspaceTaskStatus(Base):
     workspace: Mapped["Workspace"] = relationship("Workspace", lazy="selectin")
 
 
+class WorkspaceStatusCategory(Base):
+    """Per-workspace status categories.
+
+    A category is the bucket a status belongs to (Backlog, To Do, In Progress,
+    In Review, Done, Cancelled — and any custom buckets the workspace defines).
+    Six canonical rows are seeded per workspace at creation; admins can add or
+    rename categories from the project status admin.
+
+    The same scope pattern as ``WorkspaceTaskStatus`` applies: a row with
+    ``project_id IS NULL`` is a workspace default; a row with ``project_id``
+    set is a project override. Resolution falls back to workspace defaults.
+
+    Burndown / velocity / completion analytics branch on ``semantics`` (one of
+    ``open``, ``active``, ``done``, ``cancelled``), never on the user-facing
+    slug — so a workspace renaming or adding categories doesn't break math.
+    """
+
+    __tablename__ = "workspace_status_categories"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+
+    slug: Mapped[str] = mapped_column(String(50), nullable=False)
+    label: Mapped[str] = mapped_column(String(100), nullable=False)
+    color: Mapped[str] = mapped_column(String(20), nullable=False, default="#6B7280")
+    semantics: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="open"
+    )  # "open" | "active" | "done" | "cancelled" — burndown/velocity branch on this
+
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    workspace: Mapped["Workspace"] = relationship("Workspace", lazy="selectin")
+
+
 class WorkspaceCustomField(Base):
     """Custom fields for tasks per workspace."""
 

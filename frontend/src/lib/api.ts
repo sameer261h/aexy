@@ -2746,7 +2746,26 @@ export interface TaskActivityList {
 }
 
 // Custom Status Types
-export type StatusCategory = "todo" | "in_progress" | "done";
+// Free-form category slug. The canonical 6 are: backlog, todo, in_progress,
+// in_review, done, cancelled — but workspaces can define more via
+// `workspace_status_categories`. Use `useStatusCategories` to enumerate.
+export type StatusCategory = string;
+
+export type CategorySemantics = "open" | "active" | "done" | "cancelled";
+
+export interface WorkspaceStatusCategory {
+  id: string;
+  workspace_id: string;
+  project_id: string | null;
+  slug: StatusCategory;
+  label: string;
+  color: string;
+  semantics: CategorySemantics;
+  position: number;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface CustomTaskStatus {
   id: string;
@@ -4089,6 +4108,63 @@ export const taskConfigApi = {
   reorderStatuses: async (workspaceId: string, statusIds: string[]): Promise<TaskStatusConfig[]> => {
     const response = await api.post(`/workspaces/${workspaceId}/task-statuses/reorder`, {
       status_ids: statusIds,
+    });
+    return response.data;
+  },
+
+  // Status Categories
+  getCategories: async (
+    workspaceId: string,
+    options?: { projectId?: string | null },
+  ): Promise<WorkspaceStatusCategory[]> => {
+    const response = await api.get(`/workspaces/${workspaceId}/status-categories`, {
+      params: options?.projectId ? { project_id: options.projectId } : undefined,
+    });
+    return response.data;
+  },
+
+  createCategory: async (
+    workspaceId: string,
+    data: {
+      slug: string;
+      label: string;
+      color?: string;
+      semantics?: CategorySemantics;
+      is_default?: boolean;
+      project_id?: string | null;
+    },
+  ): Promise<WorkspaceStatusCategory> => {
+    const response = await api.post(`/workspaces/${workspaceId}/status-categories`, data);
+    return response.data;
+  },
+
+  updateCategory: async (
+    workspaceId: string,
+    categoryId: string,
+    data: {
+      label?: string;
+      color?: string;
+      semantics?: CategorySemantics;
+      is_default?: boolean;
+    },
+  ): Promise<WorkspaceStatusCategory> => {
+    const response = await api.patch(
+      `/workspaces/${workspaceId}/status-categories/${categoryId}`,
+      data,
+    );
+    return response.data;
+  },
+
+  deleteCategory: async (workspaceId: string, categoryId: string): Promise<void> => {
+    await api.delete(`/workspaces/${workspaceId}/status-categories/${categoryId}`);
+  },
+
+  reorderCategories: async (
+    workspaceId: string,
+    categoryIds: string[],
+  ): Promise<WorkspaceStatusCategory[]> => {
+    const response = await api.post(`/workspaces/${workspaceId}/status-categories/reorder`, {
+      category_ids: categoryIds,
     });
     return response.data;
   },

@@ -6,6 +6,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   LayoutGrid,
+  Table2,
   Columns3,
   Plus,
   Settings2,
@@ -57,6 +58,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useWorkspace, useWorkspaceMembers } from "@/hooks/useWorkspace";
 import { useProjectBoard, BoardViewMode, useBoardSelection } from "@/hooks/useProjectBoard";
+import { useTaskStatuses } from "@/hooks/useTaskConfig";
+import { useTasksLayout } from "@/hooks/useTasksLayout";
+import { TaskTableView } from "@/components/planning/TaskTableView";
 import { useEpics } from "@/hooks/useEpics";
 import { useProject } from "@/hooks/useProjects";
 import { SprintTask, TaskStatus, TaskPriority, SprintListItem, EpicListItem, sprintApi, projectTasksApi, TaskTemplate, taskTemplatesApi } from "@/lib/api";
@@ -2282,6 +2286,14 @@ export default function ProjectBoardPage({
     archiveTask,
   } = useProjectBoard(currentWorkspaceId, projectId);
 
+  // Project-scoped statuses drive the kanban columns; falls back to workspace
+  // defaults when the project hasn't customized.
+  const { statuses: projectStatuses } = useTaskStatuses(currentWorkspaceId, projectId);
+
+  // Persisted "Board vs Table" layout per-project so a user's pick on this
+  // project doesn't follow them to others.
+  const [tasksLayout, setTasksLayout] = useTasksLayout(`board:${projectId}`, "board");
+
   const {
     selectedTasks,
     selectedCount,
@@ -2672,11 +2684,18 @@ export default function ProjectBoardPage({
         }
       }
     } else {
-      // Changing status
-      const statusKeys: TaskStatus[] = ["backlog", "todo", "in_progress", "review", "done"];
+      // Changing status. Status column ids are status slugs — accept any
+      // slug that matches a status in this project's set, not just the
+      // canonical five.
+      const statusKeys: string[] =
+        projectStatuses.length > 0
+          ? projectStatuses.map((s) => s.slug)
+          : ["backlog", "todo", "in_progress", "review", "done"];
 
       // First check if dropped directly on a status column
-      let targetStatus: TaskStatus | undefined = statusKeys.find((s) => dropTargetId === s);
+      let targetStatus: TaskStatus | undefined = statusKeys.find((s) => dropTargetId === s) as
+        | TaskStatus
+        | undefined;
 
       // If dropped on a task, find which status that task belongs to
       if (!targetStatus) {
@@ -3014,10 +3033,35 @@ export default function ProjectBoardPage({
                 <Keyboard className="h-5 w-5" />
               </button>
 
-              {/* Settings */}
-              <button className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition">
-                <Settings2 className="h-5 w-5" />
-              </button>
+              {/* Board vs Table layout toggle */}
+              <div className="flex items-center bg-muted border border-border rounded-lg p-0.5">
+                <button
+                  onClick={() => setTasksLayout("board")}
+                  title="Board layout"
+                  aria-pressed={tasksLayout === "board"}
+                  className={cn(
+                    "flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm transition-all",
+                    tasksLayout === "board"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <LayoutGrid className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => setTasksLayout("table")}
+                  title="Table layout"
+                  aria-pressed={tasksLayout === "table"}
+                  className={cn(
+                    "flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm transition-all",
+                    tasksLayout === "table"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Table2 className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </div>
 
@@ -3264,6 +3308,17 @@ export default function ProjectBoardPage({
               </div>
             ))}
           </div>
+        ) : tasksLayout === "table" ? (
+          <div className="p-4">
+            <TaskTableView
+              tasks={filteredTasks}
+              statuses={projectStatuses}
+              onRowClick={handleTaskClick}
+              selectedIds={selectedTasks}
+              onToggleSelected={toggleTask}
+              showSprintColumn
+            />
+          </div>
         ) : (
           <DndContext
             sensors={sensors}
@@ -3313,23 +3368,42 @@ export default function ProjectBoardPage({
                   )}
                 </>
               ) : (
-                // Status View - columns are statuses
-                (Object.keys(STATUS_CONFIG) as TaskStatus[]).map((status) => (
+                // Status View - columns reflect this project's statuses,
+                // resolved with workspace-default fallback. The hardcoded
+                // STATUS_CONFIG below is the legacy color/label map; we still
+                // use it as a fallback color/label when a project's custom
+                // statuses are slow to load, so the column doesn't flash empty.
+                (projectStatuses.length > 0
+                  ? projectStatuses.map((s) => ({
+                      id: s.slug,
+                      title: s.name,
+                      color: STATUS_CONFIG[s.slug as TaskStatus]?.color ?? "text-foreground",
+                      bgColor:
+                        STATUS_CONFIG[s.slug as TaskStatus]?.bgColor ??
+                        "bg-card/30 border border-border/40",
+                    }))
+                  : (Object.keys(STATUS_CONFIG) as TaskStatus[]).map((status) => ({
+                      id: status,
+                      title: STATUS_CONFIG[status].label,
+                      color: STATUS_CONFIG[status].color,
+                      bgColor: STATUS_CONFIG[status].bgColor,
+                    }))
+                ).map((col) => (
                   <KanbanColumn
-                    key={status}
-                    id={status}
-                    title={STATUS_CONFIG[status].label}
-                    color={STATUS_CONFIG[status].color}
-                    bgColor={STATUS_CONFIG[status].bgColor}
-                    tasks={tasksByStatus[status] || []}
+                    key={col.id}
+                    id={col.id}
+                    title={col.title}
+                    color={col.color}
+                    bgColor={col.bgColor}
+                    tasks={tasksByStatus[col.id] || []}
                     onTaskClick={handleTaskClick}
                     onDeleteTask={handleArchiveTask}
                     onStatusChange={handleQuickStatusChange}
                     showSprintBadge={true}
-                    isOver={overId === status}
+                    isOver={overId === col.id}
                     onSelect={toggleTask}
                     isSelected={isSelected}
-                    wipLimit={wipLimits[status] ?? null}
+                    wipLimit={wipLimits[col.id] ?? null}
                   />
                 ))
               )}
