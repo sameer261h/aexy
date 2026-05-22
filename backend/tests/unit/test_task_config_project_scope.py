@@ -19,6 +19,7 @@ from aexy.models.developer import Developer
 from aexy.models.project import Project
 from aexy.models.sprint import SprintTask
 from aexy.models.workspace import Workspace
+from aexy.services.sprint_task_service import TaskValidationError
 from aexy.services.task_config_service import TaskConfigService
 
 
@@ -421,13 +422,21 @@ async def test_delete_status_rejects_target_in_other_workspace(
     service = TaskConfigService(db_session)
     a_statuses = await service.seed_default_statuses(ws_a.id)
     b_statuses = await service.seed_default_statuses(ws_b.id)
-    await db_session.commit()
-
     a_todo = next(s for s in a_statuses if s.slug == "todo")
     b_backlog = next(s for s in b_statuses if s.slug == "backlog")
+    # Seed a task that would be migrated if validation passed — used to
+    # confirm the rejection rolls back cleanly.
+    task = await _make_task(db_session, ws_a.id, a_todo.id, "todo", "Should-not-move")
+    await db_session.commit()
 
-    with pytest.raises(ValueError, match="migration_target_other_workspace"):
+    with pytest.raises(TaskValidationError, match="migration_target_other_workspace"):
         await service.delete_status(a_todo.id, migrate_to_status_id=b_backlog.id)
+
+    await db_session.refresh(task)
+    assert task.status_id == a_todo.id
+    assert task.status == "todo"
+    refreshed_source = await service.get_status(a_todo.id)
+    assert refreshed_source is not None and refreshed_source.is_active is True
 
 
 @pytest.mark.asyncio
@@ -478,7 +487,7 @@ async def test_delete_workspace_default_rejects_project_target(
         if s.slug == "backlog"
     )
 
-    with pytest.raises(ValueError, match="migration_target_other_project"):
+    with pytest.raises(TaskValidationError, match="migration_target_other_project"):
         await service.delete_status(
             ws_todo.id, migrate_to_status_id=project_backlog.id
         )

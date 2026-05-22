@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion } from "framer-motion";
 import { AlertTriangle, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -41,20 +41,11 @@ export function DeleteStatusModal({
 
   const eligible = candidates.filter((c) => c.id !== status.id);
   const [migrateTo, setMigrateTo] = useState<string>(() => {
-    // Default to the first eligible status with the same category, falling
-    // back to the first eligible regardless of category. Keeps "In Progress"
-    // tasks landing in another "In Progress"-like column when possible.
+    // Same-category sibling first (so an "In Progress" delete keeps cards in
+    // another "In Progress" column); any sibling otherwise.
     const sameCategory = eligible.find((c) => c.category === status.category);
     return sameCategory?.id ?? eligible[0]?.id ?? "";
   });
-
-  // Once the count loads, refresh the default in case the operator already
-  // changed it — we only seed on first render.
-  useEffect(() => {
-    if (!migrateTo && eligible.length > 0) {
-      setMigrateTo(eligible[0].id);
-    }
-  }, [eligible, migrateTo]);
 
   useShortcut("escape", onClose, { enabled: !isDeleting });
 

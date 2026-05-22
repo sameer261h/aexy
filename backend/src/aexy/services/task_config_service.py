@@ -7,6 +7,7 @@ from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.models.sprint import SprintTask, WorkspaceTaskStatus, WorkspaceCustomField
+from aexy.services.sprint_task_service import TaskValidationError
 
 
 def slugify(text: str) -> str:
@@ -125,11 +126,11 @@ class TaskConfigService:
         "1 manually-added status" via the resolver.
         """
         if project_id is not None:
-            existing_for_project = await self.get_statuses(
-                workspace_id, project_id=project_id, include_inactive=True
-            )
-            if not existing_for_project:
-                await self.clone_workspace_statuses_to_project(workspace_id, project_id)
+            # `clone_workspace_statuses_to_project` is a single-project
+            # snapshot — `_snapshot_fallback_projects` would scan every
+            # project in the workspace, which is wasteful here. The clone
+            # helper is idempotent, so no pre-check needed.
+            await self.clone_workspace_statuses_to_project(workspace_id, project_id)
 
         # Generate unique slug within the (workspace, project) scope.
         base_slug = slugify(name)
@@ -323,16 +324,16 @@ class TaskConfigService:
         if migrate_to_status_id:
             target = await self.get_status(migrate_to_status_id)
             if not target:
-                raise ValueError("migration_target_not_found")
+                raise TaskValidationError("migration_target_not_found")
             if str(target.workspace_id) != str(status.workspace_id):
-                raise ValueError("migration_target_other_workspace")
+                raise TaskValidationError("migration_target_other_workspace")
             if target.id == status.id:
-                raise ValueError("migration_target_same_as_source")
+                raise TaskValidationError("migration_target_same_as_source")
             # A workspace-default delete pulls tasks from every project that
             # used it — they can't all land on one project's column. The
             # target must be another workspace default.
             if status.project_id is None and target.project_id is not None:
-                raise ValueError("migration_target_other_project")
+                raise TaskValidationError("migration_target_other_project")
             # A project-scoped delete must land in the same project (or in
             # workspace-default scope, which is shared and safe).
             if (
@@ -340,7 +341,7 @@ class TaskConfigService:
                 and target.project_id is not None
                 and str(target.project_id) != str(status.project_id)
             ):
-                raise ValueError("migration_target_other_project")
+                raise TaskValidationError("migration_target_other_project")
 
             await self.db.execute(
                 update(SprintTask)

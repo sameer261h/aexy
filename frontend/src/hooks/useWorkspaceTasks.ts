@@ -14,6 +14,7 @@ import {
   EpicListItem,
 } from "@/lib/api";
 import { useProjects } from "@/hooks/useProjects";
+import { invalidateTaskCaches } from "@/hooks/invalidateTaskCaches";
 
 export interface WorkspaceBoardFilters {
   assignees: string[];
@@ -235,9 +236,7 @@ export function useWorkspaceTasks(workspaceId: string | null) {
       toast.error(message);
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["workspaceTasks", workspaceId] });
-      queryClient.invalidateQueries({ queryKey: ["sprintTasks"] });
-      queryClient.invalidateQueries({ queryKey: ["projectTasks"] });
+      invalidateTaskCaches(queryClient, workspaceId);
     },
   });
 
@@ -266,9 +265,7 @@ export function useWorkspaceTasks(workspaceId: string | null) {
       toast.error("Failed to update task status");
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["workspaceTasks", workspaceId] });
-      queryClient.invalidateQueries({ queryKey: ["sprintTasks"] });
-      queryClient.invalidateQueries({ queryKey: ["projectTasks"] });
+      invalidateTaskCaches(queryClient, workspaceId);
     },
   });
 

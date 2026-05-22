@@ -9,6 +9,7 @@ import {
   CustomFieldType,
   CustomFieldOption,
 } from "@/lib/api";
+import { invalidateTaskCaches } from "@/hooks/invalidateTaskCaches";
 
 // Task Statuses
 // When `projectId` is supplied the hook returns the project's status set, with
@@ -89,13 +90,13 @@ export function useTaskStatuses(
       statusId: string;
       migrateTo?: string;
     }) => taskConfigApi.deleteStatus(workspaceId!, statusId, { migrateTo }),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId, projectId] });
-      // Migrated tasks moved between status_id values — refetch any board
-      // that's grouping by status.
-      queryClient.invalidateQueries({ queryKey: ["workspaceTasks", workspaceId] });
-      queryClient.invalidateQueries({ queryKey: ["sprintTasks"] });
-      queryClient.invalidateQueries({ queryKey: ["projectTasks"] });
+      // Only blow away the task caches when tasks were actually rewritten —
+      // the common "delete an unused status" path leaves them alone.
+      if (variables.migrateTo) {
+        invalidateTaskCaches(queryClient, workspaceId);
+      }
     },
   });
 

@@ -16,6 +16,7 @@ from aexy.schemas.sprint import (
     CustomFieldResponse,
     CustomFieldReorder,
 )
+from aexy.services.sprint_task_service import TaskValidationError
 from aexy.services.task_config_service import TaskConfigService
 from aexy.services.workspace_service import WorkspaceService
 
@@ -256,10 +257,10 @@ async def delete_task_status(
 
     try:
         await service.delete_status(status_id, migrate_to_status_id=migrate_to)
-    except ValueError as exc:
+    except TaskValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
+            detail=exc.code,
         )
     await db.commit()
 
