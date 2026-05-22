@@ -5,6 +5,300 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.35] - 2026-05-23
+
+Two docs surface fixes.
+
+### Apps escape-hatch in the docs sidebar
+
+The main app sidebar is hidden on `/docs/*` routes, so the docs sidebar
+(`NotionSidebar`) was the only navigation chrome — but it had no path
+to other modules. Users had to back out via browser nav or memorize
+URLs to jump to Sprints, CRM, etc.
+
+Added a collapsed-by-default "Apps" section at the bottom of the docs
+sidebar (above the divider before "Add space"). It reuses
+`useAppAccess(workspaceId, developerId)` to list only the apps the
+current user can access, with each row linking to that app's
+`baseRoute` from `APP_CATALOG`. Same access logic as the main sidebar
+— no new permissions surface.
+
+### Selection bug — `removeChild` race on editor mode switch
+
+Reported: selecting text in `/docs/[id]` would intermittently throw
+`NotFoundError: Failed to execute 'removeChild' on 'Node': The node to
+be removed is not a child of this node` in the React commit phase.
+
+Root cause: `DocumentEditor`'s BubbleMenu was rendered when
+`editor && !readOnly`, regardless of `editorMode`. In markdown mode
+the `EditorContent` is replaced by a `<textarea>`, but the BubbleMenu
+(and its Tippy.js portal) stayed mounted. Any subsequent `selectionchange`
+would race React reconciliation — Tippy holds DOM references that React
+no longer owns, the next reposition tries to `removeChild` a detached
+node, and the commit phase throws.
+
+Fix: gate BubbleMenu on `editorMode === "rich"` so it tears down
+cleanly when the user switches modes. One-line conditional change in
+`frontend/src/components/docs/DocumentEditor.tsx`.
+
+## [0.8.34] - 2026-05-22
+
+New: cross-project task move (fork + link). A task can now be moved to
+another project in the same workspace; a fresh task is created in the
+destination, linked back to the source as a "duplicates" dependency,
+and the source is either archived or marked done at the operator's
+choice.
+
+### Why fork instead of true move
+
+Moving the row in place would orphan the source's history, sprint
+membership, comments, and attachments — and `task_key` is workspace-
+scoped but tasks reference sprint/epic/story IDs that don't translate
+across projects. A new task in the destination plus a `task_dependencies`
+link preserves provenance while letting the destination start fresh.
+
+### Backend
+
+- `SprintTaskService.move_to_project(task_id, target_project_id,
+  source_action, subtask_strategy, actor_id)` and a `bulk_move_to_project`
+  variant that returns per-task results (one failure doesn't abort the
+  batch). See plan `mutable-herding-flute.md` for the full contract.
+- New endpoints in `api/project_tasks.py`:
+  - `POST /teams/{team_id}/tasks/{task_id}/move-to-project`
+  - `POST /teams/{team_id}/tasks/bulk-move-to-project`
+- Stable error codes mapped to HTTP 400: `cross_workspace_move`,
+  `same_project_move`, `target_project_not_found`,
+  `task_already_archived`, `task_has_subtasks`,
+  `source_task_not_found`, `invalid_source_action`,
+  `invalid_subtask_strategy`.
+- Subtask handling — caller picks per move:
+  - `block` (default, safest) — reject the move if subtasks exist.
+  - `cascade` — clone every active subtask into the destination under
+    the new parent; archive each original subtask.
+  - `orphan` — leave subtasks in place; their `parent_task_id` still
+    points at the archived/done source.
+- Source-action — caller picks per move:
+  - `archive` — `is_archived=True` on the source.
+  - `mark_done` — set the source's status to its project's first
+    `semantics="done"` slug (workspace fallback, then canonical "done")
+    and set `completed_at = now()` if null.
+- Assignee on the new task is preserved only if the developer is a
+  member of the target project; otherwise cleared. Sprint, started_at,
+  completed_at, cycle/lead time, epic, story, and parent_task_id are
+  intentionally not copied — see the plan for the rationale.
+- Activity log on both ends: `moved_to_project` on the source (carries
+  new task's id/key and the chosen strategies in `activity_metadata`)
+  and `created_from_move` on the new task (carries source's id/key).
+- No schema migration — existing `task_dependencies` with
+  `dependency_type="duplicates"` is the link mechanism.
+
+### Frontend
+
+- New shared `MoveToProjectModal` (`components/planning/MoveToProjectModal.tsx`)
+  used by both single-task and bulk entry points. Project picker excludes
+  the source project and any archived project. Subtask-strategy radio
+  shows only on single-task moves when the task has subtasks.
+- New `useTaskMove` hook (`hooks/useTaskMove.ts`) wrapping both the
+  single and bulk mutations, with `invalidateTaskCaches` integration and
+  friendly toast messages mapped from each stable error code.
+- `EditTaskModal` sidebar (project board) gains a "Move to project…"
+  button above "Archive Task".
+- The board's multi-select bulk toolbar gains a "Move to Project"
+  button next to the existing "Move to Sprint" dropdown.
+
+### Tests
+
+- 12 unit tests in `backend/tests/unit/test_task_move_to_project.py`:
+  happy path, mark-done variant, cross-workspace reject, same-project
+  reject, archived-source reject, subtask block / cascade / orphan,
+  assignee membership rule, sprint+timing fields not copied,
+  activity logged on both tasks, bulk-move continues on per-task
+  failure.
+
+## [0.8.33] - 2026-05-22
+
+Follow-up sweep on the 0.8.32 status work — two production bugs and the
+missing admin surface for editing categories themselves.
+
+### Custom status slugs now round-trip through the API (bug fix)
+
+`PATCH /teams/{id}/tasks/{id}` was rejecting any non-canonical slug
+with a Pydantic `literal_error`:
+
+```
+Input should be 'backlog', 'todo', 'in_progress', 'review' or 'done'
+```
+
+Root cause: `TaskStatus` was still a `Literal[...]` at the schema
+layer, defeating the whole point of project-scoped custom statuses
+from 0.8.32. Two-part fix:
+
+- `TaskStatus = str` in both `backend/src/aexy/schemas/sprint.py` and
+  `frontend/src/lib/api.ts`. Any slug parses; validity is decided at
+  write time, not parse time.
+- New `SprintTaskService.validate_status_slug(task, slug)` checks the
+  slug exists in the task's scope (`workspace_task_statuses` rows for
+  the project OR workspace defaults). On miss → `400 unknown_status`.
+  Wired into both `update_task` and `update_task_status`, on both
+  PATCH endpoints (`/teams/.../tasks/...` and
+  `/sprints/.../tasks/...`).
+
+The canonical five seed slugs (`backlog`, `todo`, `in_progress`,
+`review`, `done`) are accepted unconditionally so workspaces that
+pre-date the status table aren't bricked by tasks carrying slugs
+without matching rows.
+
+### Duplicate "On Hold" columns can no longer be created (bug fix)
+
+Production was showing two columns titled `On Hold` on a kanban — the
+admin had typed the name twice and `create_status` had silently
+deduplicated only the *slug* (storing `on_hold` and `on_hold_1`).
+Both rendered because the column title comes from `name`, not `slug`.
+
+`create_status` and `update_status` now share an `_assert_name_unique`
+helper that rejects case-insensitive name collisions within a scope
+(workspace + project): error code `status_name_exists`, HTTP 400.
+
+This prevents the future occurrence but does **not** clean up existing
+duplicate rows in production data — admins need to delete one of the
+duplicates via the new admin UI (below).
+
+### Category admin UI on the per-project statuses page
+
+`/settings/projects/{projectId}/statuses` gains a "Categories" section
+above the existing statuses list:
+
+- `CategoryModal` — create / edit a category with label, semantics
+  (Open / Active / Done / Cancelled), and color. Slug is auto-derived
+  from the label on create and locked on edit (existing statuses
+  reference it as a string).
+- `SortableCategoryItem` — compact row with color swatch, semantics
+  badge, edit/delete menu.
+- Delete is guarded both client-side (block if any status uses the
+  category) and server-side (`category_in_use` error, HTTP 400).
+
+### Tests
+
+- `backend/tests/unit/test_task_status_validation.py` (new, 4 tests) —
+  canonical slug accepted, project-scoped custom slug accepted,
+  unknown slug rejected, slug scoped to a different project rejected.
+- `backend/tests/unit/test_status_categories.py` (+1) —
+  `test_create_status_rejects_duplicate_display_name` pins the
+  case-insensitive name uniqueness check.
+
+## [0.8.32] - 2026-05-22
+
+Two threads landing together:
+
+  1. **DB-driven status categories.** The `category` on each task status
+     was previously locked to three Literal values (`todo`,
+     `in_progress`, `done`). It's now a free-form slug validated
+     against a new `workspace_status_categories` table that ships six
+     canonical buckets per workspace (`backlog`, `todo`, `in_progress`,
+     `in_review`, `done`, `cancelled`) and is open to admin additions.
+  2. **Project-scoped statuses actually reach the board.** The
+     `useTaskStatuses(workspaceId, projectId)` hook + endpoint existed
+     since 0.8.29, but both the project board (`sprints/[id]/board`)
+     and the workspace All-Tasks tab were silently rendering hardcoded
+     5-status arrays. They now call the hook and render whichever
+     statuses the project (or workspace fallback) defines.
+  3. **Board ↔ Table layout toggle.** The orphaned `Settings2` button
+     in the board toolbar is replaced with a `LayoutGrid | Table2`
+     pill; the workspace All-Tasks tab gains the same toggle. Layout
+     is persisted per scope via the new `useTasksLayout` hook.
+
+### Status categories from the database
+
+- `backend/scripts/migrate_status_categories.sql` creates
+  `workspace_status_categories` and seeds the six canonical buckets
+  for every existing workspace. The unique index uses
+  `COALESCE(project_id::text, '')` so workspace defaults and project
+  overrides occupy separate uniqueness buckets, matching the pattern
+  already in use for `workspace_task_statuses`.
+- Each category carries a `semantics` field (one of `open`, `active`,
+  `done`, `cancelled`). All business logic that needs to branch on
+  completion (burndown, velocity) should read `semantics` — slugs
+  are user-facing and renameable.
+- `StatusCategory` in `backend/src/aexy/schemas/sprint.py` becomes
+  `str`; `CategorySemantics` is the new `Literal`. The frontend
+  mirror in `lib/api.ts` matches.
+- New service helpers in `TaskConfigService`:
+  `get_categories`, `get_categories_for_project`,
+  `create_category`, `update_category`, `delete_category`,
+  `reorder_categories`, `seed_default_categories`.
+- New endpoints under `/workspaces/{id}/status-categories` with the
+  same `?project_id=` scope filter as `/task-statuses`.
+- `create_status` / `update_status` validate the category slug
+  against the workspace's category set (with project fallback) and
+  raise `TaskValidationError("unknown_category")` on miss.
+  Workspaces created before the categories table existed get
+  lazy-seeded on first write so legacy data never trips.
+
+### Status modal, dynamic now
+
+- `StatusModal` accepts a `categories` prop instead of a hardcoded
+  array. Each cell renders the category color, label, and a small
+  `semantics` chip; the title attribute carries the burndown hint.
+  Both consumers (project statuses page + workspace task-config
+  page) wire `useStatusCategories` and thread it through.
+
+### Project-scoped statuses on the kanban
+
+- `frontend/src/app/(app)/sprints/[projectId]/board/page.tsx` calls
+  `useTaskStatuses(workspaceId, projectId)` and renders status
+  columns from the resolved set (project rows or workspace
+  fallback). The hardcoded five-column `STATUS_CONFIG` is kept only
+  as a label/color fallback for the canonical slugs.
+- `WorkspaceTasksTab.tsx` does the same when exactly one project is
+  filtered in; otherwise it falls back to workspace defaults.
+- `useProjectBoard.tasksByStatus` and
+  `useWorkspaceTasks.tasksByStatus` are now `Record<string, _>`
+  instead of `Record<TaskStatus, _>` so custom slugs bucket correctly.
+
+### Board / Table view toggle
+
+- `frontend/src/hooks/useTasksLayout.ts` — localStorage-backed
+  `"board" | "table"` preference, scoped per surface
+  (`board:<projectId>` for each project, `workspaceTasks` for the
+  All-Tasks tab).
+- `frontend/src/components/planning/TaskTableView.tsx` — shared
+  dense table view used by both pages. Columns: Key, Title, Status
+  (with the project-scoped color dot), Priority, Assignee, Sprint,
+  Pts, Updated. Sticky header, hover row, bulk-select column,
+  row-click opens the same detail surface as the kanban cards.
+- The board page swaps its orphaned `Settings2` button for a
+  segmented Board/Table pill; `WorkspaceTasksTab` adds the same
+  pill in its toolbar alongside the existing project-statuses link.
+
+### Tests
+
+- New backend suite `tests/unit/test_status_categories.py` (7 tests)
+  covers: canonical seed, fallback resolver, project override,
+  unknown-category rejection on create + update, lazy-seed for
+  legacy workspaces, and refusal to delete a category in use.
+- New frontend Vitest specs:
+  - `src/test/useTasksLayout.test.ts` — persistence, hydration,
+    malformed-value guard, scope isolation.
+  - `src/test/StatusModal.test.tsx` — dynamic categories rendering,
+    submit payload uses the selected slug, empty-state hint.
+- New Playwright spec `e2e/tasks-view-toggle.spec.ts` — a custom
+  project status (`design_review`) surfaces as a kanban column on
+  the board; the Board ↔ Table toggle swaps content and persists
+  across reload via the scoped localStorage key.
+
+### Migration notes
+
+- The new SQL migration is idempotent and safe to re-run; it uses
+  `CREATE TABLE IF NOT EXISTS` + `ON CONFLICT DO NOTHING` for the
+  seed.
+- Existing status rows keep their category strings unchanged. The
+  migration also retags the seeded "Backlog" status from
+  `category=todo` → `backlog` and "In Review" from `in_progress` →
+  `in_review` for workspaces that hadn't renamed those rows.
+- Pre-existing pre-existing pre-existing tests in
+  `test_task_config_project_scope.py` continue to pass against the
+  updated seed (it already used the `in_review` slug).
+
 ## [0.8.31] - 2026-05-22
 
 Moves the status admin to its semantic home: project-scoped statuses

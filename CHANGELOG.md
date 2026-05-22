@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.35] - 2026-05-23
+
+Two docs surface fixes.
+
+### Apps escape-hatch in the docs sidebar
+
+The main app sidebar is hidden on `/docs/*` routes, so the docs sidebar
+(`NotionSidebar`) was the only navigation chrome — but it had no path
+to other modules. Users had to back out via browser nav or memorize
+URLs to jump to Sprints, CRM, etc.
+
+Added a collapsed-by-default "Apps" section at the bottom of the docs
+sidebar (above the divider before "Add space"). It reuses
+`useAppAccess(workspaceId, developerId)` to list only the apps the
+current user can access, with each row linking to that app's
+`baseRoute` from `APP_CATALOG`. Same access logic as the main sidebar
+— no new permissions surface.
+
+### Selection bug — `removeChild` race on editor mode switch
+
+Reported: selecting text in `/docs/[id]` would intermittently throw
+`NotFoundError: Failed to execute 'removeChild' on 'Node': The node to
+be removed is not a child of this node` in the React commit phase.
+
+Root cause: `DocumentEditor`'s BubbleMenu was rendered when
+`editor && !readOnly`, regardless of `editorMode`. In markdown mode
+the `EditorContent` is replaced by a `<textarea>`, but the BubbleMenu
+(and its Tippy.js portal) stayed mounted. Any subsequent `selectionchange`
+would race React reconciliation — Tippy holds DOM references that React
+no longer owns, the next reposition tries to `removeChild` a detached
+node, and the commit phase throws.
+
+Fix: gate BubbleMenu on `editorMode === "rich"` so it tears down
+cleanly when the user switches modes. One-line conditional change in
+`frontend/src/components/docs/DocumentEditor.tsx`.
+
 ## [0.8.34] - 2026-05-22
 
 New: cross-project task move (fork + link). A task can now be moved to

@@ -428,12 +428,16 @@ export function DocumentEditor({
 
         {/* Floating BubbleMenu — appears when text is selected so users
             don't have to fly the cursor up to the top toolbar to format.
-            Previously this only existed in the (disabled) collaborative
-            editor path; bringing it into the default editor.
             Note: @tiptap/react's BubbleMenu only forwards `className`
             (see node_modules/@tiptap/react/dist/index.cjs), so the
-            data-testid lives on the inner wrapper, not the menu root. */}
-        {editor && !readOnly && (
+            data-testid lives on the inner wrapper, not the menu root.
+            `editorMode === "rich"` is critical — without it the Tippy
+            portal stays mounted in markdown mode while EditorContent
+            is gone, and the next selectionchange tries to manipulate
+            DOM nodes that React no longer owns, throwing
+            `removeChild: The node to be removed is not a child of this
+            node`. Gating on the mode forces a clean tear-down. */}
+        {editor && !readOnly && editorMode === "rich" && (
           <BubbleMenu
             editor={editor}
             tippyOptions={{ duration: 100, placement: "top" }}
