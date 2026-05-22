@@ -95,6 +95,12 @@ services:
       - S3_REGION=us-east-1
       - S3_PUBLIC_ENDPOINT_URL=http://localhost:9000
       - PLATFORM_ORG_ID=${PLATFORM_ORG_ID:-}
+      # Inside the container `localhost` is the container itself, not
+      # the developer's host — LM Studio runs on the host. Use
+      # host.docker.internal so the agent action can actually reach
+      # the local LLM during E2E tests + dev. Override via
+      # `LMSTUDIO_BASE_URL` in the shell env to point at a remote box.
+      - LMSTUDIO_BASE_URL=${LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
     # LLM provider configuration (LLM_PROVIDER, LLM_MODEL, *_API_KEY, etc.)
     # is read from backend/.env by pydantic settings — do not duplicate here
     # or the compose values (often empty strings) will shadow the .env file.

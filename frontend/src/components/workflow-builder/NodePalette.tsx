@@ -8,6 +8,7 @@ import {
   Clock,
   Bot,
   Merge,
+  Plus,
   ChevronDown,
   ChevronRight,
   ChevronLeft,
@@ -1459,6 +1460,7 @@ export function NodePalette({
               key={category.type}
               onClick={() => onAddNode(category.type)}
               aria-label={`Add ${category.label}`}
+              data-testid={`palette-category-${category.type}-collapsed`}
               className={`w-full p-2 rounded-lg hover:bg-accent/50 flex items-center justify-center ${category.bgColor}`}
               title={category.label}
             >
@@ -1519,6 +1521,13 @@ export function NodePalette({
                     handleDragStart(e, category);
                   }
                 }}
+                data-testid={`palette-category-${category.type}`}
+                aria-label={
+                  hasSubtypes
+                    ? `${isExpanded ? "Collapse" : "Expand"} ${category.label}`
+                    : `Add ${category.label}`
+                }
+                aria-expanded={hasSubtypes ? isExpanded : undefined}
                 className={`
                   w-full flex items-center gap-3 px-3 py-2.5 rounded-lg
                   hover:bg-accent/50 transition-colors group
@@ -1531,7 +1540,7 @@ export function NodePalette({
                 <span className="text-foreground font-medium text-sm flex-1 text-left">
                   {category.label}
                 </span>
-                {hasSubtypes && (
+                {hasSubtypes ? (
                   <span className="text-muted-foreground">
                     {isExpanded ? (
                       <ChevronDown className="h-4 w-4" />
@@ -1539,6 +1548,15 @@ export function NodePalette({
                       <ChevronRight className="h-4 w-4" />
                     )}
                   </span>
+                ) : (
+                  // Hover-revealed affordance — the click handler above
+                  // adds the node, but a bare row gives no visual hint
+                  // that clicking does anything. Subtle by design so the
+                  // drag-first UX stays primary.
+                  <Plus
+                    className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity"
+                    aria-hidden
+                  />
                 )}
               </button>
 
@@ -1551,16 +1569,22 @@ export function NodePalette({
                       draggable
                       onDragStart={(e) => handleDragStart(e, category, subtype.value)}
                       title={subtype.description || subtype.label}
+                      data-testid={`palette-subtype-${category.type}-${subtype.value}`}
+                      aria-label={`Add ${subtype.label}`}
                       className={`
-                        w-full flex items-center gap-2 px-3 py-1.5 rounded-lg
+                        group/subtype w-full flex items-center gap-2 px-3 py-1.5 rounded-lg
                         hover:bg-accent/50 transition-colors
                         cursor-grab active:cursor-grabbing
                       `}
                     >
                       <subtype.icon className={`h-3.5 w-3.5 shrink-0 ${category.color}`} />
-                      <span className="text-foreground text-sm truncate">
+                      <span className="text-foreground text-sm truncate flex-1 text-left">
                         {subtype.label}
                       </span>
+                      <Plus
+                        className="h-3 w-3 text-muted-foreground opacity-0 group-hover/subtype:opacity-100 group-focus-visible/subtype:opacity-100 transition-opacity"
+                        aria-hidden
+                      />
                     </button>
                   ))}
                 </div>

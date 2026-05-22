@@ -14,7 +14,10 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://localhost:3000",
+      },
     },
   ],
   webServer: process.env.PLAYWRIGHT_BASE_URL

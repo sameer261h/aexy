@@ -118,6 +118,26 @@ export function probeLmStudio(): Promise<ProbeResult> {
 export async function aiLiveReady(
   opts: { workspace?: boolean } = {},
 ): Promise<ProbeResult> {
+  const base = await backendOnlyReady(opts);
+  if (!base.ok) return base;
+  const probe = await probeLmStudio();
+  if (!probe.ok) return probe;
+  return { ok: true, reason: "" };
+}
+
+/**
+ * The "live backend, no LLM" variant for the automation E2E suite.
+ *
+ * Structural tests (canvas render, palette interaction, config-panel
+ * fields, save round-trip) all hit the real backend but never call an
+ * LLM provider — so the LM Studio probe is wasted overhead and would
+ * skip the whole suite when LM Studio is down even though backend-only
+ * tests would have passed. Use this in any ai-automation-*.spec.ts
+ * that doesn't invoke generate-workflow / run_agent / etc.
+ */
+export async function backendOnlyReady(
+  opts: { workspace?: boolean } = {},
+): Promise<ProbeResult> {
   if (!USE_REAL_BACKEND) {
     return { ok: false, reason: "live-only — set E2E_REAL_BACKEND=1 to run" };
   }
@@ -133,24 +153,48 @@ export async function aiLiveReady(
     return {
       ok: false,
       reason:
-        "AEXY_TEST_WORKSPACE_ID is empty. UI-driving AI tests need a workspace UUID.",
+        "AEXY_TEST_WORKSPACE_ID is empty. UI-driving tests need a workspace UUID.",
     };
   }
-  const probe = await probeLmStudio();
-  if (!probe.ok) return probe;
   return { ok: true, reason: "" };
 }
 
 // ─── Browser auth bootstrap ─────────────────────────────────────────
 
 /**
- * Prime localStorage with the JWT + workspace ID so the Next.js app
- * boots into the workspace under test. Must be called BEFORE the
- * first `page.goto(...)`.
+ * Prime localStorage with the JWT + workspace ID AND the
+ * middleware-visible `aexy_authed` presence cookie so the Next.js
+ * app boots into the workspace under test. Must be called BEFORE
+ * the first `page.goto(...)`.
+ *
+ * The cookie matters: `src/middleware.ts` redirects every protected
+ * route to `/?next=...` if `aexy_authed=1` is missing — and the cookie
+ * is normally set client-side by `useAuth`, AFTER mount. So without
+ * the cookie being present at goto time, the very first navigation
+ * to /automations/new (or any auth-required prefix) bounces through
+ * the login page, dropping any query params we set.
  */
 export async function setupAiLiveAuth(page: Page): Promise<void> {
   const token = REAL_BACKEND_TOKEN;
   const ws = REAL_BACKEND_WORKSPACE_ID;
+
+  // Cookie on the test domain so the middleware sees us as
+  // authenticated on the very first request. The init script below
+  // only runs after navigation starts, which is too late for the
+  // middleware that runs BEFORE the page is delivered. Playwright's
+  // addCookies expects either `url` OR (`domain`+`path`), so go with
+  // `url` and let Playwright derive domain/path from it.
+  const baseUrl =
+    process.env.PLAYWRIGHT_BASE_URL || "http://localhost:3000";
+  await page.context().addCookies([
+    {
+      name: "aexy_authed",
+      value: "1",
+      url: baseUrl,
+      sameSite: "Lax",
+    },
+  ]);
+
   await page.addInitScript(
     ([t, w]) => {
       try {
