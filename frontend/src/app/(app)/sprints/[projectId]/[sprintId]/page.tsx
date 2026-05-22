@@ -260,7 +260,9 @@ interface ColumnConfig {
   color: string;
   bgColor: string;
   customColor: string | null;
-  category: "todo" | "in_progress" | "done";
+  // Free-form category slug — workspaces define their own; the canonical
+  // six are backlog/todo/in_progress/in_review/done/cancelled.
+  category: string;
 }
 
 interface KanbanColumnProps {

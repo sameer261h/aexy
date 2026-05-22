@@ -408,23 +408,15 @@ export function useProjectBoard(
     return grouped;
   }, [filteredTasks, sprints]);
 
-  // Group tasks by status (for status view)
+  // Group tasks by status slug. Key is `task.status` so custom project
+  // statuses (e.g. "design_review") are bucketed alongside the canonical
+  // five. Consumers iterate the dynamic key set rather than a fixed Literal.
   const tasksByStatus = useMemo(() => {
-    const statuses: TaskStatus[] = ["backlog", "todo", "in_progress", "review", "done"];
-    const grouped: Record<TaskStatus, TaskWithSprint[]> = {
-      backlog: [],
-      todo: [],
-      in_progress: [],
-      review: [],
-      done: [],
-    };
-
+    const grouped: Record<string, TaskWithSprint[]> = {};
     filteredTasks.forEach((task) => {
-      if (grouped[task.status]) {
-        grouped[task.status].push(task);
-      }
+      const key = task.status as string;
+      (grouped[key] ??= []).push(task);
     });
-
     return grouped;
   }, [filteredTasks]);
 

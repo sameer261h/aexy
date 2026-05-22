@@ -11,6 +11,10 @@ from aexy.schemas.sprint import (
     TaskStatusUpdate,
     TaskStatusResponse,
     TaskStatusReorder,
+    StatusCategoryCreate,
+    StatusCategoryUpdate,
+    StatusCategoryResponse,
+    StatusCategoryReorder,
     CustomFieldCreate,
     CustomFieldUpdate,
     CustomFieldResponse,
@@ -109,15 +113,18 @@ async def create_task_status(
     await check_workspace_permission(workspace_id, current_user, db, "admin")
 
     service = TaskConfigService(db)
-    task_status = await service.create_status(
-        workspace_id=workspace_id,
-        name=data.name,
-        category=data.category,
-        color=data.color,
-        icon=data.icon,
-        is_default=data.is_default,
-        project_id=data.project_id,
-    )
+    try:
+        task_status = await service.create_status(
+            workspace_id=workspace_id,
+            name=data.name,
+            category=data.category,
+            color=data.color,
+            icon=data.icon,
+            is_default=data.is_default,
+            project_id=data.project_id,
+        )
+    except TaskValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.code)
     await db.commit()
     return status_to_response(task_status)
 
@@ -190,14 +197,17 @@ async def update_task_status(
             detail="Task status not found",
         )
 
-    task_status = await service.update_status(
-        status_id=status_id,
-        name=data.name,
-        category=data.category,
-        color=data.color,
-        icon=data.icon,
-        is_default=data.is_default,
-    )
+    try:
+        task_status = await service.update_status(
+            status_id=status_id,
+            name=data.name,
+            category=data.category,
+            color=data.color,
+            icon=data.icon,
+            is_default=data.is_default,
+        )
+    except TaskValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.code)
     await db.commit()
     return status_to_response(task_status)
 
@@ -279,6 +289,137 @@ async def reorder_task_statuses(
     statuses = await service.reorder_statuses(workspace_id, data.status_ids)
     await db.commit()
     return [status_to_response(s) for s in statuses]
+
+
+def category_to_response(cat) -> StatusCategoryResponse:
+    """Convert WorkspaceStatusCategory model to response schema."""
+    return StatusCategoryResponse(
+        id=str(cat.id),
+        workspace_id=str(cat.workspace_id),
+        project_id=str(cat.project_id) if cat.project_id else None,
+        slug=cat.slug,
+        label=cat.label,
+        color=cat.color,
+        semantics=cat.semantics,
+        position=cat.position,
+        is_default=cat.is_default,
+        created_at=cat.created_at,
+        updated_at=cat.updated_at,
+    )
+
+
+# ==================== Status Category Endpoints ====================
+
+@router.get("/status-categories", response_model=list[StatusCategoryResponse])
+async def list_status_categories(
+    workspace_id: str,
+    project_id: str | None = Query(
+        None,
+        description="If set, returns project-scoped categories (falling back to workspace defaults if the project has none).",
+    ),
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """List status categories for a workspace, optionally narrowed to a project."""
+    await check_workspace_permission(workspace_id, current_user, db, "viewer")
+
+    service = TaskConfigService(db)
+    if project_id:
+        cats = await service.get_categories_for_project(workspace_id, project_id)
+    else:
+        cats = await service.get_categories(workspace_id)
+        # Lazy-seed for workspaces created before this table existed.
+        if not cats:
+            cats = await service.seed_default_categories(workspace_id)
+            await db.commit()
+    return [category_to_response(c) for c in cats]
+
+
+@router.post(
+    "/status-categories",
+    response_model=StatusCategoryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_status_category(
+    workspace_id: str,
+    data: StatusCategoryCreate,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a status category (workspace default, or project-scoped when project_id is set)."""
+    await check_workspace_permission(workspace_id, current_user, db, "admin")
+    service = TaskConfigService(db)
+    try:
+        cat = await service.create_category(
+            workspace_id=workspace_id,
+            slug=data.slug,
+            label=data.label,
+            color=data.color,
+            semantics=data.semantics,
+            is_default=data.is_default,
+            project_id=data.project_id,
+        )
+    except TaskValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.code)
+    await db.commit()
+    return category_to_response(cat)
+
+
+@router.patch("/status-categories/{category_id}", response_model=StatusCategoryResponse)
+async def update_status_category(
+    workspace_id: str,
+    category_id: str,
+    data: StatusCategoryUpdate,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    await check_workspace_permission(workspace_id, current_user, db, "admin")
+    service = TaskConfigService(db)
+    existing = await service.get_category(category_id)
+    if not existing or str(existing.workspace_id) != workspace_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    cat = await service.update_category(
+        category_id=category_id,
+        label=data.label,
+        color=data.color,
+        semantics=data.semantics,
+        is_default=data.is_default,
+    )
+    await db.commit()
+    return category_to_response(cat)
+
+
+@router.delete("/status-categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_status_category(
+    workspace_id: str,
+    category_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    await check_workspace_permission(workspace_id, current_user, db, "admin")
+    service = TaskConfigService(db)
+    existing = await service.get_category(category_id)
+    if not existing or str(existing.workspace_id) != workspace_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    try:
+        await service.delete_category(category_id)
+    except TaskValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.code)
+    await db.commit()
+
+
+@router.post("/status-categories/reorder", response_model=list[StatusCategoryResponse])
+async def reorder_status_categories(
+    workspace_id: str,
+    data: StatusCategoryReorder,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    await check_workspace_permission(workspace_id, current_user, db, "admin")
+    service = TaskConfigService(db)
+    cats = await service.reorder_categories(workspace_id, data.category_ids)
+    await db.commit()
+    return [category_to_response(c) for c in cats]
 
 
 # ==================== Custom Field Endpoints ====================

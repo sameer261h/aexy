@@ -3,13 +3,16 @@
 import { useState } from "react";
 import { AlertCircle, Check, RefreshCw } from "lucide-react";
 
-import { StatusCategory, TaskStatusConfig } from "@/lib/api";
+import { StatusCategory, TaskStatusConfig, WorkspaceStatusCategory } from "@/lib/api";
 
-const STATUS_CATEGORIES: { value: StatusCategory; label: string; color: string }[] = [
-  { value: "todo", label: "To Do", color: "bg-blue-500" },
-  { value: "in_progress", label: "In Progress", color: "bg-yellow-500" },
-  { value: "done", label: "Done", color: "bg-green-500" },
-];
+// Semantics → short tooltip the modal renders under each category cell. Slugs
+// can be renamed by admins, but the four semantics buckets are stable.
+const SEMANTICS_HINTS: Record<string, string> = {
+  open: "Queued — remaining work",
+  active: "In flight — counts toward WIP",
+  done: "Completed — counts toward velocity",
+  cancelled: "Closed without completing",
+};
 
 const PRESET_COLORS = [
   "#6B7280",
@@ -26,6 +29,7 @@ const PRESET_COLORS = [
 
 export interface StatusModalProps {
   status: TaskStatusConfig | null;
+  categories: WorkspaceStatusCategory[];
   onClose: () => void;
   onSave: (data: {
     name: string;
@@ -37,9 +41,18 @@ export interface StatusModalProps {
   isSaving: boolean;
 }
 
-export function StatusModal({ status, onClose, onSave, isSaving }: StatusModalProps) {
+export function StatusModal({
+  status,
+  categories,
+  onClose,
+  onSave,
+  isSaving,
+}: StatusModalProps) {
+  const fallbackCategory = categories[0]?.slug ?? "todo";
   const [name, setName] = useState(status?.name || "");
-  const [category, setCategory] = useState<StatusCategory>(status?.category || "todo");
+  const [category, setCategory] = useState<StatusCategory>(
+    status?.category || fallbackCategory,
+  );
   const [color, setColor] = useState(status?.color || "#6B7280");
   const [isDefault, setIsDefault] = useState(status?.is_default || false);
   const [error, setError] = useState<string | null>(null);
@@ -80,25 +93,39 @@ export function StatusModal({ status, onClose, onSave, isSaving }: StatusModalPr
 
             <div>
               <label className="block text-sm text-muted-foreground mb-1">Category</label>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                {STATUS_CATEGORIES.map((cat) => (
-                  <button
-                    key={cat.value}
-                    type="button"
-                    onClick={() => setCategory(cat.value)}
-                    className={`p-2 rounded-lg border text-center transition ${
-                      category === cat.value
-                        ? "border-primary-500 bg-primary-900/20"
-                        : "border-border hover:border-border"
-                    }`}
-                  >
-                    <div className={`w-3 h-3 ${cat.color} rounded-full mx-auto mb-1`} />
-                    <span className="text-foreground text-sm">{cat.label}</span>
-                  </button>
-                ))}
-              </div>
+              {categories.length === 0 ? (
+                <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                  No categories defined yet — they'll seed automatically when
+                  you save your first status.
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {categories.map((cat) => (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setCategory(cat.slug)}
+                      title={SEMANTICS_HINTS[cat.semantics] ?? cat.semantics}
+                      className={`p-2 rounded-lg border text-center transition ${
+                        category === cat.slug
+                          ? "border-primary-500 bg-primary-900/20"
+                          : "border-border hover:border-foreground/30"
+                      }`}
+                    >
+                      <div
+                        className="w-3 h-3 rounded-full mx-auto mb-1"
+                        style={{ backgroundColor: cat.color }}
+                      />
+                      <span className="text-foreground text-sm">{cat.label}</span>
+                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground mt-0.5">
+                        {cat.semantics}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
               <p className="text-muted-foreground text-xs mt-1">
-                Category affects burndown chart calculations
+                Category semantics drive burndown and velocity calculations.
               </p>
             </div>
 

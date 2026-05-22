@@ -1,0 +1,186 @@
+"""Unit tests for the status-categories table and its resolver.
+
+Covers:
+  1. ``seed_default_statuses`` also seeds the 6 canonical categories.
+  2. Project-scoped categories override workspace defaults.
+  3. ``create_status`` rejects an unknown category slug.
+  4. ``create_status`` lazy-seeds categories for legacy workspaces.
+  5. ``delete_category`` refuses to drop a category that's still in use.
+"""
+
+from __future__ import annotations
+
+import uuid
+
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from aexy.models.developer import Developer
+from aexy.models.project import Project
+from aexy.models.workspace import Workspace
+from aexy.services.sprint_task_service import TaskValidationError
+from aexy.services.task_config_service import (
+    DEFAULT_CATEGORIES,
+    TaskConfigService,
+)
+
+
+async def _make_workspace(db: AsyncSession, slug: str) -> Workspace:
+    dev = Developer(name=f"U {slug}")
+    db.add(dev)
+    await db.flush()
+    ws = Workspace(name=f"WS {slug}", slug=slug, owner_id=dev.id)
+    db.add(ws)
+    await db.commit()
+    await db.refresh(ws)
+    return ws
+
+
+async def _make_project(db: AsyncSession, ws: Workspace, slug: str) -> Project:
+    p = Project(id=str(uuid.uuid4()), workspace_id=ws.id, name=f"P {slug}", slug=slug)
+    db.add(p)
+    await db.commit()
+    await db.refresh(p)
+    return p
+
+
+@pytest.mark.asyncio
+async def test_seed_default_statuses_also_seeds_six_canonical_categories(
+    db_session: AsyncSession,
+) -> None:
+    ws = await _make_workspace(db_session, "ws-cats-seed")
+    service = TaskConfigService(db_session)
+    await service.seed_default_statuses(ws.id)
+    await db_session.commit()
+
+    cats = await service.get_categories(ws.id)
+    slugs = {c.slug for c in cats}
+    assert slugs == {c["slug"] for c in DEFAULT_CATEGORIES}
+    # `semantics` is what business logic depends on — make sure each canonical
+    # category has the expected bucket.
+    by_slug = {c.slug: c.semantics for c in cats}
+    assert by_slug["backlog"] == "open"
+    assert by_slug["todo"] == "open"
+    assert by_slug["in_progress"] == "active"
+    assert by_slug["in_review"] == "active"
+    assert by_slug["done"] == "done"
+    assert by_slug["cancelled"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_get_categories_for_project_falls_back_to_workspace(
+    db_session: AsyncSession,
+) -> None:
+    ws = await _make_workspace(db_session, "ws-cats-fb")
+    project = await _make_project(db_session, ws, "p-cats-fb")
+    service = TaskConfigService(db_session)
+    await service.seed_default_statuses(ws.id)
+    await db_session.commit()
+
+    resolved = await service.get_categories_for_project(ws.id, project.id)
+    # Project has no rows of its own; fall back to workspace defaults.
+    assert all(c.project_id is None for c in resolved)
+    assert len(resolved) == len(DEFAULT_CATEGORIES)
+
+
+@pytest.mark.asyncio
+async def test_project_category_override_takes_precedence(
+    db_session: AsyncSession,
+) -> None:
+    ws = await _make_workspace(db_session, "ws-cats-ovr")
+    project = await _make_project(db_session, ws, "p-cats-ovr")
+    service = TaskConfigService(db_session)
+    await service.seed_default_statuses(ws.id)
+    await service.create_category(
+        workspace_id=ws.id,
+        slug="design",
+        label="Design",
+        color="#FF00AA",
+        semantics="active",
+        project_id=project.id,
+    )
+    await db_session.commit()
+
+    resolved = await service.get_categories_for_project(ws.id, project.id)
+    assert all(c.project_id == project.id for c in resolved)
+    assert any(c.slug == "design" for c in resolved)
+
+
+@pytest.mark.asyncio
+async def test_create_status_rejects_unknown_category(
+    db_session: AsyncSession,
+) -> None:
+    ws = await _make_workspace(db_session, "ws-cats-rej")
+    service = TaskConfigService(db_session)
+    await service.seed_default_statuses(ws.id)
+    await db_session.commit()
+
+    with pytest.raises(TaskValidationError) as exc:
+        await service.create_status(
+            workspace_id=ws.id,
+            name="Should Fail",
+            category="nope-not-a-category",
+        )
+    assert exc.value.code == "unknown_category"
+
+
+@pytest.mark.asyncio
+async def test_create_status_lazy_seeds_categories_for_legacy_workspace(
+    db_session: AsyncSession,
+) -> None:
+    """Workspaces created before the categories table existed can still
+    create statuses — the service back-fills the canonical six on first
+    write."""
+    ws = await _make_workspace(db_session, "ws-cats-lazy")
+    service = TaskConfigService(db_session)
+
+    # Note: deliberately skip seed_default_statuses so no categories exist yet.
+    # The category slug "todo" is canonical so the lazy-seed should make
+    # it available.
+    status = await service.create_status(
+        workspace_id=ws.id,
+        name="Triage",
+        category="todo",
+    )
+    await db_session.commit()
+    assert status.category == "todo"
+
+    cats = await service.get_categories(ws.id)
+    assert {c.slug for c in cats} == {c["slug"] for c in DEFAULT_CATEGORIES}
+
+
+@pytest.mark.asyncio
+async def test_delete_category_in_use_is_refused(
+    db_session: AsyncSession,
+) -> None:
+    ws = await _make_workspace(db_session, "ws-cats-del")
+    service = TaskConfigService(db_session)
+    await service.seed_default_statuses(ws.id)
+    await db_session.commit()
+
+    todo_cat = await service.get_category_by_slug(ws.id, "todo")
+    assert todo_cat is not None
+
+    with pytest.raises(TaskValidationError) as exc:
+        await service.delete_category(todo_cat.id)
+    assert exc.value.code == "category_in_use"
+
+
+@pytest.mark.asyncio
+async def test_update_status_rejects_unknown_category(
+    db_session: AsyncSession,
+) -> None:
+    ws = await _make_workspace(db_session, "ws-cats-upd")
+    service = TaskConfigService(db_session)
+    await service.seed_default_statuses(ws.id)
+    await db_session.commit()
+
+    todo_status = await service.get_status_by_slug(ws.id, "todo")
+    assert todo_status is not None
+
+    with pytest.raises(TaskValidationError) as exc:
+        await service.update_status(
+            status_id=todo_status.id,
+            category="ghost-category",
+        )
+    assert exc.value.code == "unknown_category"

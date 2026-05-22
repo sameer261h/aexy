@@ -10,7 +10,15 @@ SprintStatus = Literal["planning", "active", "review", "retrospective", "complet
 TaskStatus = Literal["backlog", "todo", "in_progress", "review", "done"]
 TaskPriority = Literal["critical", "high", "medium", "low"]
 TaskSourceType = Literal["github_issue", "jira", "linear", "manual", "ticket", "automation"]
-StatusCategory = Literal["todo", "in_progress", "done"]
+# Status category is a free-form slug validated at write time against the
+# workspace's `workspace_status_categories` rows (with project fallback).
+# Six canonical categories are seeded per workspace: backlog, todo,
+# in_progress, in_review, done, cancelled. Admins can add more.
+StatusCategory = str
+
+# Burndown/velocity branch on this — every category row carries a semantics
+# label, so business logic stays independent of the user-facing slug.
+CategorySemantics = Literal["open", "active", "done", "cancelled"]
 CustomFieldType = Literal["text", "number", "select", "multiselect", "date", "url"]
 
 
@@ -65,6 +73,52 @@ class TaskStatusReorder(BaseModel):
     """Schema for reordering statuses."""
 
     status_ids: list[str] = Field(..., min_length=1)
+
+
+# ==================== Status Category Schemas ====================
+
+class StatusCategoryCreate(BaseModel):
+    """Schema for creating a status category."""
+
+    slug: str = Field(..., min_length=1, max_length=50)
+    label: str = Field(..., min_length=1, max_length=100)
+    color: str = Field(default="#6B7280", max_length=20)
+    semantics: CategorySemantics = "open"
+    is_default: bool = False
+    project_id: str | None = None
+
+
+class StatusCategoryUpdate(BaseModel):
+    """Schema for updating a status category."""
+
+    label: str | None = Field(default=None, min_length=1, max_length=100)
+    color: str | None = Field(default=None, max_length=20)
+    semantics: CategorySemantics | None = None
+    is_default: bool | None = None
+
+
+class StatusCategoryResponse(BaseModel):
+    """Schema for status category response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    workspace_id: str
+    project_id: str | None = None
+    slug: str
+    label: str
+    color: str
+    semantics: CategorySemantics
+    position: int
+    is_default: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class StatusCategoryReorder(BaseModel):
+    """Schema for reordering categories."""
+
+    category_ids: list[str] = Field(..., min_length=1)
 
 
 # ==================== Custom Field Schemas ====================

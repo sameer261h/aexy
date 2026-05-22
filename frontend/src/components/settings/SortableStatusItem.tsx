@@ -9,12 +9,18 @@ import { StatusCategory, TaskStatusConfig } from "@/lib/api";
 
 function getCategoryBadgeColor(category: StatusCategory) {
   switch (category) {
+    case "backlog":
+      return "bg-slate-50 text-slate-600 dark:bg-slate-900/40 dark:text-slate-300";
     case "todo":
       return "bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400";
     case "in_progress":
       return "bg-yellow-50 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400";
+    case "in_review":
+      return "bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400";
     case "done":
       return "bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400";
+    case "cancelled":
+      return "bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400";
     default:
       return "bg-muted text-muted-foreground";
   }

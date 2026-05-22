@@ -6,6 +6,8 @@ import {
   TaskStatusConfig,
   CustomField,
   StatusCategory,
+  CategorySemantics,
+  WorkspaceStatusCategory,
   CustomFieldType,
   CustomFieldOption,
 } from "@/lib/api";
@@ -147,6 +149,84 @@ export function useTaskStatuses(
     todoStatuses: getStatusesByCategory("todo"),
     inProgressStatuses: getStatusesByCategory("in_progress"),
     doneStatuses: getStatusesByCategory("done"),
+  };
+}
+
+// Status Categories
+// Mirrors useTaskStatuses scope semantics: when `projectId` is supplied the
+// hook returns the project's category set, falling back to workspace defaults
+// when the project has no overrides. Used by the StatusModal so the bucket
+// dropdown reflects whichever categories the workspace has defined.
+export function useStatusCategories(
+  workspaceId: string | null,
+  projectId: string | null = null,
+) {
+  const queryClient = useQueryClient();
+
+  const {
+    data: categories,
+    isLoading,
+    error,
+    refetch,
+  } = useQuery<WorkspaceStatusCategory[]>({
+    queryKey: ["statusCategories", workspaceId, projectId],
+    queryFn: () => taskConfigApi.getCategories(workspaceId!, { projectId }),
+    enabled: !!workspaceId,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (data: {
+      slug: string;
+      label: string;
+      color?: string;
+      semantics?: CategorySemantics;
+      is_default?: boolean;
+    }) =>
+      taskConfigApi.createCategory(workspaceId!, {
+        ...data,
+        ...(projectId ? { project_id: projectId } : {}),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["statusCategories", workspaceId, projectId] });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({
+      categoryId,
+      data,
+    }: {
+      categoryId: string;
+      data: {
+        label?: string;
+        color?: string;
+        semantics?: CategorySemantics;
+        is_default?: boolean;
+      };
+    }) => taskConfigApi.updateCategory(workspaceId!, categoryId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["statusCategories", workspaceId, projectId] });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (categoryId: string) => taskConfigApi.deleteCategory(workspaceId!, categoryId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["statusCategories", workspaceId, projectId] });
+    },
+  });
+
+  return {
+    categories: categories || [],
+    isLoading,
+    error,
+    refetch,
+    createCategory: createMutation.mutateAsync,
+    updateCategory: updateMutation.mutateAsync,
+    deleteCategory: deleteMutation.mutateAsync,
+    isCreating: createMutation.isPending,
+    isUpdating: updateMutation.isPending,
+    isDeleting: deleteMutation.isPending,
   };
 }
 

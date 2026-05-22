@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useWorkspace, useWorkspaceMembers } from "@/hooks/useWorkspace";
-import { useTaskStatuses, useCustomFields } from "@/hooks/useTaskConfig";
+import { useTaskStatuses, useStatusCategories, useCustomFields } from "@/hooks/useTaskConfig";
 import { useProjects } from "@/hooks/useProjects";
 import { useAuth } from "@/hooks/useAuth";
 import { DeleteStatusModal } from "@/components/settings/DeleteStatusModal";
@@ -460,6 +460,11 @@ export default function TaskConfigPage() {
     isDeleting: isDeletingStatus,
   } = useTaskStatuses(currentWorkspaceId, selectedProjectId);
 
+  const { categories: statusCategories } = useStatusCategories(
+    currentWorkspaceId,
+    selectedProjectId,
+  );
+
   const {
     fields,
     isLoading: fieldsLoading,
@@ -892,6 +897,7 @@ export default function TaskConfigPage() {
       {showStatusModal && (
         <StatusModal
           status={editingStatus}
+          categories={statusCategories}
           onClose={() => {
             setShowStatusModal(false);
             setEditingStatus(null);

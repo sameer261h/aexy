@@ -58,6 +58,7 @@ from aexy.models.sprint import (
     SprintPlanningSession,
     SprintRetrospective,
     WorkspaceTaskStatus,
+    WorkspaceStatusCategory,
     WorkspaceCustomField,
     TaskGitHubLink,
     TaskActivity,
@@ -602,6 +603,7 @@ __all__ = [
     "SprintRetrospective",
     # Task Configuration
     "WorkspaceTaskStatus",
+    "WorkspaceStatusCategory",
     "WorkspaceCustomField",
     "TaskGitHubLink",
     "TaskActivity",

@@ -34,7 +34,7 @@ import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { useAuth } from "@/hooks/useAuth";
 import { useWorkspace, useWorkspaceMembers } from "@/hooks/useWorkspace";
 import { useProject } from "@/hooks/useProjects";
-import { useTaskStatuses } from "@/hooks/useTaskConfig";
+import { useTaskStatuses, useStatusCategories } from "@/hooks/useTaskConfig";
 import { TaskStatusConfig } from "@/lib/api";
 import { SortableStatusItem } from "@/components/settings/SortableStatusItem";
 import { StatusModal } from "@/components/settings/StatusModal";
@@ -64,6 +64,11 @@ export default function ProjectStatusesPage() {
     isDeleting,
   } = useTaskStatuses(currentWorkspaceId, projectId);
 
+  const { categories: statusCategories } = useStatusCategories(
+    currentWorkspaceId,
+    projectId,
+  );
+
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [editingStatus, setEditingStatus] = useState<TaskStatusConfig | null>(null);
   const [deletingStatus, setDeletingStatus] = useState<TaskStatusConfig | null>(null);
@@ -88,7 +93,7 @@ export default function ProjectStatusesPage() {
 
   const handleSaveStatus = async (data: {
     name: string;
-    category: "todo" | "in_progress" | "done";
+    category: string;
     color: string;
     icon?: string;
     is_default?: boolean;
@@ -309,6 +314,7 @@ export default function ProjectStatusesPage() {
       {showStatusModal && (
         <StatusModal
           status={editingStatus}
+          categories={statusCategories}
           onClose={() => {
             setShowStatusModal(false);
             setEditingStatus(null);

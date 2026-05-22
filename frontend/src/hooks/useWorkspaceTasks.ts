@@ -170,9 +170,11 @@ export function useWorkspaceTasks(workspaceId: string | null) {
     });
   }, [tasks, filters]);
 
-  // Group filtered tasks by status for Kanban columns.
+  // Group filtered tasks by status slug for Kanban columns. Key is generic
+  // string so project-scoped custom statuses (e.g. "design_review") are
+  // bucketed alongside the canonical five.
   const tasksByStatus = useMemo(() => {
-    const grouped: Record<TaskStatus, WorkspaceTaskWithMeta[]> = {
+    const grouped: Record<string, WorkspaceTaskWithMeta[]> = {
       backlog: [],
       todo: [],
       in_progress: [],
@@ -180,7 +182,8 @@ export function useWorkspaceTasks(workspaceId: string | null) {
       done: [],
     };
     filteredTasks.forEach((task) => {
-      if (grouped[task.status]) grouped[task.status].push(task);
+      const key = task.status as string;
+      (grouped[key] ??= []).push(task);
     });
     return grouped;
   }, [filteredTasks]);
