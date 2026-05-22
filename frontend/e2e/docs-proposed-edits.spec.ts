@@ -287,4 +287,81 @@ test.describe("Docs proposed edits (live)", () => {
     // Approve button copy changes to "Apply anyway" when stale.
     await expect(page.getByTestId("approve-button")).toContainText(/apply anyway/i);
   });
+
+  test("stale conflict exposes a Regenerate button that calls /generate", async ({
+    page,
+  }) => {
+    let generateCalls = 0;
+    await page.route(
+      new RegExp(`/documents/${docId}/proposed-edits\\?.*status=pending`),
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(
+            generateCalls > 0
+              ? [makeProposal({ id: "pe-fresh", is_stale: false })]
+              : [makeProposal({ id: "pe-stale", is_stale: true })],
+          ),
+        }),
+    );
+    await page.route(
+      new RegExp(`/documents/${docId}/generate(\\?|$)`),
+      (route) => {
+        generateCalls++;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            status: "proposed",
+            applied: false,
+            document_id: docId,
+            proposed_edit_id: "pe-fresh",
+            content: { type: "doc", content: [] },
+          }),
+        });
+      },
+    );
+
+    await page.goto(`/docs/${docId}`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(2_000);
+
+    await page
+      .getByTestId("proposed-edit-pe-stale")
+      .locator("button")
+      .first()
+      .click();
+    await expect(page.getByTestId("regenerate-button")).toBeVisible({
+      timeout: 5_000,
+    });
+    await page.getByTestId("regenerate-button").click();
+    await page.waitForTimeout(600);
+
+    expect(
+      generateCalls,
+      "Regenerate didn't fire POST /generate — wiring is broken",
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  test("non-stale proposal does NOT render Regenerate", async ({ page }) => {
+    await page.route(
+      new RegExp(`/documents/${docId}/proposed-edits\\?.*status=pending`),
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([makeProposal({ id: "pe-fresh", is_stale: false })]),
+        }),
+    );
+
+    await page.goto(`/docs/${docId}`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(2_000);
+
+    await page
+      .getByTestId("proposed-edit-pe-fresh")
+      .locator("button")
+      .first()
+      .click();
+    await expect(page.getByTestId("regenerate-button")).toHaveCount(0);
+  });
 });

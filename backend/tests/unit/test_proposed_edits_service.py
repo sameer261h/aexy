@@ -84,6 +84,14 @@ def make_service():
     return svc, db
 
 
+def make_doc(*, doc_id="doc-1", owner_id="owner-1", content=None):
+    return SimpleNamespace(
+        id=doc_id,
+        content=content or {"type": "doc", "content": []},
+        created_by_id=owner_id,
+    )
+
+
 class TestCreateProposal:
     @pytest.mark.asyncio
     async def test_snapshots_current_content_sha_when_omitted(self):
@@ -91,9 +99,7 @@ class TestCreateProposal:
         # Document with known content; service must hash it and store
         # the SHA on the new proposal as base_content_sha.
         existing_content = {"type": "doc", "content": [{"x": "y"}]}
-        db.get.return_value = SimpleNamespace(
-            id="doc-1", content=existing_content
-        )
+        db.get.return_value = make_doc(content=existing_content)
 
         proposal = await svc.create_proposal(
             document_id="doc-1",
@@ -114,9 +120,7 @@ class TestCreateProposal:
         If the order were reversed, the new proposal itself could be
         swept into the supersede set."""
         svc, db = make_service()
-        db.get.return_value = SimpleNamespace(
-            id="doc-1", content={"type": "doc"}
-        )
+        db.get.return_value = make_doc(content={"type": "doc"})
 
         call_order: list[str] = []
 
@@ -194,3 +198,64 @@ class TestIsStale:
             base_content_sha=compute_content_sha(original),
         )
         assert (await svc.is_stale(proposal)) is True
+
+
+class TestNotificationOnCreate:
+    @pytest.mark.asyncio
+    async def test_notification_fired_for_owner(self):
+        """Creating a system-generated proposal (proposed_by_id is None)
+        creates a DocumentNotification addressed to the doc owner."""
+        svc, db = make_service()
+        db.get.return_value = make_doc(owner_id="owner-1")
+
+        await svc.create_proposal(
+            document_id="doc-1",
+            source=ProposedEditSource.CODE_CHANGE_SYNC,
+            proposed_content={"type": "doc"},
+            proposed_by_id=None,
+        )
+
+        # First db.add is the proposal; second is the notification
+        # (we don't care about order beyond "both fired").
+        added_kinds = [type(call.args[0]).__name__ for call in db.add.call_args_list]
+        assert "DocumentProposedEdit" in added_kinds, added_kinds
+        assert "DocumentNotification" in added_kinds, (
+            f"no DocumentNotification was added — owner won't see the proposal: {added_kinds}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_self_notification(self):
+        """Proposer == doc owner shouldn't get a notification about
+        their own action (manual regenerate triggered by the owner)."""
+        svc, db = make_service()
+        db.get.return_value = make_doc(owner_id="dev-1")
+
+        await svc.create_proposal(
+            document_id="doc-1",
+            source=ProposedEditSource.REGENERATE,
+            proposed_content={"type": "doc"},
+            proposed_by_id="dev-1",
+        )
+
+        added_kinds = [type(call.args[0]).__name__ for call in db.add.call_args_list]
+        assert "DocumentNotification" not in added_kinds, (
+            "owner-triggered proposal fired a notification to the owner"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_notification_when_owner_missing(self):
+        """Doc without created_by_id (test fixtures, legacy rows) —
+        notification step is a no-op rather than a crash."""
+        svc, db = make_service()
+        db.get.return_value = make_doc(owner_id=None)
+
+        await svc.create_proposal(
+            document_id="doc-1",
+            source=ProposedEditSource.REGENERATE,
+            proposed_content={"type": "doc"},
+        )
+
+        added_kinds = [type(call.args[0]).__name__ for call in db.add.call_args_list]
+        assert "DocumentNotification" not in added_kinds, (
+            f"notification fired without an owner to notify: {added_kinds}"
+        )

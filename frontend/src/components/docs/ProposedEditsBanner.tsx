@@ -80,6 +80,18 @@ export function ProposedEditsBanner({ workspaceId, documentId }: Props) {
     },
   });
 
+  // Regenerate the source pipeline against the document's current
+  // content. The fresh proposal supersedes the stale one server-side
+  // via ProposedEditsService.create_proposal's supersede sweep, so we
+  // only need to invalidate the cache afterwards.
+  const regenerate = useMutation({
+    mutationFn: () => documentApi.generate(workspaceId, documentId),
+    onSuccess: () => {
+      setOpenId(null);
+      invalidate();
+    },
+  });
+
   if (isLoading || proposals.length === 0) return null;
 
   return (
@@ -148,7 +160,14 @@ export function ProposedEditsBanner({ workspaceId, documentId }: Props) {
                             onReject={(reason) =>
                               reject.mutate({ id: p.id, reason })
                             }
-                            isPending={approve.isPending || reject.isPending}
+                            onRegenerate={
+                              p.is_stale ? () => regenerate.mutate() : undefined
+                            }
+                            isPending={
+                              approve.isPending ||
+                              reject.isPending ||
+                              regenerate.isPending
+                            }
                           />
                         </div>
                       )}

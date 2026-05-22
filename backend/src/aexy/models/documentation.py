@@ -52,6 +52,7 @@ class DocumentNotificationType(str, Enum):
     MENTION = "mention"
     SHARE = "share"
     EDIT = "edit"
+    AI_PROPOSAL = "ai_proposal"
 
 
 class DocumentLinkType(str, Enum):

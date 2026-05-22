@@ -32,11 +32,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.models.documentation import (
     Document,
+    DocumentNotification,
+    DocumentNotificationType,
     DocumentProposedEdit,
     ProposedEditSource,
     ProposedEditStatus,
 )
 from aexy.services.document_service import DocumentService
+
+_SOURCE_LABELS = {
+    "code_change_sync": "Code change",
+    "regenerate": "Manual regenerate",
+    "suggest_improvements": "Suggested improvement",
+    "manual_ai_edit": "AI edit",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -84,11 +93,14 @@ class ProposedEditsService:
 
         # If caller didn't supply base_content_sha, snapshot it from
         # the current document. Done before supersede so concurrent
-        # calls see consistent hash.
+        # calls see consistent hash. We also hold onto the document
+        # so we can fire a DocumentNotification at the end without a
+        # second round-trip.
+        document_obj: Document | None = None
         if base_content_sha is None:
-            doc = await self.db.get(Document, document_id)
-            if doc is not None:
-                base_content_sha = compute_content_sha(doc.content)
+            document_obj = await self.db.get(Document, document_id)
+            if document_obj is not None:
+                base_content_sha = compute_content_sha(document_obj.content)
 
         # Create the new proposal first so we have the id for the
         # supersede reason.
@@ -124,7 +136,39 @@ class ProposedEditsService:
         )
         await self.db.execute(stmt)
 
+        # Fire a notification to the document owner so they see the
+        # proposal in their inbox. Best-effort: a missing document or
+        # missing owner shouldn't block proposal creation.
+        await self._notify_owner(new_proposal, document_obj)
+
         return new_proposal
+
+    async def _notify_owner(
+        self,
+        proposal: DocumentProposedEdit,
+        document: Document | None,
+    ) -> None:
+        # Cheap reload if the caller didn't already have the doc.
+        if document is None:
+            document = await self.db.get(Document, proposal.document_id)
+        if document is None or not document.created_by_id:
+            return
+        # Don't notify someone about their own action.
+        if proposal.proposed_by_id and str(proposal.proposed_by_id) == str(
+            document.created_by_id
+        ):
+            return
+
+        label = _SOURCE_LABELS.get(proposal.source, "AI")
+        notification = DocumentNotification(
+            document_id=str(document.id),
+            developer_id=str(document.created_by_id),
+            type=DocumentNotificationType.AI_PROPOSAL.value,
+            message=f"{label} proposed a doc update — review pending",
+            created_by_id=proposal.proposed_by_id,
+        )
+        self.db.add(notification)
+        await self.db.flush()
 
     # ─── Read ──────────────────────────────────────────────────────
 

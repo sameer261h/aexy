@@ -5,6 +5,81 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.27] - 2026-05-22
+
+Part B follow-ups: close the three loops Part B's commit message
+flagged as "deferred". All three streams of AI-generated content
+now route through the proposed-edits queue, the doc owner gets a
+notification each time a proposal lands, and the stale-conflict
+view exposes a Regenerate action to refresh against the current
+base.
+
+### Sync service writes proposals
+
+- `DocumentSyncService.regenerate_document` and `process_queue` were
+  referenced by the Temporal `regenerate_document` /
+  `process_document_sync_queue` activities but didn't exist on the
+  service — the whole sync regen path was dead. Implemented both,
+  routing through `ProposedEditsService.create_proposal` with
+  `source=code_change_sync`.
+- `_trigger_real_time_sync` no longer marks the doc
+  `pending_regeneration` and forgets about it — it generates fresh
+  docs and creates a proposal via a new shared `_generate_and_propose`
+  helper.
+
+### suggest_improvements → queue
+
+- New `POST /workspaces/{ws}/documents/{doc_id}/suggest-improvements/apply`.
+  Takes a `suggestion_summary` query string (copy/pasted from the
+  `improvements[].suggestion` field returned by the existing
+  `suggest-improvements` endpoint), runs it through
+  `DocumentGenerationService.update_documentation`, and lands the
+  result as a pending proposal with `source=suggest_improvements`.
+  The legacy GET-style `suggest-improvements` keeps its
+  "return-suggestions-list" contract; the new endpoint is the
+  "apply this one" action.
+
+### Notifications on every new proposal
+
+- `ProposedEditSource` lifecycle now fires a `DocumentNotification`
+  to the document's `created_by_id` with the new `AI_PROPOSAL`
+  type. Self-notifications (proposer == owner, e.g. owner-triggered
+  manual regenerate) are suppressed. Best-effort: if the doc has no
+  `created_by_id`, the notification step is a no-op (legacy fixture
+  safety).
+- New `DocumentNotificationType.AI_PROPOSAL` enum value
+  (`backend/src/aexy/models/documentation.py`).
+
+### Stale-conflict UX: Regenerate action
+
+- `ProposedEditReview` gets a new optional `onRegenerate` prop. When
+  the proposal is stale AND a handler is wired, the merge-conflict
+  view renders a third action between Reject and "Apply anyway":
+  Regenerate.
+- `ProposedEditsBanner` wires this to a new `regenerate` mutation
+  that calls `documentApi.generate(workspaceId, documentId)` — the
+  new proposal supersedes the stale one server-side via
+  `create_proposal`'s supersede sweep, so we just invalidate the
+  query cache afterwards.
+- Non-stale proposals never see the Regenerate button (test
+  asserts this).
+
+### Tests
+
+- **Backend**: `test_proposed_edits_service.py` extended with
+  `TestNotificationOnCreate` (3 specs): notification fired for
+  owner, no self-notification, no notification when owner is
+  missing.
+- **Frontend**: `docs-proposed-edits.spec.ts` extended with two
+  specs: stale conflict renders Regenerate + clicking it calls
+  `POST /generate`; non-stale proposals don't show the button.
+  Total docs E2E: 29 specs, ~60 s.
+
+### Versions
+
+Bumped both `backend/pyproject.toml` and `frontend/package.json`
+to 0.8.27.
+
 ## [0.8.26] - 2026-05-22
 
 Part B of the AI documentation initiative: the **proposed-edits

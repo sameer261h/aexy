@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, X, AlertTriangle, Columns, AlignLeft } from "lucide-react";
+import { Check, X, AlertTriangle, Columns, AlignLeft, RefreshCw } from "lucide-react";
 
 import { ProposedEdit } from "@/lib/api";
 
@@ -11,6 +11,11 @@ interface Props {
   proposal: ProposedEdit;
   onApprove: () => void;
   onReject: (reason?: string) => void;
+  /** Optional: regenerate against the current document base. Only
+   *  meaningful when the proposal is stale — the FE banner caller
+   *  is expected to wire this to documentApi.generate, which creates
+   *  a fresh proposal that auto-supersedes the stale one. */
+  onRegenerate?: () => void;
   isPending?: boolean;
 }
 
@@ -33,6 +38,7 @@ export function ProposedEditReview({
   proposal,
   onApprove,
   onReject,
+  onRegenerate,
   isPending,
 }: Props) {
   const [mode, setMode] = useState<DiffMode>("summary");
@@ -151,6 +157,22 @@ export function ProposedEditReview({
       </div>
 
       <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-border/50 bg-muted/20">
+        {/* Regenerate-against-new-base lives only on stale proposals.
+            The new proposal supersedes this one via the backend's
+            supersede-on-create logic. */}
+        {proposal.is_stale && onRegenerate && !showRejectForm && (
+          <button
+            type="button"
+            data-testid="regenerate-button"
+            disabled={isPending}
+            onClick={onRegenerate}
+            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-foreground bg-muted border border-border hover:bg-accent rounded disabled:opacity-50"
+            title="Re-run the source pipeline against the current document"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Regenerate
+          </button>
+        )}
         {showRejectForm ? (
           <>
             <input

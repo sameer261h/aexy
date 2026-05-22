@@ -1173,6 +1173,79 @@ async def suggest_improvements(
         )
 
 
+@router.post("/{document_id}/suggest-improvements/apply")
+async def apply_suggestion(
+    workspace_id: str,
+    document_id: str,
+    suggestion_summary: str = Query(
+        ...,
+        description=(
+            "Short description of the improvement to apply, copied "
+            "from `suggest_improvements`'s `improvements[].suggestion`. "
+            "Fed to the doc-update prompt as the change summary."
+        ),
+    ),
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Take an improvement suggestion produced by `suggest-improvements`,
+    run it through `update_documentation`, and land the result as a
+    pending proposed-edit (source=suggest_improvements). The user
+    approves through the same banner UI as regenerate flows.
+
+    Does not mutate the document — the proposal queue is the user's
+    confirmation step.
+    """
+    await check_workspace_permission(workspace_id, current_user, db, "member")
+
+    doc_service = DocumentService(db)
+    document = await doc_service.get_document(document_id, workspace_id)
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
+        )
+
+    gen_service = DocumentGenerationService(db, workspace_id=workspace_id)
+    try:
+        # No linked code is required — improvements act on the
+        # documentation itself, not on a referenced repo path. We pass
+        # the existing content as both "old" and "new" code stand-ins
+        # so the update prompt has the right context to rewrite.
+        update_result = await gen_service.update_documentation(
+            existing_doc=document.content or {"type": "doc", "content": []},
+            old_code="",
+            new_code="",
+            language=None,
+            changes_summary=suggestion_summary,
+            developer_id=str(current_user.id),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to apply suggestion: {str(e)}",
+        )
+
+    proposed_content = update_result.get("updated_doc") or update_result
+    if not isinstance(proposed_content, dict):
+        proposed_content = {"type": "doc", "content": []}
+
+    proposed_edits = ProposedEditsService(db)
+    proposal = await proposed_edits.create_proposal(
+        document_id=document_id,
+        source=ProposedEditSource.SUGGEST_IMPROVEMENTS,
+        proposed_content=proposed_content,
+        proposed_by_id=str(current_user.id),
+        diff_summary={"suggestion": suggestion_summary},
+    )
+    await db.commit()
+
+    return {
+        "status": "proposed",
+        "document_id": document_id,
+        "proposed_edit_id": proposal.id,
+    }
+
+
 # ==================== GitHub Sync ====================
 
 

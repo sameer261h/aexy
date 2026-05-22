@@ -306,21 +306,177 @@ class DocumentSyncService:
                 )
                 return False
 
-            # Note: Full implementation would fetch code and regenerate
-            # For now, mark document as needing regeneration
-            document.generation_status = "pending_regeneration"
+            # Generate fresh docs from the linked code and route them
+            # into the proposed-edit review queue. The user approves
+            # before content lands — replaces the old "mark pending"
+            # stub that never produced anything to act on.
+            await self._generate_and_propose(
+                document=document,
+                code_link=code_link,
+                category=category,
+                gen_service=gen_service,
+                github_service=github_service,
+                source="code_change_sync",
+            )
 
-            # Update the code link
+            # Mark the code link processed regardless — the proposal
+            # is the new dirty state. Successive code changes will
+            # create new proposals that supersede this one.
             code_link.last_commit_sha = commit_sha
             code_link.has_pending_changes = False
             code_link.last_synced_at = datetime.now(timezone.utc)
 
-            logger.info(f"Triggered real-time sync for document {document.id}")
+            logger.info(
+                f"Real-time sync produced a proposal for document {document.id}"
+            )
             return True
 
         except Exception as e:
             logger.error(f"Failed to trigger real-time sync: {e}")
             return False
+
+    async def _generate_and_propose(
+        self,
+        document,
+        code_link,
+        category,
+        gen_service,
+        github_service,
+        source: str,
+    ) -> dict[str, Any] | None:
+        """Fetch code, generate docs, create a pending proposal.
+
+        Shared between real-time and batch sync paths. Returns the
+        created proposal id + content on success, or None if anything
+        upstream failed (logged).
+        """
+        from aexy.services.proposed_edits_service import ProposedEditsService
+
+        if not code_link.repository:
+            logger.warning(
+                f"Code link {code_link.id} has no repository — can't sync"
+            )
+            return None
+
+        try:
+            content = await gen_service.generate_from_repository(
+                github_service=github_service,
+                repository_full_name=code_link.repository.full_name,
+                path=code_link.path,
+                template_category=category,
+                branch=code_link.branch or "main",
+            )
+        except Exception as e:
+            logger.error(
+                f"generate_from_repository failed for doc {document.id}: {e}"
+            )
+            return None
+
+        proposed_edits = ProposedEditsService(self.db)
+        proposal = await proposed_edits.create_proposal(
+            document_id=str(document.id),
+            source=source,
+            proposed_content=content,
+            # proposed_by_id stays None — system-generated.
+        )
+        return {"proposal_id": proposal.id, "content": content}
+
+    async def regenerate_document(
+        self,
+        document_id: str,
+        workspace_id: str,
+    ) -> dict[str, Any]:
+        """Public regenerate entry point — called by the Temporal
+        `regenerate_document` activity.
+
+        Loads the document + its first code link, generates fresh
+        docs, and lands them as a `pending` proposal (source =
+        code_change_sync). Returns a status dict the activity can
+        log; never raises so a single bad doc doesn't poison the
+        queue.
+        """
+        from aexy.models.documentation import Document, DocumentCodeLink, TemplateCategory
+        from aexy.services.document_generation_service import (
+            DocumentGenerationService,
+        )
+        from aexy.services.github_app_service import GitHubAppService
+        from sqlalchemy.orm import selectinload as _selectinload
+
+        stmt = (
+            select(Document)
+            .where(Document.id == document_id)
+            .options(_selectinload(Document.code_links))
+        )
+        result = await self.db.execute(stmt)
+        document = result.scalar_one_or_none()
+        if not document:
+            return {"status": "skipped", "reason": "document not found"}
+
+        code_links = list(document.code_links) if document.code_links else []
+        if not code_links:
+            return {"status": "skipped", "reason": "no code links"}
+
+        code_link = code_links[0]
+        # Reload the link with its repository relationship since the
+        # selectinload above only covers the first hop.
+        stmt2 = (
+            select(DocumentCodeLink)
+            .where(DocumentCodeLink.id == code_link.id)
+            .options(_selectinload(DocumentCodeLink.repository))
+        )
+        result2 = await self.db.execute(stmt2)
+        code_link = result2.scalar_one_or_none() or code_link
+
+        gen_service = DocumentGenerationService(self.db, workspace_id=workspace_id)
+        github_service = GitHubAppService(self.db)
+
+        outcome = await self._generate_and_propose(
+            document=document,
+            code_link=code_link,
+            category=TemplateCategory.FUNCTION_DOCS,
+            gen_service=gen_service,
+            github_service=github_service,
+            source="code_change_sync",
+        )
+        if outcome is None:
+            return {"status": "failed", "document_id": document_id}
+        # Clear the dirty flag — the proposal IS the new dirty state.
+        code_link.has_pending_changes = False
+        code_link.last_synced_at = datetime.now(timezone.utc)
+        return {
+            "status": "proposed",
+            "document_id": document_id,
+            "proposal_id": outcome["proposal_id"],
+        }
+
+    async def process_queue(
+        self,
+        workspace_id: str,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Drain the sync queue for a workspace, regenerating each
+        document (into the proposed-edit queue, not direct overwrite).
+        Called by the Temporal `process_document_sync_queue` activity.
+        """
+        queue_entries = await self.get_pending_sync_queue(limit=limit)
+        # Filter to workspace if any caller relies on that scope.
+        # Document rows already carry workspace_id; filter via the
+        # eager-loaded relationship.
+        results = {"processed": 0, "proposed": 0, "skipped": 0, "failed": 0}
+        for entry in queue_entries:
+            doc = entry.document
+            if not doc or str(doc.workspace_id) != workspace_id:
+                continue
+            await self.mark_sync_processing([entry.id])
+            outcome = await self.regenerate_document(
+                document_id=str(doc.id), workspace_id=workspace_id
+            )
+            results["processed"] += 1
+            results[outcome.get("status", "skipped")] = (
+                results.get(outcome.get("status", "skipped"), 0) + 1
+            )
+            await self.mark_sync_completed(entry.id, success=outcome["status"] != "failed")
+        return results
 
     def _path_matches_link(
         self,
