@@ -1,6 +1,6 @@
 """Task Configuration API endpoints for custom statuses and fields."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.core.database import get_db
@@ -42,6 +42,7 @@ def status_to_response(status_obj) -> TaskStatusResponse:
     return TaskStatusResponse(
         id=str(status_obj.id),
         workspace_id=str(status_obj.workspace_id),
+        project_id=str(status_obj.project_id) if status_obj.project_id else None,
         name=status_obj.name,
         slug=status_obj.slug,
         category=status_obj.category,
@@ -78,14 +79,21 @@ def field_to_response(field_obj) -> CustomFieldResponse:
 @router.get("/task-statuses", response_model=list[TaskStatusResponse])
 async def list_task_statuses(
     workspace_id: str,
+    project_id: str | None = Query(
+        None,
+        description="If set, returns project-scoped statuses (falling back to workspace defaults if the project has none).",
+    ),
     current_user: Developer = Depends(get_current_developer),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all task statuses for a workspace."""
+    """List task statuses for a workspace, optionally narrowed to a project."""
     await check_workspace_permission(workspace_id, current_user, db, "viewer")
 
     service = TaskConfigService(db)
-    statuses = await service.get_statuses(workspace_id)
+    if project_id:
+        statuses = await service.get_statuses_for_project(workspace_id, project_id)
+    else:
+        statuses = await service.get_statuses(workspace_id)
     return [status_to_response(s) for s in statuses]
 
 
@@ -96,7 +104,7 @@ async def create_task_status(
     current_user: Developer = Depends(get_current_developer),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new task status."""
+    """Create a new task status (workspace default, or project-scoped when data.project_id is set)."""
     await check_workspace_permission(workspace_id, current_user, db, "admin")
 
     service = TaskConfigService(db)
@@ -107,9 +115,35 @@ async def create_task_status(
         color=data.color,
         icon=data.icon,
         is_default=data.is_default,
+        project_id=data.project_id,
     )
     await db.commit()
     return status_to_response(task_status)
+
+
+@router.post(
+    "/projects/{project_id}/task-statuses/clone-from-workspace",
+    response_model=list[TaskStatusResponse],
+    status_code=status.HTTP_201_CREATED,
+)
+async def clone_workspace_statuses_to_project(
+    workspace_id: str,
+    project_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Seed a project with copies of the workspace's default statuses.
+
+    Powers the "Customize for this project" CTA — after this call the project
+    has its own status rows that can diverge from the workspace.
+    Idempotent: if the project already has its own statuses, returns them.
+    """
+    await check_workspace_permission(workspace_id, current_user, db, "admin")
+
+    service = TaskConfigService(db)
+    cloned = await service.clone_workspace_statuses_to_project(workspace_id, project_id)
+    await db.commit()
+    return [status_to_response(s) for s in cloned]
 
 
 @router.get("/task-statuses/{status_id}", response_model=TaskStatusResponse)

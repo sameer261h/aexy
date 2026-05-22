@@ -5,6 +5,214 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.28] - 2026-05-22
+
+Workspace All-Tasks gains inline create, statuses become per-project
+(with a workspace fallback), and the kanban picks up a round of
+Linear-style polish. Backend tests now run against SQLite without
+the previous `ARRAY`/`JSONB` schema-compile blocker.
+
+### Inline task create on the workspace kanban
+
+- `WorkspaceTasksTab` (`/sprints?tab=tasks`) was read-only. Adds a
+  hover-only `+` button per column, a Trello-style dashed "+ New
+  task" row at the bottom of every column (Enter to submit, Esc to
+  cancel, refocus on success for rapid entry), and a global "+ Add
+  task" button in the filter bar.
+- New `AddWorkspaceTaskModal` (`components/planning/AddWorkspaceTaskModal.tsx`)
+  — compact, keyboard-first form with Project, Sprint, Status,
+  Priority, Assignee, Story points, dates, and Estimate. Status
+  renders as a locked chip when the modal is opened from a column,
+  so the new card lands in the column the user clicked.
+- Backend: new `POST /api/v1/workspaces/{ws_id}/tasks` endpoint
+  (`api/workspace_tasks.py`) backed by `SprintTaskService.add_workspace_task`.
+  Resolves `team_id` from `project_teams`, validates that the sprint
+  (if any) belongs to that team, and rejects a `status_id` that
+  belongs to a different project (returns one of the stable error
+  codes `project_has_no_team` / `sprint_not_in_project` /
+  `status_belongs_to_other_project` so the frontend can branch on
+  the detail string).
+- Last-used project persists in `localStorage` so successive
+  quick-adds land on the same project without re-picking.
+
+### Project-scoped task statuses (with workspace fallback)
+
+- New migration `migrate_project_task_statuses.sql`: adds a nullable
+  `project_id UUID` column to `workspace_task_statuses` and replaces
+  the workspace+slug unique constraint with a scoped expression
+  index (`workspace_id, COALESCE(project_id, ''), slug`). Existing
+  rows keep `project_id = NULL` and continue to act as workspace
+  defaults; rows with `project_id` set are project overrides.
+- `TaskConfigService.get_statuses_for_project(workspace_id, project_id)`
+  returns the project's own status rows when any exist, falling
+  back to workspace defaults otherwise. This is the single helper
+  the column UI, task-create validation, and the status admin API
+  all share.
+- New `clone_workspace_statuses_to_project` service helper +
+  `POST /workspaces/{ws}/projects/{p}/task-statuses/clone-from-workspace`
+  endpoint — idempotent fork-the-defaults action that powers the
+  new "Customize for this project" CTA on the Statuses settings
+  page.
+- Existing `GET /workspaces/{ws}/task-statuses` now accepts
+  `?project_id=<uuid>`; `POST /task-statuses` accepts `project_id`
+  in the body. Response schema gains a `project_id` field.
+- Frontend `useTaskStatuses(workspaceId, projectId?)` switches
+  scope, exposes `cloneFromWorkspace` and an
+  `isUsingWorkspaceFallback` flag for the CTA.
+- Settings page (`settings/task-config`) gets a project picker; in
+  per-project mode and using fallback statuses, an info banner
+  offers the one-click clone.
+
+### Backfill script (manual, not auto-run)
+
+- `backend/scripts/backfill_project_task_statuses.py` — operator CLI
+  that clones workspace defaults into existing projects. Flags
+  `--workspace-id`, `--project-id`, `--all`, `--dry-run`. Idempotent
+  (skips projects that already have overrides). The non-`migrate*.sql`
+  filename keeps it out of the migration runner so it only runs
+  when invoked explicitly.
+
+### Kanban UX polish
+
+- Bulk-actions toolbar (floats from the bottom when 1+ cards are
+  selected via shift-click / per-card checkbox): bulk "Move to…"
+  status change plus Clear.
+- URL-persisted filters: `?q=`, `?assignee=`, `?priority=`, `?team=`,
+  `?sprint=` round-trip so refresh / back-button / link-sharing
+  reproduces the view.
+- Keyboard shortcuts: `n` opens the new-task modal; `/` focuses the
+  search input.
+- Sticky column headers with backdrop-blur so the column name and
+  count stay visible while scrolling long lists.
+- Loading skeleton swapped from a flat pulsing block to
+  column-shaped placeholders with staggered card animation delays.
+- Mobile kanban: columns stack vertically below `md` (full-width,
+  no max-height) instead of forcing a horizontal scroll on phones.
+- Critical empty-state fix: when a workspace had **zero tasks** the
+  page rendered "No tasks found" and hid the columns — making the
+  new inline quick-add unreachable. The full empty-state now only
+  appears when filters are active and matched nothing.
+
+### Test infrastructure fixes
+
+- `core/database.py` registers SQLite dialect shims via
+  `@compiles(... "sqlite")` for `ARRAY → JSON`, `JSONB → JSON`,
+  `INET → VARCHAR(45)`. Models declared with PG-only types now
+  compile under `sqlite+aiosqlite:///:memory:` so the test suite
+  reaches the test bodies instead of failing in
+  `Base.metadata.create_all()`. 401 previously-blocked tests now
+  run; remaining failures are pre-existing fixture issues
+  unrelated to this PR.
+- Dropped `'::jsonb'` casts from four `server_default` literals in
+  `models/dashboard.py` and `models/crm.py` so SQLite accepts the
+  DDL. PostgreSQL still parses the bare `'[]'` / `'{}'` defaults
+  into JSONB.
+- Playwright fixture `setupTaskBoardMocks` now sets the
+  `aexy_authed` presence cookie via `page.context().addCookies()`,
+  preventing the middleware from bouncing every spec to `/` and on
+  to `/onboarding`. Unblocks `task-card-drag`,
+  `task-create-attachments`, `task-link-clickable`,
+  `task-over-estimate`, `task-attachment-ai-tags`, and
+  `task-overdue-badge` in addition to the two new
+  `workspace-tasks-create` specs.
+
+### New tests
+
+- `backend/tests/unit/test_task_config_project_scope.py` — 5 unit
+  tests covering fallback to workspace defaults, project override
+  preference, no cross-workspace leak, clone copy fidelity, and
+  clone idempotency.
+- `backend/tests/integration/test_workspace_tasks_api.py` — 5 API
+  tests covering the happy path, cross-project status rejection,
+  project-without-team rejection, status-list fallback, and clone
+  idempotency.
+- `frontend/e2e/workspace-tasks-create.spec.ts` — Playwright spec
+  exercising the inline quick-add row (asserts the wire shape:
+  `title`, `project_id`, `status`) and the global "Add task" modal.
+
+### Other
+
+- Frontend `lib/api.ts`: new `workspaceTasksApi.create()`,
+  `taskConfigApi.getStatuses({ projectId })`, and
+  `taskConfigApi.cloneToProject()`.
+- i18n keys: `addTask`, `newTaskPlaceholder`, refreshed
+  `dropTasksHere` copy in both `en` and `hi`.
+
+## [0.8.27] - 2026-05-22
+
+Part B follow-ups: close the three loops Part B's commit message
+flagged as "deferred". All three streams of AI-generated content
+now route through the proposed-edits queue, the doc owner gets a
+notification each time a proposal lands, and the stale-conflict
+view exposes a Regenerate action to refresh against the current
+base.
+
+### Sync service writes proposals
+
+- `DocumentSyncService.regenerate_document` and `process_queue` were
+  referenced by the Temporal `regenerate_document` /
+  `process_document_sync_queue` activities but didn't exist on the
+  service — the whole sync regen path was dead. Implemented both,
+  routing through `ProposedEditsService.create_proposal` with
+  `source=code_change_sync`.
+- `_trigger_real_time_sync` no longer marks the doc
+  `pending_regeneration` and forgets about it — it generates fresh
+  docs and creates a proposal via a new shared `_generate_and_propose`
+  helper.
+
+### suggest_improvements → queue
+
+- New `POST /workspaces/{ws}/documents/{doc_id}/suggest-improvements/apply`.
+  Takes a `suggestion_summary` query string (copy/pasted from the
+  `improvements[].suggestion` field returned by the existing
+  `suggest-improvements` endpoint), runs it through
+  `DocumentGenerationService.update_documentation`, and lands the
+  result as a pending proposal with `source=suggest_improvements`.
+  The legacy GET-style `suggest-improvements` keeps its
+  "return-suggestions-list" contract; the new endpoint is the
+  "apply this one" action.
+
+### Notifications on every new proposal
+
+- `ProposedEditSource` lifecycle now fires a `DocumentNotification`
+  to the document's `created_by_id` with the new `AI_PROPOSAL`
+  type. Self-notifications (proposer == owner, e.g. owner-triggered
+  manual regenerate) are suppressed. Best-effort: if the doc has no
+  `created_by_id`, the notification step is a no-op (legacy fixture
+  safety).
+- New `DocumentNotificationType.AI_PROPOSAL` enum value
+  (`backend/src/aexy/models/documentation.py`).
+
+### Stale-conflict UX: Regenerate action
+
+- `ProposedEditReview` gets a new optional `onRegenerate` prop. When
+  the proposal is stale AND a handler is wired, the merge-conflict
+  view renders a third action between Reject and "Apply anyway":
+  Regenerate.
+- `ProposedEditsBanner` wires this to a new `regenerate` mutation
+  that calls `documentApi.generate(workspaceId, documentId)` — the
+  new proposal supersedes the stale one server-side via
+  `create_proposal`'s supersede sweep, so we just invalidate the
+  query cache afterwards.
+- Non-stale proposals never see the Regenerate button (test
+  asserts this).
+
+### Tests
+
+- **Backend**: `test_proposed_edits_service.py` extended with
+  `TestNotificationOnCreate` (3 specs): notification fired for
+  owner, no self-notification, no notification when owner is
+  missing.
+- **Frontend**: `docs-proposed-edits.spec.ts` extended with two
+  specs: stale conflict renders Regenerate + clicking it calls
+  `POST /generate`; non-stale proposals don't show the button.
+  Total docs E2E: 29 specs, ~60 s.
+
+### Versions
+
+Bumped both `backend/pyproject.toml` and `frontend/package.json`
+to 0.8.27.
+
 ## [0.8.26] - 2026-05-22
 
 Part B of the AI documentation initiative: the **proposed-edits

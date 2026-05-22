@@ -39,11 +39,20 @@ class TaskConfigService:
         self,
         workspace_id: str,
         include_inactive: bool = False,
+        project_id: str | None = None,
     ) -> list[WorkspaceTaskStatus]:
-        """Get all task statuses for a workspace."""
+        """Get task statuses scoped to a workspace and (optionally) a project.
+
+        Pass ``project_id=None`` (default) to get workspace defaults only.
+        Pass ``project_id="<uuid>"`` to get the rows that belong specifically
+        to that project — use ``get_statuses_for_project`` instead if you want
+        the fallback-to-workspace behavior, which is what most callers want.
+        """
         stmt = (
             select(WorkspaceTaskStatus)
             .where(WorkspaceTaskStatus.workspace_id == workspace_id)
+            .where(WorkspaceTaskStatus.project_id.is_(project_id) if project_id is None
+                   else WorkspaceTaskStatus.project_id == project_id)
         )
         if not include_inactive:
             stmt = stmt.where(WorkspaceTaskStatus.is_active == True)
@@ -51,6 +60,24 @@ class TaskConfigService:
 
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+    async def get_statuses_for_project(
+        self,
+        workspace_id: str,
+        project_id: str,
+        include_inactive: bool = False,
+    ) -> list[WorkspaceTaskStatus]:
+        """Resolve the effective status set for a given project.
+
+        Returns the project's own status rows when it has any; otherwise the
+        workspace-default rows (``project_id IS NULL``). This is the helper to
+        use almost everywhere — the UI columns and the validation on task
+        create/update all depend on the same resolved set.
+        """
+        own = await self.get_statuses(workspace_id, include_inactive=include_inactive, project_id=project_id)
+        if own:
+            return own
+        return await self.get_statuses(workspace_id, include_inactive=include_inactive)
 
     async def get_status(self, status_id: str) -> WorkspaceTaskStatus | None:
         """Get a status by ID."""
@@ -62,12 +89,15 @@ class TaskConfigService:
         self,
         workspace_id: str,
         slug: str,
+        project_id: str | None = None,
     ) -> WorkspaceTaskStatus | None:
-        """Get a status by slug within a workspace."""
+        """Get a status by slug within a workspace/project scope."""
         stmt = (
             select(WorkspaceTaskStatus)
             .where(WorkspaceTaskStatus.workspace_id == workspace_id)
             .where(WorkspaceTaskStatus.slug == slug)
+            .where(WorkspaceTaskStatus.project_id.is_(project_id) if project_id is None
+                   else WorkspaceTaskStatus.project_id == project_id)
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
@@ -80,21 +110,24 @@ class TaskConfigService:
         color: str = "#6B7280",
         icon: str | None = None,
         is_default: bool = False,
+        project_id: str | None = None,
     ) -> WorkspaceTaskStatus:
-        """Create a new task status."""
-        # Generate unique slug
+        """Create a new task status (workspace default if project_id is None)."""
+        # Generate unique slug within the (workspace, project) scope.
         base_slug = slugify(name)
         slug = base_slug
         counter = 1
 
-        while await self.get_status_by_slug(workspace_id, slug):
+        while await self.get_status_by_slug(workspace_id, slug, project_id=project_id):
             slug = f"{base_slug}_{counter}"
             counter += 1
 
-        # Get next position
+        # Get next position within the scope.
         stmt = (
             select(func.coalesce(func.max(WorkspaceTaskStatus.position), -1) + 1)
             .where(WorkspaceTaskStatus.workspace_id == workspace_id)
+            .where(WorkspaceTaskStatus.project_id.is_(project_id) if project_id is None
+                   else WorkspaceTaskStatus.project_id == project_id)
         )
         result = await self.db.execute(stmt)
         next_position = result.scalar() or 0
@@ -102,6 +135,7 @@ class TaskConfigService:
         status = WorkspaceTaskStatus(
             id=str(uuid4()),
             workspace_id=workspace_id,
+            project_id=project_id,
             name=name,
             slug=slug,
             category=category,
@@ -115,6 +149,40 @@ class TaskConfigService:
         await self.db.flush()
         await self.db.refresh(status)
         return status
+
+    async def clone_workspace_statuses_to_project(
+        self,
+        workspace_id: str,
+        project_id: str,
+    ) -> list[WorkspaceTaskStatus]:
+        """Copy workspace-default statuses into a project so it can diverge.
+
+        Idempotent: skips if the project already has its own statuses.
+        """
+        existing = await self.get_statuses(workspace_id, project_id=project_id, include_inactive=True)
+        if existing:
+            return existing
+
+        defaults = await self.get_statuses(workspace_id, include_inactive=True)
+        cloned: list[WorkspaceTaskStatus] = []
+        for src in defaults:
+            row = WorkspaceTaskStatus(
+                id=str(uuid4()),
+                workspace_id=workspace_id,
+                project_id=project_id,
+                name=src.name,
+                slug=src.slug,
+                category=src.category,
+                color=src.color,
+                icon=src.icon,
+                position=src.position,
+                is_default=src.is_default,
+                is_active=src.is_active,
+            )
+            self.db.add(row)
+            cloned.append(row)
+        await self.db.flush()
+        return cloned
 
     async def update_status(
         self,

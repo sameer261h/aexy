@@ -3938,6 +3938,33 @@ export const workspaceTasksApi = {
     );
     return response.data;
   },
+
+  /**
+   * Create a task from the workspace-level All-Tasks Kanban (inline quick-add
+   * or column-header "+" modal). Requires a project_id; sprint is optional.
+   */
+  create: async (
+    workspaceId: string,
+    payload: {
+      title: string;
+      project_id: string;
+      sprint_id?: string | null;
+      description?: string;
+      story_points?: number;
+      priority?: TaskPriority;
+      labels?: string[];
+      assignee_id?: string;
+      status?: TaskStatus;
+      status_id?: string;
+      epic_id?: string;
+      start_date?: string;
+      end_date?: string;
+      estimated_hours?: number;
+    },
+  ): Promise<SprintTask> => {
+    const response = await api.post(`/workspaces/${workspaceId}/tasks`, payload);
+    return response.data;
+  },
 };
 
 // ============================================================================
@@ -3949,6 +3976,8 @@ export type CustomFieldType = "text" | "number" | "select" | "multiselect" | "da
 export interface TaskStatusConfig {
   id: string;
   workspace_id: string;
+  // When null this row is a workspace default; when set it's a project override.
+  project_id: string | null;
   name: string;
   slug: string;
   category: StatusCategory;
@@ -3984,8 +4013,13 @@ export interface CustomField {
 
 export const taskConfigApi = {
   // Task Statuses
-  getStatuses: async (workspaceId: string): Promise<TaskStatusConfig[]> => {
-    const response = await api.get(`/workspaces/${workspaceId}/task-statuses`);
+  getStatuses: async (
+    workspaceId: string,
+    options?: { projectId?: string | null },
+  ): Promise<TaskStatusConfig[]> => {
+    const response = await api.get(`/workspaces/${workspaceId}/task-statuses`, {
+      params: options?.projectId ? { project_id: options.projectId } : undefined,
+    });
     return response.data;
   },
 
@@ -3995,8 +4029,23 @@ export const taskConfigApi = {
     color?: string;
     icon?: string;
     is_default?: boolean;
+    project_id?: string;
   }): Promise<TaskStatusConfig> => {
     const response = await api.post(`/workspaces/${workspaceId}/task-statuses`, data);
+    return response.data;
+  },
+
+  /**
+   * Seed a project with copies of the workspace defaults so it can diverge.
+   * Idempotent: returns existing rows if the project already has overrides.
+   */
+  cloneToProject: async (
+    workspaceId: string,
+    projectId: string,
+  ): Promise<TaskStatusConfig[]> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/projects/${projectId}/task-statuses/clone-from-workspace`,
+    );
     return response.data;
   },
 

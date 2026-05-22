@@ -11,7 +11,13 @@ import {
 } from "@/lib/api";
 
 // Task Statuses
-export function useTaskStatuses(workspaceId: string | null) {
+// When `projectId` is supplied the hook returns the project's status set, with
+// the backend falling back to workspace defaults if the project hasn't
+// customized yet. Use this everywhere a board column is rendered.
+export function useTaskStatuses(
+  workspaceId: string | null,
+  projectId: string | null = null,
+) {
   const queryClient = useQueryClient();
 
   const {
@@ -20,8 +26,8 @@ export function useTaskStatuses(workspaceId: string | null) {
     error,
     refetch,
   } = useQuery<TaskStatusConfig[]>({
-    queryKey: ["taskStatuses", workspaceId],
-    queryFn: () => taskConfigApi.getStatuses(workspaceId!),
+    queryKey: ["taskStatuses", workspaceId, projectId],
+    queryFn: () => taskConfigApi.getStatuses(workspaceId!, { projectId }),
     enabled: !!workspaceId,
   });
 
@@ -32,9 +38,27 @@ export function useTaskStatuses(workspaceId: string | null) {
       color?: string;
       icon?: string;
       is_default?: boolean;
-    }) => taskConfigApi.createStatus(workspaceId!, data),
+    }) =>
+      taskConfigApi.createStatus(workspaceId!, {
+        ...data,
+        // When this hook is project-scoped, every new status is created
+        // as a project override rather than a workspace default.
+        ...(projectId ? { project_id: projectId } : {}),
+      }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId] });
+      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId, projectId] });
+    },
+  });
+
+  const cloneFromWorkspaceMutation = useMutation({
+    mutationFn: () => {
+      if (!workspaceId || !projectId) {
+        throw new Error("cloneFromWorkspace requires both workspaceId and projectId");
+      }
+      return taskConfigApi.cloneToProject(workspaceId, projectId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId, projectId] });
     },
   });
 
@@ -53,7 +77,7 @@ export function useTaskStatuses(workspaceId: string | null) {
       };
     }) => taskConfigApi.updateStatus(workspaceId!, statusId, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId] });
+      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId, projectId] });
     },
   });
 
@@ -61,7 +85,7 @@ export function useTaskStatuses(workspaceId: string | null) {
     mutationFn: (statusId: string) =>
       taskConfigApi.deleteStatus(workspaceId!, statusId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId] });
+      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId, projectId] });
     },
   });
 
@@ -69,7 +93,7 @@ export function useTaskStatuses(workspaceId: string | null) {
     mutationFn: (statusIds: string[]) =>
       taskConfigApi.reorderStatuses(workspaceId!, statusIds),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId] });
+      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId, projectId] });
     },
   });
 
@@ -83,6 +107,13 @@ export function useTaskStatuses(workspaceId: string | null) {
     return (statuses || []).find((s) => s.slug === slug);
   };
 
+  // True when the rows we're showing for a project are actually workspace
+  // defaults (the project hasn't customized yet). Useful for "Customize for
+  // this project" CTAs in the UI.
+  const isUsingWorkspaceFallback = !!projectId && (statuses || []).every(
+    (s) => s.project_id === null,
+  );
+
   return {
     statuses: statuses || [],
     isLoading,
@@ -92,6 +123,9 @@ export function useTaskStatuses(workspaceId: string | null) {
     updateStatus: updateMutation.mutateAsync,
     deleteStatus: deleteMutation.mutateAsync,
     reorderStatuses: reorderMutation.mutateAsync,
+    cloneFromWorkspace: cloneFromWorkspaceMutation.mutateAsync,
+    isCloning: cloneFromWorkspaceMutation.isPending,
+    isUsingWorkspaceFallback,
     isCreating: createMutation.isPending,
     isUpdating: updateMutation.isPending,
     isDeleting: deleteMutation.isPending,

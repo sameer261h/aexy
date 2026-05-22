@@ -666,7 +666,7 @@ class CRMList(Base):
         JSONB,
         default=list,
         nullable=False,
-        server_default=text("'[]'::jsonb"),
+        server_default=text("'[]'"),
     )
 
     # Kanban-specific settings

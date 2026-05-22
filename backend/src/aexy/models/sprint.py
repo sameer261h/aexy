@@ -44,6 +44,15 @@ class WorkspaceTaskStatus(Base):
         nullable=False,
         index=True,
     )
+    # When NULL the row is a workspace default. When set the row overrides
+    # the workspace defaults for that one project — see
+    # TaskConfigService.get_statuses_for_project for the resolution order.
+    project_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
 
     # Status info
     name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -74,10 +83,6 @@ class WorkspaceTaskStatus(Base):
 
     # Relationships
     workspace: Mapped["Workspace"] = relationship("Workspace", lazy="selectin")
-
-    __table_args__ = (
-        UniqueConstraint("workspace_id", "slug", name="uq_workspace_task_status_slug"),
-    )
 
 
 class WorkspaceCustomField(Base):
