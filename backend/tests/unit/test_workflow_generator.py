@@ -189,7 +189,12 @@ async def test_generate_returns_meta_and_payload(monkeypatch):
         prompt="when a deal closes, send slack",
         module="crm",
     )
-    assert result["nodes"] == payload["nodes"]
+    # _assign_positions injects `position` into each node, so compare
+    # the LLM-shaped fields rather than full equality.
+    assert [
+        {k: v for k, v in n.items() if k != "position"} for n in result["nodes"]
+    ] == payload["nodes"]
+    assert all(isinstance(n.get("position"), dict) for n in result["nodes"])
     assert result["edges"] == payload["edges"]
     assert result["_meta"]["source"] == "llm_generated"
     assert result["_meta"]["module"] == "crm"
@@ -231,3 +236,110 @@ async def test_generate_raises_when_gateway_disabled(monkeypatch):
     monkeypatch.setattr(wg, "get_llm_gateway", lambda: None)
     with pytest.raises(ValueError, match="gateway not configured"):
         await wg.generate_workflow_from_prompt(prompt="anything goes here")
+
+
+# ---------------------------------------------------------------------------
+# _assign_positions — ReactFlow needs `position: {x,y}` on every node
+# ---------------------------------------------------------------------------
+
+
+class TestAssignPositions:
+    def _xy(self, payload: dict[str, Any], nid: str) -> tuple[int, int]:
+        node = next(n for n in payload["nodes"] if n["id"] == nid)
+        return node["position"]["x"], node["position"]["y"]
+
+    def test_assigns_position_to_every_node(self):
+        payload = {
+            "nodes": [
+                {"id": "t", "type": "trigger", "data": {}},
+                {"id": "a", "type": "action", "data": {}},
+            ],
+            "edges": [{"source": "t", "target": "a"}],
+        }
+        wg._assign_positions(payload)
+        for n in payload["nodes"]:
+            assert isinstance(n["position"], dict)
+            assert "x" in n["position"] and "y" in n["position"]
+
+    def test_linear_chain_cascades_right(self):
+        payload = {
+            "nodes": [
+                {"id": "n1", "type": "trigger", "data": {}},
+                {"id": "n2", "type": "action", "data": {}},
+                {"id": "n3", "type": "action", "data": {}},
+            ],
+            "edges": [
+                {"source": "n1", "target": "n2"},
+                {"source": "n2", "target": "n3"},
+            ],
+        }
+        wg._assign_positions(payload)
+        x1, _ = self._xy(payload, "n1")
+        x2, _ = self._xy(payload, "n2")
+        x3, _ = self._xy(payload, "n3")
+        assert x1 < x2 < x3
+
+    def test_diamond_downstream_node_takes_longest_path(self):
+        """Diamond regression: A→B→C→D plus A→D. D and its descendants
+        must sit at the depth of the LONGER path, not the shorter one.
+        The earlier BFS variant got this wrong when the short edge was
+        discovered first."""
+        payload = {
+            "nodes": [
+                {"id": "A", "type": "trigger", "data": {}},
+                {"id": "B", "type": "action", "data": {}},
+                {"id": "C", "type": "action", "data": {}},
+                {"id": "D", "type": "action", "data": {}},
+                {"id": "E", "type": "action", "data": {}},
+            ],
+            # Short edge A→D listed first so a naive BFS would settle D
+            # at depth 1 before the longer A→B→C→D path arrives.
+            "edges": [
+                {"source": "A", "target": "D"},
+                {"source": "A", "target": "B"},
+                {"source": "B", "target": "C"},
+                {"source": "C", "target": "D"},
+                {"source": "D", "target": "E"},
+            ],
+        }
+        wg._assign_positions(payload)
+        xa, _ = self._xy(payload, "A")
+        xb, _ = self._xy(payload, "B")
+        xc, _ = self._xy(payload, "C")
+        xd, _ = self._xy(payload, "D")
+        xe, _ = self._xy(payload, "E")
+        # Longest path: A(0) → B(1) → C(2) → D(3) → E(4)
+        assert xa < xb < xc < xd < xe
+        # And D must strictly be past C, not stuck at depth 1.
+        assert xd > xc
+
+    def test_preserves_existing_position(self):
+        """If the LLM ever starts emitting positions, don't clobber them."""
+        payload = {
+            "nodes": [
+                {"id": "t", "type": "trigger", "data": {},
+                 "position": {"x": 999, "y": 999}},
+                {"id": "a", "type": "action", "data": {}},
+            ],
+            "edges": [{"source": "t", "target": "a"}],
+        }
+        wg._assign_positions(payload)
+        assert self._xy(payload, "t") == (999, 999)
+
+    def test_cycle_does_not_crash(self):
+        """A→B→A is a bug, but we still need to render rather than throw.
+        Cycle nodes default to depth 0."""
+        payload = {
+            "nodes": [
+                {"id": "A", "type": "trigger", "data": {}},
+                {"id": "B", "type": "action", "data": {}},
+            ],
+            "edges": [
+                {"source": "A", "target": "B"},
+                {"source": "B", "target": "A"},
+            ],
+        }
+        wg._assign_positions(payload)
+        # Both should still have positions assigned.
+        for n in payload["nodes"]:
+            assert isinstance(n["position"], dict)

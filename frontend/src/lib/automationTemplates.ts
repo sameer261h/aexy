@@ -212,10 +212,42 @@ export const AUTOMATION_TEMPLATES: Record<string, AutomationTemplate> = {
     module: "crm",
     triggerType: "record.created",
     triggerLabel: "Lead Created",
+    // Each send_email action must ship with at least subject + body
+    // placeholders; backend `validate_workflow` rejects email actions
+    // without `body` (or `template`) and the canvas would silently
+    // fail to save. The user is expected to edit these before
+    // publishing — they're starting-point copy, not finished emails.
     actions: [
-      { type: "send_email", label: "Day 1 Follow-up", config: { delay_days: 1 } },
-      { type: "send_email", label: "Day 3 Follow-up", config: { delay_days: 3 } },
-      { type: "send_email", label: "Day 7 Follow-up", config: { delay_days: 7 } },
+      {
+        type: "send_email",
+        label: "Day 1 Follow-up",
+        config: {
+          delay_days: 1,
+          email_subject: "Following up on {{record.values.name}}",
+          email_body:
+            "Hi {{record.values.first_name}},\n\nQuick follow-up on our conversation — happy to answer any questions.",
+        },
+      },
+      {
+        type: "send_email",
+        label: "Day 3 Follow-up",
+        config: {
+          delay_days: 3,
+          email_subject: "Anything I can help with?",
+          email_body:
+            "Hi {{record.values.first_name}},\n\nJust checking in — let me know if you'd like to chat this week.",
+        },
+      },
+      {
+        type: "send_email",
+        label: "Day 7 Follow-up",
+        config: {
+          delay_days: 7,
+          email_subject: "One last check-in",
+          email_body:
+            "Hi {{record.values.first_name}},\n\nIf the timing isn't right, no worries — happy to revisit later in the quarter.",
+        },
+      },
     ],
   },
   "welcome-sequence": {
@@ -226,9 +258,36 @@ export const AUTOMATION_TEMPLATES: Record<string, AutomationTemplate> = {
     triggerType: "record.created",
     triggerLabel: "Contact Created",
     actions: [
-      { type: "send_email", label: "Welcome Email", config: { delay_days: 0 } },
-      { type: "send_email", label: "Getting Started", config: { delay_days: 2 } },
-      { type: "send_email", label: "Tips & Resources", config: { delay_days: 5 } },
+      {
+        type: "send_email",
+        label: "Welcome Email",
+        config: {
+          delay_days: 0,
+          email_subject: "Welcome to {{workspace.name}}",
+          email_body:
+            "Hi {{record.values.first_name}},\n\nThanks for signing up — we're excited to have you. Reach out anytime.",
+        },
+      },
+      {
+        type: "send_email",
+        label: "Getting Started",
+        config: {
+          delay_days: 2,
+          email_subject: "Getting started with {{workspace.name}}",
+          email_body:
+            "Hi {{record.values.first_name}},\n\nHere are three quick wins to get the most out of the product on day one.",
+        },
+      },
+      {
+        type: "send_email",
+        label: "Tips & Resources",
+        config: {
+          delay_days: 5,
+          email_subject: "Power-user tips for {{workspace.name}}",
+          email_body:
+            "Hi {{record.values.first_name}},\n\nA round-up of patterns our most successful teams use after their first week.",
+        },
+      },
     ],
   },
   "compliance-alert": {
@@ -319,10 +378,18 @@ export function getDefaultNodes(
         id: `action-${i + 1}`,
         type: "action",
         position: { x: 250, y: 200 + i * 150 },
+        // Spread `action.config` into `data` rather than nesting it
+        // under `data.config`. NodeConfigPanel writes action fields
+        // flat (e.g. `data.email_body`, `data.duration_value`) and the
+        // backend's `WorkflowService.validate_workflow` reads them
+        // flat — nesting under `data.config` made templates with
+        // validated actions (send_email needs email_body) silently
+        // fail the save with 400 and the user saw an empty canvas
+        // after "saving."
         data: {
           label: action.label,
           action_type: action.type,
-          config: action.config,
+          ...action.config,
         },
       });
     });

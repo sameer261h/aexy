@@ -1,0 +1,14 @@
+{
+  "domains": [
+    "backend"
+  ],
+  "frameworks": [
+    "FastAPI",
+    "SQLAlchemy"
+  ],
+  "has_code_quality": true,
+  "has_summary": true,
+  "languages": [
+    "Python"
+  ]
+}

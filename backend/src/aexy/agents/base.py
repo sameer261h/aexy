@@ -68,6 +68,25 @@ class BaseAgent(ABC):
                     google_api_key=settings.llm.gemini_api_key,
                     max_output_tokens=4096,
                 )
+            elif self.llm_provider == "lmstudio":
+                # Local LM Studio via OpenAI-compatible chat completions.
+                # Imported lazily so the agent module doesn't require
+                # langchain-openai in production deployments that never
+                # use the local provider.
+                from langchain_openai import ChatOpenAI
+
+                model_id = (
+                    self.model_name
+                    if self.model_name and self.model_name != self.default_model
+                    else settings.llm.lmstudio_model
+                )
+                self._llm = ChatOpenAI(
+                    model=model_id,
+                    base_url=settings.llm.lmstudio_base_url,
+                    api_key=settings.llm.lmstudio_api_key or "lm-studio",
+                    max_tokens=4096,
+                    temperature=0.0,
+                )
             else:
                 # Default to Claude
                 self._llm = ChatAnthropic(

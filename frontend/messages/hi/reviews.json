@@ -179,7 +179,12 @@
         "self_review": "स्वयं समीक्षा",
         "peer_review": "सहकर्मी समीक्षा",
         "manager_review": "प्रबंधक समीक्षा",
-        "completed": "पूर्ण"
+        "completed": "पूर्ण",
+        "pending": "लंबित",
+        "self_review_submitted": "स्व-समीक्षा सबमिट",
+        "peer_review_in_progress": "Peer review प्रगति में",
+        "manager_review_in_progress": "Manager review प्रगति में",
+        "acknowledged": "स्वीकृत"
       },
       "requestStatus": {
         "pending": "प्रतिक्रिया प्रतीक्षित",

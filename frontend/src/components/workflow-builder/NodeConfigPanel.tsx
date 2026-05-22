@@ -2722,7 +2722,12 @@ export function NodeConfigPanel({
         className="fixed inset-0 bg-black/50 md:bg-black/20 z-40"
         onClick={onClose}
       />
-      <div className="fixed inset-y-0 right-0 w-full sm:w-96 md:w-[420px] bg-muted border-l border-border overflow-y-auto z-50">
+      <div
+        className="fixed inset-y-0 right-0 w-full sm:w-96 md:w-[420px] bg-muted border-l border-border overflow-y-auto z-50"
+        data-testid="node-config-panel"
+        role="dialog"
+        aria-label="Configure Node"
+      >
         <div className="p-4 border-b border-border flex items-center justify-between">
           <h3 className="text-foreground font-semibold">Configure Node</h3>
           <button

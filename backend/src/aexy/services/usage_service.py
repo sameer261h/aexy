@@ -46,6 +46,11 @@ PROVIDER_PRICING = {
         "input": settings.deepseek_input_price_per_million,
         "output": settings.deepseek_output_price_per_million,
     },
+    "lmstudio": {
+        # Local — zero cloud cost.
+        "input": 0.0,
+        "output": 0.0,
+    },
 }
 
 
