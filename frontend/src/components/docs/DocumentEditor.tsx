@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { useEditor, EditorContent, BubbleMenu } from "@tiptap/react";
+import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Link from "@tiptap/extension-link";
@@ -26,10 +26,6 @@ import {
   Check,
   Cloud,
   Smile,
-  Bold,
-  Italic,
-  Underline as UnderlineIcon,
-  Code,
 } from "lucide-react";
 
 const lowlight = createLowlight(common);
@@ -426,70 +422,22 @@ export function DocumentEditor({
           </div>
         )}
 
-        {/* Floating BubbleMenu — appears when text is selected so users
-            don't have to fly the cursor up to the top toolbar to format.
-            Note: @tiptap/react's BubbleMenu only forwards `className`
-            (see node_modules/@tiptap/react/dist/index.cjs), so the
-            data-testid lives on the inner wrapper, not the menu root.
-            `editorMode === "rich"` is critical — without it the Tippy
-            portal stays mounted in markdown mode while EditorContent
-            is gone, and the next selectionchange tries to manipulate
-            DOM nodes that React no longer owns, throwing
-            `removeChild: The node to be removed is not a child of this
-            node`. Gating on the mode forces a clean tear-down. */}
-        {editor && !readOnly && editorMode === "rich" && (
-          <BubbleMenu
-            editor={editor}
-            tippyOptions={{ duration: 100, placement: "top" }}
-            className="bg-background border border-border rounded-lg shadow-xl p-1"
-          >
-            <div
-              data-testid="docs-bubble-menu"
-              className="flex items-center gap-0.5"
-            >
-              <button
-                type="button"
-                aria-label="Bold"
-                onClick={() => editor.chain().focus().toggleBold().run()}
-                className={`p-1.5 rounded transition-colors ${
-                  editor.isActive("bold") ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                }`}
-              >
-                <Bold className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                aria-label="Italic"
-                onClick={() => editor.chain().focus().toggleItalic().run()}
-                className={`p-1.5 rounded transition-colors ${
-                  editor.isActive("italic") ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                }`}
-              >
-                <Italic className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                aria-label="Underline"
-                onClick={() => editor.chain().focus().toggleUnderline().run()}
-                className={`p-1.5 rounded transition-colors ${
-                  editor.isActive("underline") ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                }`}
-              >
-                <UnderlineIcon className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                aria-label="Inline code"
-                onClick={() => editor.chain().focus().toggleCode().run()}
-                className={`p-1.5 rounded transition-colors ${
-                  editor.isActive("code") ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                }`}
-              >
-                <Code className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          </BubbleMenu>
-        )}
+        {/* BubbleMenu intentionally removed.
+            `@tiptap/react`'s BubbleMenu wraps Tippy.js, which appends its
+            DOM into `document.body` — outside the React tree. On every
+            selectionchange Tippy moves nodes around; React's reconciler
+            then tries to remove a node from a parent that no longer
+            owns it and throws
+              `removeChild: The node to be removed is not a child of
+               this node`
+            in the commit phase. Adding `editorMode === "rich"` to the
+            mount condition only fixed the mode-switch race; the
+            steady-state selection path still crashed because each
+            selection causes BubbleMenu to mount/unmount its Tippy
+            instance. Top `EditorToolbar` already exposes Bold / Italic /
+            Underline / Code, so the affordance is intact. A custom
+            in-tree floating menu (via @floating-ui/react, not Tippy)
+            can be revisited later if the UX is missed. */}
       </div>
 
       {/* Editor Content */}
