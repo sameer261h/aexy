@@ -25,6 +25,7 @@ import {
   ExternalLink,
   Calendar,
   Vote,
+  Workflow,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { HelpTooltip } from "@/components/ui/tooltip";
@@ -269,6 +270,13 @@ export default function ProjectSettingsPage() {
           >
             <FolderGit2 className="h-4 w-4" />
             Repositories
+          </Link>
+          <Link
+            href={`/settings/projects/${projectId}/statuses`}
+            className="px-4 py-2 bg-muted hover:bg-accent text-foreground rounded-lg text-sm font-medium transition flex items-center gap-2"
+          >
+            <Workflow className="h-4 w-4" />
+            Statuses
           </Link>
         </div>
 
