@@ -49,6 +49,52 @@ def _stringify_field(value: object) -> str | None:
     return str(value)
 
 
+def _move_breadcrumb(other_task: SprintTask, *, kind: str) -> tuple[str, dict]:
+    """Build a one-line "Moved from/to <KEY> — <title>" breadcrumb.
+
+    Returns (plain_text, prosemirror_paragraph_node). The text form is
+    prefixed to the receiving task's ``description``; the node is
+    prepended to its ``description_json`` so every surface that already
+    renders descriptions also shows the breadcrumb without any extra UI.
+    """
+    verb = "Moved from" if kind == "from" else "Moved to"
+    text = f"{verb} {other_task.task_key} — {other_task.title}"
+    url = f"/sprints/{other_task.team_id}/board?task={other_task.id}"
+    node = {
+        "type": "paragraph",
+        "content": [
+            {
+                "type": "text",
+                "marks": [
+                    {
+                        "type": "link",
+                        "attrs": {
+                            "href": url,
+                            "target": "_blank",
+                            "rel": "noopener noreferrer",
+                        },
+                    }
+                ],
+                "text": text,
+            }
+        ],
+    }
+    return text, node
+
+
+def _prepend_node_to_doc(doc: dict | None, node: dict) -> dict:
+    """Return a ProseMirror doc with ``node`` inserted at the top."""
+    if not doc or not isinstance(doc, dict) or "content" not in doc:
+        return {"type": "doc", "content": [node]}
+    return {**doc, "content": [node, *list(doc.get("content") or [])]}
+
+
+def _prefix_description(existing: str | None, prefix: str) -> str:
+    if not existing:
+        return prefix
+    return f"{prefix}\n\n{existing}"
+
+
 class SprintTaskService:
     """Service for managing tasks within sprints."""
 
@@ -949,6 +995,15 @@ class SprintTaskService:
             str(source.workspace_id), target_project_id
         )
 
+        # Prepend a "Moved from <SOURCE-KEY>" breadcrumb so the new task
+        # records its origin inline. Visible in every surface that already
+        # renders the description — list previews, detail modal, mobile.
+        breadcrumb_text, breadcrumb_node = _move_breadcrumb(source, kind="from")
+        new_description = _prefix_description(source.description, breadcrumb_text)
+        new_description_json = _prepend_node_to_doc(
+            source.description_json, breadcrumb_node
+        )
+
         new_task = SprintTask(
             id=str(uuid4()),
             workspace_id=source.workspace_id,
@@ -957,8 +1012,8 @@ class SprintTaskService:
             source_type="manual",
             source_id=str(uuid4()),
             title=source.title,
-            description=source.description,
-            description_json=source.description_json,
+            description=new_description,
+            description_json=new_description_json,
             story_points=source.story_points,
             priority=source.priority,
             labels=list(source.labels or []),
@@ -1064,16 +1119,34 @@ class SprintTaskService:
                 # Recurse one level. Subtasks themselves having subtasks is
                 # already an edge case in this codebase; we treat any
                 # grand-children as orphans on the source side.
-                await self._clone_task_to_project(
+                new_sub = await self._clone_task_to_project(
                     source=sub,
                     target_project_id=target_project_id,
                     new_parent_id=new_parent.id,
                     actor_id=actor_id,
                 )
+                # Each source subtask gets its own "Moved to" pointer at
+                # the corresponding clone — the parent breadcrumb alone
+                # wouldn't reach them.
+                sub_text, sub_node = _move_breadcrumb(new_sub, kind="to")
+                sub.description = _prefix_description(sub.description, sub_text)
+                sub.description_json = _prepend_node_to_doc(
+                    sub.description_json, sub_node
+                )
                 sub.is_archived = True
         # `orphan` strategy leaves subtasks alone — parent_task_id still
         # points to the now-archived/done source. The UI surfaces this as
         # "parent archived" but the data stays consistent.
+
+        # Prepend "Moved to <NEW-KEY>" on the source. Runs whether the
+        # action is archive or mark_done — both close the source, and the
+        # breadcrumb makes the close cause obvious to anyone who later
+        # opens it.
+        src_text, src_node = _move_breadcrumb(new_parent, kind="to")
+        source.description = _prefix_description(source.description, src_text)
+        source.description_json = _prepend_node_to_doc(
+            source.description_json, src_node
+        )
 
         if source_action == "archive":
             source.is_archived = True

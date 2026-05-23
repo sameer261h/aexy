@@ -2,6 +2,7 @@
 
 import { useAuth } from "@/hooks/useAuth";
 import { usePageVisitTracker } from "@/hooks/usePageVisitTracker";
+import { useRecentApps } from "@/hooks/useRecentApps";
 import { AppShell } from "@/components/layout/AppShell";
 import { GlobalShortcuts } from "@/components/GlobalShortcuts";
 import { CommandPalette } from "@/components/CommandPalette";
@@ -20,6 +21,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
     // Track page visits for frequently-used sidebar section
     usePageVisitTracker();
+    // Record recent-app visits for the docs sidebar's "Recent" strip.
+    // Side-effect only — the docs sidebar reads from the same store
+    // without re-recording on its own renders.
+    useRecentApps();
 
     useEffect(() => {
         if (isResolved && !isAuthenticated) {

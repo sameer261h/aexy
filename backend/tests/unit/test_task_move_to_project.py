@@ -461,3 +461,167 @@ async def test_bulk_move_continues_on_per_task_failure(
     assert by_id[valid.id]["new_task_id"] is not None
     assert by_id[archived.id]["status"] == "skipped"
     assert by_id[archived.id]["error_code"] == "task_already_archived"
+
+
+def _first_link_attrs(doc: dict) -> dict:
+    """Pull href/text out of the first paragraph's first text node."""
+    para = doc["content"][0]
+    assert para["type"] == "paragraph"
+    text_node = para["content"][0]
+    assert text_node["type"] == "text"
+    href = text_node["marks"][0]["attrs"]["href"]
+    return {"href": href, "text": text_node["text"]}
+
+
+@pytest.mark.asyncio
+async def test_move_prepends_moved_from_breadcrumb_on_new_task(
+    db_session: AsyncSession,
+) -> None:
+    ws = await _make_workspace(db_session, "ws-bcrumb-from")
+    project_a = await _make_project(db_session, ws, "a")
+    project_b = await _make_project(db_session, ws, "b")
+    source = await _make_task(db_session, ws, project_a.id, title="Origin task")
+
+    service = SprintTaskService(db_session)
+    new_task = await service.move_to_project(
+        task_id=source.id,
+        target_project_id=project_b.id,
+        source_action="archive",
+    )
+    await db_session.commit()
+
+    expected_text = f"Moved from {source.task_key} — Origin task"
+    assert new_task.description is not None
+    assert new_task.description.startswith(expected_text)
+
+    attrs = _first_link_attrs(new_task.description_json)
+    assert attrs["text"] == expected_text
+    assert attrs["href"] == f"/sprints/{source.team_id}/board?task={source.id}"
+
+
+@pytest.mark.asyncio
+async def test_move_prepends_moved_to_breadcrumb_on_source_task(
+    db_session: AsyncSession,
+) -> None:
+    ws = await _make_workspace(db_session, "ws-bcrumb-to")
+    project_a = await _make_project(db_session, ws, "a")
+    project_b = await _make_project(db_session, ws, "b")
+    source = await _make_task(db_session, ws, project_a.id, title="Origin task")
+
+    service = SprintTaskService(db_session)
+    new_task = await service.move_to_project(
+        task_id=source.id,
+        target_project_id=project_b.id,
+        source_action="archive",
+    )
+    await db_session.commit()
+    await db_session.refresh(source)
+
+    expected_text = f"Moved to {new_task.task_key} — Origin task"
+    assert source.description is not None
+    assert source.description.startswith(expected_text)
+
+    attrs = _first_link_attrs(source.description_json)
+    assert attrs["text"] == expected_text
+    assert attrs["href"] == f"/sprints/{new_task.team_id}/board?task={new_task.id}"
+
+
+@pytest.mark.asyncio
+async def test_breadcrumb_preserves_existing_description(
+    db_session: AsyncSession,
+) -> None:
+    ws = await _make_workspace(db_session, "ws-bcrumb-preserve")
+    project_a = await _make_project(db_session, ws, "a")
+    project_b = await _make_project(db_session, ws, "b")
+    source = await _make_task(db_session, ws, project_a.id, title="Has body")
+    original_doc = {
+        "type": "doc",
+        "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": "First body paragraph."}]},
+            {"type": "paragraph", "content": [{"type": "text", "text": "Second body paragraph."}]},
+        ],
+    }
+    source.description = "First body paragraph.\n\nSecond body paragraph."
+    source.description_json = original_doc
+    await db_session.commit()
+
+    service = SprintTaskService(db_session)
+    new_task = await service.move_to_project(
+        task_id=source.id,
+        target_project_id=project_b.id,
+        source_action="archive",
+    )
+    await db_session.commit()
+
+    # Original two paragraphs are still there, breadcrumb prepended on top.
+    assert len(new_task.description_json["content"]) == 3
+    assert new_task.description_json["content"][1] == original_doc["content"][0]
+    assert new_task.description_json["content"][2] == original_doc["content"][1]
+    assert "First body paragraph." in new_task.description
+    assert "Second body paragraph." in new_task.description
+
+
+@pytest.mark.asyncio
+async def test_breadcrumb_with_null_description_creates_well_formed_doc(
+    db_session: AsyncSession,
+) -> None:
+    ws = await _make_workspace(db_session, "ws-bcrumb-null")
+    project_a = await _make_project(db_session, ws, "a")
+    project_b = await _make_project(db_session, ws, "b")
+    source = await _make_task(db_session, ws, project_a.id, title="Bare")
+    assert source.description is None
+    assert source.description_json is None
+
+    service = SprintTaskService(db_session)
+    new_task = await service.move_to_project(
+        task_id=source.id,
+        target_project_id=project_b.id,
+        source_action="archive",
+    )
+    await db_session.commit()
+
+    assert new_task.description_json["type"] == "doc"
+    assert len(new_task.description_json["content"]) == 1
+    # Description is exactly the breadcrumb text, no leading/trailing whitespace.
+    assert new_task.description == f"Moved from {source.task_key} — Bare"
+
+
+@pytest.mark.asyncio
+async def test_cascade_subtasks_each_get_their_own_breadcrumbs(
+    db_session: AsyncSession,
+) -> None:
+    ws = await _make_workspace(db_session, "ws-bcrumb-cascade")
+    project_a = await _make_project(db_session, ws, "a")
+    project_b = await _make_project(db_session, ws, "b")
+    await TaskConfigService(db_session).seed_default_statuses(ws.id)
+    await db_session.commit()
+
+    parent = await _make_task(db_session, ws, project_a.id, title="P")
+    sub_a = await _make_task(
+        db_session, ws, project_a.id, title="SA", parent_task_id=parent.id
+    )
+    sub_b = await _make_task(
+        db_session, ws, project_a.id, title="SB", parent_task_id=parent.id
+    )
+
+    service = SprintTaskService(db_session)
+    new_parent = await service.move_to_project(
+        task_id=parent.id,
+        target_project_id=project_b.id,
+        source_action="archive",
+        subtask_strategy="cascade",
+    )
+    await db_session.commit()
+
+    # Each cloned subtask carries "Moved from <original-sub-key>".
+    new_subs_stmt = select(SprintTask).where(SprintTask.parent_task_id == new_parent.id)
+    new_subs = (await db_session.execute(new_subs_stmt)).scalars().all()
+    new_by_title = {s.title: s for s in new_subs}
+    assert new_by_title["SA"].description.startswith(f"Moved from {sub_a.task_key} —")
+    assert new_by_title["SB"].description.startswith(f"Moved from {sub_b.task_key} —")
+
+    # And each source subtask got "Moved to <new-sub-key>".
+    await db_session.refresh(sub_a)
+    await db_session.refresh(sub_b)
+    assert sub_a.description.startswith(f"Moved to {new_by_title['SA'].task_key} —")
+    assert sub_b.description.startswith(f"Moved to {new_by_title['SB'].task_key} —")
