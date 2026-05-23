@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.38] - 2026-05-23
+
+### Visible move-link on cross-project moves
+
+Cross-project moves (shipped in 0.8.34) already created a
+`task_dependencies` row linking the new task back to the source —
+but nothing in the UI rendered that linkage. Anyone opening either
+side of the move saw a context-free task.
+
+`SprintTaskService.move_to_project` now prepends a one-line
+"Moved from <KEY> — <title>" breadcrumb to the new task's
+description and a matching "Moved to" line on the source. The
+breadcrumb is written into both `description` (plain text) and
+`description_json` (a ProseMirror paragraph with a `link` mark
+pointing at `/sprints/<team>/board?task=<id>`) so every surface
+that renders descriptions shows it without any extra UI plumbing.
+Cascade subtasks each get their own pair of breadcrumbs pointing
+at the corresponding clone — the parent's pointer alone wouldn't
+reach the children.
+
+The existing `task_dependencies` row is still recorded as the
+structured source of truth for any future banner work.
+
+### Docs sidebar: Recent apps + section-grouped app list
+
+The flat "Apps" section in the docs sidebar (0.8.35) is replaced
+with a sidebar that mirrors the main app sidebar's grouping —
+Engineering / People / Business / AI / Compliance — plus a
+"Recent" strip at the top tracking the user's last-visited apps.
+
+Implementation:
+
+- `recentAppsStore` (Zustand + localStorage, cap 8) records each
+  app visit. Mounted once in `app/(app)/layout.tsx` via
+  `useRecentApps()` so visits from any surface count.
+- `NotionSidebar` reads the main sidebar's `GROUPED_LAYOUT`,
+  applies the same persona filter (`useSidebarPersona`) and
+  app-access filter (`useAppAccess`) the main sidebar uses, and
+  renders each section collapsed by default to keep the docs
+  surface focused.
+- The Knowledge section is hidden in the docs sidebar (the docs
+  sidebar IS the knowledge view; re-listing it would be
+  tautological). Docs and Drive are filtered out of the Recent
+  strip for the same reason.
+- New `SidebarAppGroup` component renders apps with sub-items
+  (Tracking → Standups/Blockers/Time, etc.) as expandable rows
+  inside the section, matching the main sidebar's depth.
+
 ## [0.8.37] - 2026-05-23
 
 ### Doc editor no longer unmounts on every save
