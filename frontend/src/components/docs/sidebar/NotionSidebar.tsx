@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Star, Lock, Users, Plus, LayoutGrid } from "lucide-react";
+import { Star, Lock, Users, Plus, Clock } from "lucide-react";
 
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { SidebarNavigation } from "./SidebarNavigation";
 import { SidebarSection } from "./SidebarSection";
+import { SidebarAppGroup } from "./SidebarAppGroup";
 import { DocumentItem } from "./DocumentItem";
 import { SpaceFolderWithData } from "./SpaceFolderWithData";
 import { CreateSpaceModal } from "../CreateSpaceModal";
@@ -17,7 +18,11 @@ import { useDocumentSpaces } from "@/hooks/useDocumentSpaces";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useAuth } from "@/hooks/useAuth";
 import { useAppAccess } from "@/hooks/useAppAccess";
-import { APP_CATALOG } from "@/config/appDefinitions";
+import { useSidebarLayout } from "@/hooks/useSidebarLayout";
+import { useSidebarPersona } from "@/hooks/useSidebarPersona";
+import { useRecentApps } from "@/hooks/useRecentApps";
+import { SidebarItemConfig, SIDEBAR_LAYOUTS } from "@/config/sidebarLayouts";
+import { SIDEBAR_TO_APP_MAP } from "@/config/appDefinitions";
 
 interface NotionSidebarProps {
   selectedDocumentId?: string;
@@ -34,13 +39,65 @@ export function NotionSidebar({
   const { workspaces, currentWorkspace, switchWorkspace } = useWorkspace();
   const workspaceId = currentWorkspace?.id || null;
   const { user } = useAuth();
+
   // The main app sidebar is hidden on /docs routes, so the docs sidebar is
-  // the user's only escape hatch to other modules. We list every app they
-  // have access to (via useAppAccess) inside a collapsed "Apps" section.
-  const { accessibleApps } = useAppAccess(workspaceId, user?.id ?? null);
-  const apps = accessibleApps
-    .map((appId) => APP_CATALOG[appId])
-    .filter((app): app is NonNullable<typeof app> => Boolean(app));
+  // the user's only escape hatch to other modules. Mirror the main
+  // sidebar's grouping so the user sees the same Engineering / People /
+  // Business / etc. structure, plus a "Recent" strip at the top.
+  const { layoutConfig: userLayoutConfig } = useSidebarLayout();
+  const { filterByPersona } = useSidebarPersona();
+  const { hasAppAccess } = useAppAccess(workspaceId, user?.id ?? null);
+
+  // Always use the grouped layout in the docs sidebar — the flat layout
+  // would be ~25 ungrouped rows here, which defeats the point.
+  const baseLayout = userLayoutConfig.id === "grouped"
+    ? userLayoutConfig
+    : SIDEBAR_LAYOUTS.grouped;
+
+  const personaConfig = useMemo(
+    () => filterByPersona(baseLayout),
+    [filterByPersona, baseLayout]
+  );
+
+  const filterItemsByAccess = useMemo(() => {
+    const filter = (items: SidebarItemConfig[]): SidebarItemConfig[] =>
+      items
+        .map((item) => ({
+          ...item,
+          items: item.items ? filter(item.items) : undefined,
+        }))
+        .filter((item) => {
+          const appId = SIDEBAR_TO_APP_MAP[item.href];
+          return appId ? hasAppAccess(appId) : true;
+        });
+    return filter;
+  }, [hasAppAccess]);
+
+  // The docs sidebar IS the Knowledge surface — re-listing it here would
+  // be tautological. Hide that section entirely.
+  const appSections = useMemo(() => {
+    return personaConfig.sections
+      .filter((s) => s.id !== "knowledge")
+      .map((section) => ({
+        ...section,
+        // Empty-label sections (core/main) get a friendly title.
+        label: section.label || "Workspace",
+        items: filterItemsByAccess(section.items),
+      }))
+      .filter((s) => s.items.length > 0);
+  }, [personaConfig, filterItemsByAccess]);
+
+  // Recording happens once at the app layout (so visits from any
+  // surface count). Here we just read — and hide docs/drive since the
+  // user is already inside the docs surface.
+  const { recentApps: allRecent } = useRecentApps({
+    record: false,
+    isAppAccessible: hasAppAccess,
+  });
+  const recentApps = useMemo(
+    () => allRecent.filter((a) => a.id !== "docs" && a.id !== "drive").slice(0, 5),
+    [allRecent]
+  );
 
   // Document spaces
   const {
@@ -299,17 +356,17 @@ export function NotionSidebar({
             {/* Divider before apps */}
             <div className="h-px bg-muted/50 mx-3 my-2" />
 
-            {/* Apps — escape hatch to the rest of the product. Collapsed
-                by default so docs stays the focus; expand to jump to
-                Sprints / CRM / etc without leaving the docs surface. */}
-            {apps.length > 0 && (
+            {/* Recent apps — opens expanded so the most-recent jumps are
+                one click away. Hidden entirely on first run when the
+                visit log is empty. */}
+            {recentApps.length > 0 && (
               <SidebarSection
-                title="Apps"
-                icon={<LayoutGrid className="h-3.5 w-3.5" />}
-                count={apps.length}
-                defaultExpanded={false}
+                title="Recent"
+                icon={<Clock className="h-3.5 w-3.5" />}
+                count={recentApps.length}
+                defaultExpanded={true}
               >
-                {apps.map((app) => {
+                {recentApps.map((app) => {
                   const Icon = app.icon;
                   return (
                     <Link
@@ -318,12 +375,44 @@ export function NotionSidebar({
                       className="flex items-center gap-2 px-2 py-1.5 mx-1 hover:bg-accent/50 rounded-md transition-colors text-foreground/80 hover:text-foreground text-sm"
                     >
                       <Icon className="h-4 w-4 text-muted-foreground" />
-                      <span>{app.name}</span>
+                      <span className="truncate">{app.name}</span>
                     </Link>
                   );
                 })}
               </SidebarSection>
             )}
+
+            {/* App sections — same structure as the main sidebar,
+                collapsed by default so the docs surface stays focused. */}
+            {appSections.map((section) => (
+              <SidebarSection
+                key={section.id}
+                title={section.label}
+                count={section.items.length}
+                defaultExpanded={false}
+              >
+                {section.items.map((item) =>
+                  item.items && item.items.length > 0 ? (
+                    <SidebarAppGroup
+                      key={item.href}
+                      href={item.href}
+                      label={item.label}
+                      icon={item.icon}
+                      subItems={item.items}
+                    />
+                  ) : (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className="flex items-center gap-2 px-2 py-1.5 mx-1 hover:bg-accent/50 rounded-md transition-colors text-foreground/80 hover:text-foreground text-sm"
+                    >
+                      <item.icon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                    </Link>
+                  )
+                )}
+              </SidebarSection>
+            ))}
           </>
         )}
       </div>
