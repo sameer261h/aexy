@@ -82,7 +82,7 @@ export function useWorkspaceTasks(workspaceId: string | null) {
   // (not UUIDs). Cheap endpoint that returns a flat list.
   const { data: allEpics } = useQuery({
     queryKey: ["epics", workspaceId, { include_archived: false }],
-    queryFn: () => epicApi.list(workspaceId!, { include_archived: false, limit: 500 }),
+    queryFn: () => epicApi.list(workspaceId!, { include_archived: false, limit: 100 }),
     enabled: !!workspaceId,
   });
 
