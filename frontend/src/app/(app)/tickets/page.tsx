@@ -492,16 +492,16 @@ export default function TicketsPage() {
                           </span>
                           <span
                             className={`px-2 py-0.5 rounded text-xs font-medium ${
-                              STATUS_COLORS[ticket.status].bg
-                            } ${STATUS_COLORS[ticket.status].text}`}
+                              STATUS_COLORS[ticket.status]?.bg || "bg-accent"
+                            } ${STATUS_COLORS[ticket.status]?.text || "text-foreground"}`}
                           >
-                            {STATUS_COLORS[ticket.status].label}
+                            {STATUS_COLORS[ticket.status]?.label || ticket.status}
                           </span>
                           {ticket.priority && (
                             <span
                               className={`px-2 py-0.5 rounded text-xs font-medium ${
-                                PRIORITY_COLORS[ticket.priority].bg
-                              } ${PRIORITY_COLORS[ticket.priority].text}`}
+                                PRIORITY_COLORS[ticket.priority]?.bg || "bg-accent"
+                              } ${PRIORITY_COLORS[ticket.priority]?.text || "text-foreground"}`}
                             >
                               {ticket.priority}
                             </span>
