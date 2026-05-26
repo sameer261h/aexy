@@ -296,7 +296,7 @@ function KanbanColumn({
   onToggleSelected: (taskId: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status });
-  const tone = TASK_STATUS_COLORS[status];
+  const tone = TASK_STATUS_COLORS[status] ?? TASK_STATUS_COLORS.backlog;
   const totalPoints = tasks.reduce((sum, t) => sum + (t.story_points || 0), 0);
 
   return (
