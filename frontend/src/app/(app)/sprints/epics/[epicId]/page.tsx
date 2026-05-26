@@ -110,7 +110,7 @@ export default function EpicDetailPage() {
     );
   }
 
-  const statusStyle = STATUS_COLORS[epic.status];
+  const statusStyle = STATUS_COLORS[epic.status] ?? STATUS_COLORS.open;
 
   const handleStatusChange = async (newStatus: EpicStatus) => {
     await updateEpic({ status: newStatus });
