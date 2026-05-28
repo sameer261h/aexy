@@ -1,16 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, ArrowRight, RefreshCw } from "lucide-react";
 
 import { useProjects } from "@/hooks/useProjects";
 import { useTaskMove, SourceAction, SubtaskStrategy } from "@/hooks/useTaskMove";
+import { useTaskStatuses } from "@/hooks/useTaskConfig";
 
 export interface MoveToProjectModalProps {
   workspaceId: string;
   sourceProjectId: string;
   taskIds: string[];           // length 1 for single, N for bulk
   hasSubtasks: boolean;        // only meaningful for single
+  /**
+   * Source task's current status slug — only relevant for single moves.
+   * Used to default the destination-status picker to the matching slug/name
+   * on the target board.
+   */
+  sourceStatusSlug?: string;
   onClose: () => void;
   onMoved?: () => void;
 }
@@ -58,6 +65,7 @@ export function MoveToProjectModal({
   sourceProjectId,
   taskIds,
   hasSubtasks,
+  sourceStatusSlug,
   onClose,
   onMoved,
 }: MoveToProjectModalProps) {
@@ -74,7 +82,42 @@ export function MoveToProjectModal({
   const [targetProjectId, setTargetProjectId] = useState<string>("");
   const [sourceAction, setSourceAction] = useState<SourceAction>("archive");
   const [subtaskStrategy, setSubtaskStrategy] = useState<SubtaskStrategy>("block");
+  const [targetStatusSlug, setTargetStatusSlug] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
+
+  // Destination board's statuses — fetched only after a target is picked.
+  // Same hook the kanban uses, so the column set matches exactly.
+  const { statuses: targetStatuses, isLoading: statusesLoading } = useTaskStatuses(
+    workspaceId,
+    targetProjectId || null,
+  );
+
+  // Default the picker every time the destination or its status set changes.
+  // Order of precedence:
+  //   1. Same slug as the source status (sibling boards that share a column).
+  //   2. Same name (case-insensitive) — handles "To Do" vs "todo" mismatches.
+  //   3. First status (by position) — matches the leftmost board column,
+  //      which is conventionally the "open" entry point.
+  const defaultStatusSlug = useMemo(() => {
+    if (!targetStatuses || targetStatuses.length === 0) return "";
+    const sortedActive = [...targetStatuses]
+      .filter((s) => s.is_active)
+      .sort((a, b) => a.position - b.position);
+    if (sourceStatusSlug) {
+      const slugMatch = sortedActive.find((s) => s.slug === sourceStatusSlug);
+      if (slugMatch) return slugMatch.slug;
+      const sourceName = sourceStatusSlug.toLowerCase();
+      const nameMatch = sortedActive.find(
+        (s) => s.name.toLowerCase() === sourceName,
+      );
+      if (nameMatch) return nameMatch.slug;
+    }
+    return sortedActive[0]?.slug ?? "";
+  }, [targetStatuses, sourceStatusSlug]);
+
+  useEffect(() => {
+    setTargetStatusSlug(defaultStatusSlug);
+  }, [defaultStatusSlug]);
 
   const submitting = single.isPending || bulk.isPending;
 
@@ -92,6 +135,7 @@ export function MoveToProjectModal({
           target_project_id: targetProjectId,
           source_action: sourceAction,
           subtask_strategy: "block",  // bulk skips per-task subtask handling
+          target_status_slug: targetStatusSlug || undefined,
         });
       } else {
         await single.mutateAsync({
@@ -99,6 +143,7 @@ export function MoveToProjectModal({
           target_project_id: targetProjectId,
           source_action: sourceAction,
           subtask_strategy: showSubtaskRadio ? subtaskStrategy : "block",
+          target_status_slug: targetStatusSlug || undefined,
         });
       }
       onMoved?.();
@@ -149,6 +194,41 @@ export function MoveToProjectModal({
                 </select>
               )}
             </div>
+
+            {targetProjectId && (
+              <div>
+                <label className="block text-sm text-muted-foreground mb-1">
+                  Status on destination board
+                </label>
+                {statusesLoading ? (
+                  <div className="h-10 bg-muted rounded-lg animate-pulse" />
+                ) : targetStatuses && targetStatuses.length > 0 ? (
+                  <select
+                    value={targetStatusSlug}
+                    onChange={(e) => setTargetStatusSlug(e.target.value)}
+                    className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-foreground focus:outline-none focus:border-primary-500"
+                  >
+                    {targetStatuses
+                      .filter((s) => s.is_active)
+                      .slice()
+                      .sort((a, b) => a.position - b.position)
+                      .map((s) => (
+                        <option key={s.id} value={s.slug}>
+                          {s.name}
+                        </option>
+                      ))}
+                  </select>
+                ) : (
+                  <div className="text-sm text-muted-foreground bg-muted rounded-lg px-3 py-2">
+                    Destination board has no status columns yet.
+                  </div>
+                )}
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Status columns differ per project — pick where{" "}
+                  {isBulk ? "these tasks" : "this task"} should land.
+                </p>
+              </div>
+            )}
 
             <div>
               <label className="block text-sm text-muted-foreground mb-2">

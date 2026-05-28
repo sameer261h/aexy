@@ -3726,12 +3726,16 @@ export const projectTasksApi = {
     statusFilter?: TaskStatus;
     assigneeId?: string;
     includeSprintTasks?: boolean;
+    includeArchived?: boolean;
+    archivedOnly?: boolean;
   }): Promise<SprintTask[]> => {
     const response = await api.get(`/teams/${teamId}/tasks`, {
       params: {
         ...(options?.statusFilter && { status_filter: options.statusFilter }),
         ...(options?.assigneeId && { assignee_id: options.assigneeId }),
         ...(options?.includeSprintTasks !== undefined && { include_sprint_tasks: options.includeSprintTasks }),
+        ...(options?.includeArchived !== undefined && { include_archived: options.includeArchived }),
+        ...(options?.archivedOnly !== undefined && { archived_only: options.archivedOnly }),
       },
     });
     return response.data;
@@ -3824,6 +3828,7 @@ export const projectTasksApi = {
       target_project_id: string;
       source_action: "archive" | "mark_done";
       subtask_strategy?: "block" | "cascade" | "orphan";
+      target_status_slug?: string;
     },
   ): Promise<SprintTask> => {
     const response = await api.post(
@@ -3844,6 +3849,7 @@ export const projectTasksApi = {
       target_project_id: string;
       source_action: "archive" | "mark_done";
       subtask_strategy?: "block" | "cascade" | "orphan";
+      target_status_slug?: string;
     },
   ): Promise<BulkMoveResponse> => {
     const response = await api.post(
@@ -3967,6 +3973,7 @@ export interface WorkspaceTasksListParams {
   labels?: string[];
   search?: string;
   include_archived?: boolean;
+  archived_only?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -3993,6 +4000,9 @@ export const workspaceTasksApi = {
         ...(params?.search && { search: params.search }),
         ...(params?.include_archived !== undefined && {
           include_archived: params.include_archived,
+        }),
+        ...(params?.archived_only !== undefined && {
+          archived_only: params.archived_only,
         }),
         ...(params?.limit !== undefined && { limit: params.limit }),
         ...(params?.offset !== undefined && { offset: params.offset }),

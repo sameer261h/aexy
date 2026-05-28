@@ -625,3 +625,127 @@ async def test_cascade_subtasks_each_get_their_own_breadcrumbs(
     await db_session.refresh(sub_b)
     assert sub_a.description.startswith(f"Moved to {new_by_title['SA'].task_key} —")
     assert sub_b.description.startswith(f"Moved to {new_by_title['SB'].task_key} —")
+
+
+# --- target_status_slug on move -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_move_with_explicit_target_status_slug_places_task_in_that_column(
+    db_session: AsyncSession,
+) -> None:
+    """The operator can override which status the cloned task lands in —
+    use case is cross-board moves (e.g. Product → Tech) where the target
+    has a different status taxonomy than the source."""
+    ws = await _make_workspace(db_session, "ws-status-pick")
+    project_a = await _make_project(db_session, ws, "a")
+    project_b = await _make_project(db_session, ws, "b")
+    config = TaskConfigService(db_session)
+    await config.seed_default_statuses(ws.id)
+    # Custom status on project B that does NOT exist on A.
+    custom = await config.create_status(
+        ws.id, name="QA Review", category="in_progress", project_id=project_b.id
+    )
+    await db_session.commit()
+
+    source = await _make_task(db_session, ws, project_a.id, title="X")
+
+    service = SprintTaskService(db_session)
+    new_task = await service.move_to_project(
+        task_id=source.id,
+        target_project_id=project_b.id,
+        source_action="archive",
+        target_status_slug=custom.slug,
+    )
+    await db_session.commit()
+
+    assert new_task.status == custom.slug
+
+
+@pytest.mark.asyncio
+async def test_move_rejects_target_status_slug_not_on_destination_board(
+    db_session: AsyncSession,
+) -> None:
+    ws = await _make_workspace(db_session, "ws-status-bad")
+    project_a = await _make_project(db_session, ws, "a")
+    project_b = await _make_project(db_session, ws, "b")
+    await TaskConfigService(db_session).seed_default_statuses(ws.id)
+    await db_session.commit()
+
+    source = await _make_task(db_session, ws, project_a.id, title="X")
+
+    service = SprintTaskService(db_session)
+    with pytest.raises(TaskValidationError) as exc:
+        await service.move_to_project(
+            task_id=source.id,
+            target_project_id=project_b.id,
+            source_action="archive",
+            target_status_slug="not-a-real-slug",
+        )
+    assert exc.value.code == "invalid_target_status"
+
+    # Source untouched — validation runs before any write.
+    await db_session.refresh(source)
+    assert source.is_archived is False
+
+
+@pytest.mark.asyncio
+async def test_move_without_target_status_slug_resolves_open_status(
+    db_session: AsyncSession,
+) -> None:
+    """Regression guard: when the caller omits target_status_slug, behavior
+    is identical to the pre-feature implementation — the cloned task uses
+    the destination's first-open status (or canonical "todo" fallback)."""
+    ws = await _make_workspace(db_session, "ws-status-default")
+    project_a = await _make_project(db_session, ws, "a")
+    project_b = await _make_project(db_session, ws, "b")
+    await TaskConfigService(db_session).seed_default_statuses(ws.id)
+    await db_session.commit()
+
+    source = await _make_task(db_session, ws, project_a.id, title="X")
+
+    service = SprintTaskService(db_session)
+    new_task = await service.move_to_project(
+        task_id=source.id,
+        target_project_id=project_b.id,
+        source_action="archive",
+    )
+    await db_session.commit()
+
+    # Resolved slug is whatever _resolve_open_status_slug returns for
+    # workspace defaults — non-empty and a known string.
+    assert isinstance(new_task.status, str)
+    assert new_task.status != ""
+
+
+@pytest.mark.asyncio
+async def test_bulk_move_applies_target_status_slug_to_every_task(
+    db_session: AsyncSession,
+) -> None:
+    ws = await _make_workspace(db_session, "ws-bulk-status")
+    project_a = await _make_project(db_session, ws, "a")
+    project_b = await _make_project(db_session, ws, "b")
+    config = TaskConfigService(db_session)
+    await config.seed_default_statuses(ws.id)
+    custom = await config.create_status(
+        ws.id, name="In QA", category="in_progress", project_id=project_b.id
+    )
+    await db_session.commit()
+
+    t1 = await _make_task(db_session, ws, project_a.id, title="t1")
+    t2 = await _make_task(db_session, ws, project_a.id, title="t2")
+
+    service = SprintTaskService(db_session)
+    results = await service.bulk_move_to_project(
+        task_ids=[t1.id, t2.id],
+        target_project_id=project_b.id,
+        source_action="archive",
+        target_status_slug=custom.slug,
+    )
+    await db_session.commit()
+
+    moved_ids = [r["new_task_id"] for r in results if r["status"] == "moved"]
+    assert len(moved_ids) == 2
+    cloned_stmt = select(SprintTask).where(SprintTask.id.in_(moved_ids))
+    cloned = (await db_session.execute(cloned_stmt)).scalars().all()
+    assert {c.status for c in cloned} == {custom.slug}

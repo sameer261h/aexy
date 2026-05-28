@@ -862,6 +862,7 @@ class TaskMoveToProjectRequest(BaseModel):
     target_project_id: str
     source_action: SourceAction
     subtask_strategy: SubtaskStrategy = "block"
+    target_status_slug: str | None = None
 
 
 class TaskBulkMoveToProjectRequest(BaseModel):
@@ -872,6 +873,7 @@ class TaskBulkMoveToProjectRequest(BaseModel):
     target_project_id: str
     source_action: SourceAction
     subtask_strategy: SubtaskStrategy = "block"
+    target_status_slug: str | None = None
 
 
 class BulkMoveResult(BaseModel):

@@ -20,6 +20,7 @@ import {
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import {
   AlertCircle,
+  ArchiveRestore,
   ChevronDown,
   Filter,
   Folder,
@@ -38,7 +39,9 @@ import { TaskCardPremium } from "@/components/planning/TaskCardPremium";
 import {
   useWorkspaceTasks,
   WorkspaceTaskWithMeta,
+  WorkspaceTasksView,
 } from "@/hooks/useWorkspaceTasks";
+import { useUnarchiveTask } from "@/hooks/useUnarchiveTask";
 import {
   SprintTask,
   TaskPriority,
@@ -376,6 +379,15 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
+  // Active vs archived task view. Persisted in the URL via `?view=archived` so
+  // refresh and link-share round-trip cleanly. Archived view forces table
+  // layout — kanban columns make no sense for archived rows.
+  const [view, setView] = useState<WorkspaceTasksView>(
+    (searchParams.get("view") as WorkspaceTasksView) === "archived"
+      ? "archived"
+      : "active",
+  );
+
   const {
     filteredTasks,
     tasksByStatus,
@@ -391,7 +403,9 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
     projects,
     sprints,
     truncated,
-  } = useWorkspaceTasks(workspaceId);
+  } = useWorkspaceTasks(workspaceId, view);
+
+  const unarchiveMutation = useUnarchiveTask(workspaceId);
 
   const { members } = useWorkspaceMembers(workspaceId);
 
@@ -462,6 +476,22 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
     return next;
   }, [selectedIds, filteredTasks]);
 
+  const handleUnarchive = async (task: SprintTask) => {
+    if (!task.team_id) return;
+    await unarchiveMutation.mutateAsync({ teamId: task.team_id, taskId: task.id });
+  };
+  const applyBulkUnarchive = async () => {
+    const toRestore = filteredTasks.filter(
+      (t) => visibleSelectedIds.has(t.id) && t.team_id,
+    );
+    await Promise.allSettled(
+      toRestore.map((t) =>
+        unarchiveMutation.mutateAsync({ teamId: t.team_id!, taskId: t.id }),
+      ),
+    );
+    clearSelection();
+  };
+
   // Sync filter state ↔ URL. We persist a small whitelist of filter dimensions
   // (`q`, `assignee`, `priority`, `team`, `sprint`) plus the `tab` so refreshing
   // the page or sharing the link reproduces the same view. Reading happens on
@@ -502,18 +532,20 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
       params.delete("priority");
       params.delete("team");
       params.delete("sprint");
+      params.delete("view");
       if (filters.search) params.set("q", filters.search);
       filters.assignees.forEach((a) => params.append("assignee", a));
       filters.priorities.forEach((p) => params.append("priority", p));
       filters.teams.forEach((t) => params.append("team", t));
       filters.sprints.forEach((s) => params.append("sprint", s));
+      if (view === "archived") params.set("view", "archived");
       const next = params.toString();
       if (next !== current) {
         router.replace(`${pathname}${next ? `?${next}` : ""}`, { scroll: false });
       }
     }, 200);
     return () => clearTimeout(handle);
-  }, [filters, pathname, router]);
+  }, [filters, view, pathname, router]);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -649,12 +681,14 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           emptyLabel={t("noOptions")}
         />
 
-        <PriorityDropdown
-          selected={filters.priorities}
-          onChange={(priorities) => updateFilters({ priorities })}
-          buttonLabel={t("priority")}
-          optionLabels={priorityLabel}
-        />
+        {view === "active" && (
+          <PriorityDropdown
+            selected={filters.priorities}
+            onChange={(priorities) => updateFilters({ priorities })}
+            buttonLabel={t("priority")}
+            optionLabels={priorityLabel}
+          />
+        )}
 
         <MultiSelectDropdown
           label={t("project")}
@@ -694,37 +728,68 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
               : t("taskCountPlural", { count: filteredTasks.length })}
           </div>
 
-          {/* Board vs Table layout toggle */}
-          <div className="flex items-center bg-muted border border-border rounded-lg p-0.5">
+          {/* Active vs Archived toggle */}
+          <div className="flex items-center bg-muted border border-border rounded-lg p-0.5 text-xs">
             <button
-              onClick={() => setTasksLayout("board")}
-              title={t("viewBoard")}
-              aria-pressed={tasksLayout === "board"}
+              onClick={() => setView("active")}
+              aria-pressed={view === "active"}
               className={cn(
-                "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-all",
-                tasksLayout === "board"
+                "px-2 py-1 rounded-md transition-all",
+                view === "active"
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
-              <LayoutGrid className="h-3.5 w-3.5" />
+              {t("viewActive")}
             </button>
             <button
-              onClick={() => setTasksLayout("table")}
-              title={t("viewTable")}
-              aria-pressed={tasksLayout === "table"}
+              onClick={() => setView("archived")}
+              aria-pressed={view === "archived"}
               className={cn(
-                "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-all",
-                tasksLayout === "table"
+                "px-2 py-1 rounded-md transition-all",
+                view === "archived"
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
-              <Table2 className="h-3.5 w-3.5" />
+              {t("viewArchived")}
             </button>
           </div>
 
-          {filters.teams.length === 1 && (
+          {/* Board vs Table layout toggle — hidden in archive view since
+              archived tasks are always rendered as a flat table. */}
+          {view === "active" && (
+            <div className="flex items-center bg-muted border border-border rounded-lg p-0.5">
+              <button
+                onClick={() => setTasksLayout("board")}
+                title={t("viewBoard")}
+                aria-pressed={tasksLayout === "board"}
+                className={cn(
+                  "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-all",
+                  tasksLayout === "board"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => setTasksLayout("table")}
+                title={t("viewTable")}
+                aria-pressed={tasksLayout === "table"}
+                className={cn(
+                  "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-all",
+                  tasksLayout === "table"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Table2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+
+          {view === "active" && filters.teams.length === 1 && (
             <Link
               href={`/settings/projects/${filters.teams[0]}/statuses`}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors"
@@ -734,6 +799,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
               Columns
             </Link>
           )}
+          {view === "active" && (
           <button
             type="button"
             onClick={() => setAddModalStatus("todo")}
@@ -749,6 +815,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
             <Plus className="h-3.5 w-3.5" />
             {t("addTask")}
           </button>
+          )}
         </div>
       </div>
 
@@ -783,6 +850,28 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
             </div>
           ))}
         </div>
+      ) : view === "archived" ? (
+        <TaskTableView
+          tasks={filteredTasks}
+          statuses={projectStatuses}
+          onRowClick={handleTaskClick}
+          selectedIds={selectedIds}
+          onToggleSelected={toggleSelected}
+          showSprintColumn
+          emptyLabel={t("noArchivedTasks")}
+          rowActions={(task) => (
+            <button
+              type="button"
+              onClick={() => handleUnarchive(task)}
+              disabled={unarchiveMutation.isPending}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors disabled:opacity-50"
+              title={t("unarchive")}
+            >
+              <ArchiveRestore className="h-3.5 w-3.5" />
+              {t("unarchive")}
+            </button>
+          )}
+        />
       ) : tasksLayout === "table" ? (
         <TaskTableView
           tasks={filteredTasks}
@@ -865,25 +954,37 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
               {visibleSelectedIds.size} selected
             </span>
             <div className="h-4 w-px bg-border/60" />
-            <select
-              defaultValue=""
-              onChange={(e) => {
-                const next = e.target.value as TaskStatus;
-                if (!next) return;
-                void applyBulkStatus(next);
-                e.target.value = "";
-              }}
-              className="bg-background/60 border border-border/60 rounded-md px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary-500/40"
-            >
-              <option value="" disabled>
-                Move to…
-              </option>
-              {renderStatuses.map((s) => (
-                <option key={s} value={s}>
-                  {statusLabel[s] ?? s}
+            {view === "archived" ? (
+              <button
+                type="button"
+                onClick={() => void applyBulkUnarchive()}
+                disabled={unarchiveMutation.isPending}
+                className="inline-flex items-center gap-1 bg-background/60 border border-border/60 rounded-md px-2 py-1 text-xs text-foreground hover:bg-accent/40 transition-colors disabled:opacity-50"
+              >
+                <ArchiveRestore className="h-3.5 w-3.5" />
+                {t("unarchiveBulk")}
+              </button>
+            ) : (
+              <select
+                defaultValue=""
+                onChange={(e) => {
+                  const next = e.target.value as TaskStatus;
+                  if (!next) return;
+                  void applyBulkStatus(next);
+                  e.target.value = "";
+                }}
+                className="bg-background/60 border border-border/60 rounded-md px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary-500/40"
+              >
+                <option value="" disabled>
+                  Move to…
                 </option>
-              ))}
-            </select>
+                {renderStatuses.map((s) => (
+                  <option key={s} value={s}>
+                    {statusLabel[s] ?? s}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               type="button"
               onClick={clearSelection}

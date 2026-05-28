@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { ReactNode, useMemo } from "react";
 import { useTranslations } from "next-intl";
 import { formatDistanceToNow } from "date-fns";
 
@@ -23,6 +23,9 @@ interface TaskTableViewProps {
   /** Localized empty-state copy. Caller controls so it can branch on
       whether filters are active. */
   emptyLabel?: string;
+  /** Optional per-row trailing cell — used by the archive view to inject an
+      Unarchive button without coupling the table to archive semantics. */
+  rowActions?: (task: TaskTableRow) => ReactNode;
 }
 
 /**
@@ -38,6 +41,7 @@ export function TaskTableView({
   onToggleSelected,
   showSprintColumn = true,
   emptyLabel,
+  rowActions,
 }: TaskTableViewProps) {
   const t = useTranslations("sprints.taskTable");
   const statusBySlug = useMemo(() => {
@@ -74,6 +78,7 @@ export function TaskTableView({
             )}
             <th className="px-3 py-2 font-medium w-16 text-right">{t("points")}</th>
             <th className="px-3 py-2 font-medium w-32">{t("updated")}</th>
+            {rowActions && <th className="px-3 py-2 font-medium w-24 text-right"></th>}
           </tr>
         </thead>
         <tbody>
@@ -174,6 +179,14 @@ export function TaskTableView({
                       )
                     : "—"}
                 </td>
+                {rowActions && (
+                  <td
+                    className="px-3 py-2 text-right"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {rowActions(task)}
+                  </td>
+                )}
               </tr>
             );
           })}

@@ -46,11 +46,20 @@ const EMPTY_FILTERS: WorkspaceBoardFilters = {
   search: "",
 };
 
+export type WorkspaceTasksView = "active" | "archived";
+
 /**
  * Workspace-level tasks hook — fetches every task across every project/sprint
  * in a workspace and layers client-side filtering on top.
+ *
+ * `view`:
+ *   - "active" (default) — only non-archived tasks.
+ *   - "archived" — only archived tasks. Used by the Archived tab.
  */
-export function useWorkspaceTasks(workspaceId: string | null) {
+export function useWorkspaceTasks(
+  workspaceId: string | null,
+  view: WorkspaceTasksView = "active",
+) {
   const queryClient = useQueryClient();
   const [filters, setFilters] = useState<WorkspaceBoardFilters>(EMPTY_FILTERS);
 
@@ -90,8 +99,12 @@ export function useWorkspaceTasks(workspaceId: string | null) {
   // for the backend's max (1000) so the board doesn't silently truncate at the
   // default 500 in workspaces with a lot of tasks.
   const { data: tasksRaw, isLoading: tasksLoading } = useQuery({
-    queryKey: ["workspaceTasks", workspaceId],
-    queryFn: () => workspaceTasksApi.list(workspaceId!, { limit: 1000 }),
+    queryKey: ["workspaceTasks", workspaceId, view],
+    queryFn: () =>
+      workspaceTasksApi.list(workspaceId!, {
+        limit: 1000,
+        ...(view === "archived" ? { archived_only: true } : {}),
+      }),
     enabled: !!workspaceId,
   });
 
@@ -251,11 +264,11 @@ export function useWorkspaceTasks(workspaceId: string | null) {
     },
     // Optimistic update so the card doesn't snap back before the PATCH resolves.
     onMutate: async ({ taskId, status }) => {
-      await queryClient.cancelQueries({ queryKey: ["workspaceTasks", workspaceId] });
-      const prev = queryClient.getQueryData<SprintTask[]>(["workspaceTasks", workspaceId]);
+      await queryClient.cancelQueries({ queryKey: ["workspaceTasks", workspaceId, view] });
+      const prev = queryClient.getQueryData<SprintTask[]>(["workspaceTasks", workspaceId, view]);
       if (prev) {
         queryClient.setQueryData<SprintTask[]>(
-          ["workspaceTasks", workspaceId],
+          ["workspaceTasks", workspaceId, view],
           prev.map((t) => (t.id === taskId ? { ...t, status } : t)),
         );
       }
@@ -263,7 +276,7 @@ export function useWorkspaceTasks(workspaceId: string | null) {
     },
     onError: (_err, _vars, ctx) => {
       if (ctx?.prev) {
-        queryClient.setQueryData(["workspaceTasks", workspaceId], ctx.prev);
+        queryClient.setQueryData(["workspaceTasks", workspaceId, view], ctx.prev);
       }
       toast.error("Failed to update task status");
     },

@@ -32,6 +32,7 @@ async def list_workspace_tasks(
     labels: list[str] | None = Query(None, description="Filter by label(s) — match if task has any"),
     search: str | None = Query(None, description="Case-insensitive substring match on title/description"),
     include_archived: bool = Query(False),
+    archived_only: bool = Query(False),
     limit: int = Query(500, le=1000, ge=1),
     offset: int = Query(0, ge=0),
     current_user: Developer = Depends(get_current_developer),
@@ -58,6 +59,7 @@ async def list_workspace_tasks(
         labels=labels,
         search=search,
         include_archived=include_archived,
+        archived_only=archived_only,
         limit=limit,
         offset=offset,
     )
