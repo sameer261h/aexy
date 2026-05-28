@@ -18,6 +18,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   task_already_archived: "Task is already archived — nothing to move.",
   task_has_subtasks: "This task has subtasks — pick a subtask strategy first.",
   source_task_not_found: "Task not found.",
+  invalid_target_status: "Picked status doesn't exist on the destination board.",
 };
 
 function extractErrorCode(err: unknown): string | null {
@@ -37,11 +38,15 @@ export function useTaskMove(opts: {
       target_project_id: string;
       source_action: SourceAction;
       subtask_strategy?: SubtaskStrategy;
+      target_status_slug?: string;
     }) =>
       projectTasksApi.moveToProject(opts.sourceProjectId, input.taskId, {
         target_project_id: input.target_project_id,
         source_action: input.source_action,
         subtask_strategy: input.subtask_strategy ?? "block",
+        ...(input.target_status_slug && {
+          target_status_slug: input.target_status_slug,
+        }),
       }),
     onSuccess: (newTask) => {
       invalidateTaskCaches(queryClient, opts.workspaceId);
@@ -59,12 +64,16 @@ export function useTaskMove(opts: {
       target_project_id: string;
       source_action: SourceAction;
       subtask_strategy?: SubtaskStrategy;
+      target_status_slug?: string;
     }): Promise<BulkMoveResponse> =>
       projectTasksApi.bulkMoveToProject(opts.sourceProjectId, {
         task_ids: input.task_ids,
         target_project_id: input.target_project_id,
         source_action: input.source_action,
         subtask_strategy: input.subtask_strategy ?? "block",
+        ...(input.target_status_slug && {
+          target_status_slug: input.target_status_slug,
+        }),
       }),
     onSuccess: (response) => {
       invalidateTaskCaches(queryClient, opts.workspaceId);

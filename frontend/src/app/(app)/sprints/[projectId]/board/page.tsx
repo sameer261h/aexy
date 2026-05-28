@@ -35,6 +35,7 @@ import {
   GitBranch,
   GitPullRequest,
   AlertTriangle,
+  ArchiveRestore,
   Copy,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
@@ -2225,6 +2226,7 @@ function EditTaskModal({ task, onClose, onUpdate, onDelete, isUpdating, sprints,
             sourceProjectId={task.team_id}
             taskIds={[task.id]}
             hasSubtasks={(task.subtasks_count ?? 0) > 0}
+            sourceStatusSlug={task.status}
             onClose={() => setShowMoveProject(false)}
             onMoved={() => {
               // Source is archived/done — close the detail modal so the
@@ -2324,6 +2326,54 @@ export default function ProjectBoardPage({
   // Persisted "Board vs Table" layout per-project so a user's pick on this
   // project doesn't follow them to others.
   const [tasksLayout, setTasksLayout] = useTasksLayout(`board:${projectId}`, "board");
+
+  // Active vs Archived view. URL-synced via `?view=archived` so reloads and
+  // shared links round-trip. Archived view ignores the kanban entirely and
+  // renders a flat table — kanban columns don't fit archived rows.
+  const [boardView, setBoardView] = useState<"active" | "archived">(
+    searchParams.get("view") === "archived" ? "archived" : "active",
+  );
+  useEffect(() => {
+    const current = new URLSearchParams(window.location.search);
+    if (boardView === "archived") {
+      if (current.get("view") !== "archived") {
+        current.set("view", "archived");
+        router.replace(`${pathname}?${current.toString()}`, { scroll: false });
+      }
+    } else if (current.get("view") === "archived") {
+      current.delete("view");
+      const qs = current.toString();
+      router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+    }
+  }, [boardView, pathname, router]);
+
+  // Archived tasks for this project — fetched only when the archive view is
+  // selected. `include_sprint_tasks` ensures archived tasks from inside
+  // sprints are included alongside backlog ones.
+  const { data: archivedTasks = [], isLoading: archivedLoading } = useQuery({
+    queryKey: ["projectTasks", currentWorkspaceId, projectId, { archivedOnly: true }],
+    queryFn: () =>
+      projectTasksApi.list(projectId, {
+        archivedOnly: true,
+        includeSprintTasks: true,
+      }),
+    enabled: boardView === "archived" && !!projectId,
+  });
+
+  const queryClient = useQueryClient();
+  const unarchiveMutation = useMutation({
+    mutationFn: ({ taskId }: { taskId: string }) =>
+      projectTasksApi.unarchive(projectId, taskId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["projectTasks", currentWorkspaceId, projectId],
+      });
+      toast.success("Task restored");
+    },
+    onError: () => {
+      toast.error("Failed to unarchive task");
+    },
+  });
 
   const {
     selectedTasks,
@@ -2478,8 +2528,6 @@ export default function ProjectBoardPage({
   const activeSprint = sprints.find((s) => s.status === "active") || sprints.find((s) => s.status !== "completed");
   const wipLimitsRaw = (activeSprint?.settings as Record<string, unknown> | undefined)?.wip_limits as Record<string, unknown> | undefined;
   const wipLimits: Record<string, number | null> = ((wipLimitsRaw?.limits || wipLimitsRaw) as Record<string, number | null>) || {};
-
-  const queryClient = useQueryClient();
 
   // Get the first selected task's sprint ID for bulk operations
   const getSourceSprintId = useCallback(() => {
@@ -2847,35 +2895,37 @@ export default function ProjectBoardPage({
                 isUpdating={isUpdatingView}
               />
 
-              <div className="flex items-center bg-muted border border-border rounded-lg p-0.5">
-                <button
-                  onClick={() => setViewMode("sprint")}
-                  className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-all",
-                    viewMode === "sprint"
-                      ? "bg-primary-500 text-white"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <Columns3 className="h-4 w-4" />
-                  Sprints
-                </button>
-                <button
-                  onClick={() => setViewMode("status")}
-                  className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-all",
-                    viewMode === "status"
-                      ? "bg-primary-500 text-white"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <LayoutGrid className="h-4 w-4" />
-                  Status
-                </button>
-              </div>
+              {boardView === "active" && (
+                <div className="flex items-center bg-muted border border-border rounded-lg p-0.5">
+                  <button
+                    onClick={() => setViewMode("sprint")}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-all",
+                      viewMode === "sprint"
+                        ? "bg-primary-500 text-white"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    <Columns3 className="h-4 w-4" />
+                    Sprints
+                  </button>
+                  <button
+                    onClick={() => setViewMode("status")}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-all",
+                      viewMode === "status"
+                        ? "bg-primary-500 text-white"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    <LayoutGrid className="h-4 w-4" />
+                    Status
+                  </button>
+                </div>
+              )}
 
               {/* Import Tasks */}
-              {activeSprint && (
+              {boardView === "active" && activeSprint && (
                 <button
                   onClick={() => {
                     setImportTargetSprint({ id: activeSprint.id, name: activeSprint.name });
@@ -2891,23 +2941,27 @@ export default function ProjectBoardPage({
               {/* Columns — links to the project's statuses settings page.
                   Visible to all members; the page itself enforces admin
                   permission for mutations. */}
-              <Link
-                href={`/settings/projects/${projectId}/statuses`}
-                className="flex items-center gap-2 px-3 py-1.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg text-sm transition"
-                title="Edit this project's status columns"
-              >
-                <Settings2 className="h-4 w-4" />
-                Columns
-              </Link>
+              {boardView === "active" && (
+                <Link
+                  href={`/settings/projects/${projectId}/statuses`}
+                  className="flex items-center gap-2 px-3 py-1.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg text-sm transition"
+                  title="Edit this project's status columns"
+                >
+                  <Settings2 className="h-4 w-4" />
+                  Columns
+                </Link>
+              )}
 
               {/* Add Task */}
-              <button
-                onClick={() => setShowAddTask(true)}
-                className="flex items-center gap-2 px-3 py-1.5 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm transition"
-              >
-                <Plus className="h-4 w-4" />
-                Add Task
-              </button>
+              {boardView === "active" && (
+                <button
+                  onClick={() => setShowAddTask(true)}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm transition"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Task
+                </button>
+              )}
 
               {/* Planning Tools Dropdown */}
               <div className="relative">
@@ -3065,35 +3119,65 @@ export default function ProjectBoardPage({
                 <Keyboard className="h-5 w-5" />
               </button>
 
-              {/* Board vs Table layout toggle */}
-              <div className="flex items-center bg-muted border border-border rounded-lg p-0.5">
+              {/* Active vs Archived toggle */}
+              <div className="flex items-center bg-muted border border-border rounded-lg p-0.5 text-sm">
                 <button
-                  onClick={() => setTasksLayout("board")}
-                  title="Board layout"
-                  aria-pressed={tasksLayout === "board"}
+                  onClick={() => setBoardView("active")}
+                  aria-pressed={boardView === "active"}
                   className={cn(
-                    "flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm transition-all",
-                    tasksLayout === "board"
+                    "px-2 py-1.5 rounded-md transition-all",
+                    boardView === "active"
                       ? "bg-background text-foreground shadow-sm"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >
-                  <LayoutGrid className="h-4 w-4" />
+                  Active
                 </button>
                 <button
-                  onClick={() => setTasksLayout("table")}
-                  title="Table layout"
-                  aria-pressed={tasksLayout === "table"}
+                  onClick={() => setBoardView("archived")}
+                  aria-pressed={boardView === "archived"}
                   className={cn(
-                    "flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm transition-all",
-                    tasksLayout === "table"
+                    "px-2 py-1.5 rounded-md transition-all",
+                    boardView === "archived"
                       ? "bg-background text-foreground shadow-sm"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >
-                  <Table2 className="h-4 w-4" />
+                  Archived
                 </button>
               </div>
+
+              {/* Board vs Table layout toggle — hidden in archive view */}
+              {boardView === "active" && (
+                <div className="flex items-center bg-muted border border-border rounded-lg p-0.5">
+                  <button
+                    onClick={() => setTasksLayout("board")}
+                    title="Board layout"
+                    aria-pressed={tasksLayout === "board"}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm transition-all",
+                      tasksLayout === "board"
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <LayoutGrid className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => setTasksLayout("table")}
+                    title="Table layout"
+                    aria-pressed={tasksLayout === "table"}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm transition-all",
+                      tasksLayout === "table"
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <Table2 className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -3111,6 +3195,7 @@ export default function ProjectBoardPage({
                   return { id: e.id, name: epic?.title || e.name };
                 }),
               }}
+              minimal={boardView === "archived"}
             />
           </div>
         </div>
@@ -3330,7 +3415,39 @@ export default function ProjectBoardPage({
 
       {/* Board Content */}
       <main className="flex-1 overflow-hidden">
-        {isLoading ? (
+        {boardView === "archived" ? (
+          <div className="p-4 overflow-y-auto h-full">
+            {archivedLoading ? (
+              <div className="space-y-2">
+                <TaskCardSkeleton />
+                <TaskCardSkeleton />
+                <TaskCardSkeleton />
+              </div>
+            ) : (
+              <TaskTableView
+                tasks={archivedTasks}
+                statuses={projectStatuses}
+                onRowClick={handleTaskClick}
+                showSprintColumn
+                emptyLabel="No archived tasks in this project."
+                rowActions={(task) => (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void unarchiveMutation.mutateAsync({ taskId: task.id })
+                    }
+                    disabled={unarchiveMutation.isPending}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors disabled:opacity-50"
+                    title="Unarchive"
+                  >
+                    <ArchiveRestore className="h-3.5 w-3.5" />
+                    Unarchive
+                  </button>
+                )}
+              />
+            )}
+          </div>
+        ) : isLoading ? (
           <div className="flex gap-4 p-4 overflow-x-auto">
             {[1, 2, 3, 4].map((i) => (
               <div

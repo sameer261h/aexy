@@ -176,6 +176,8 @@ async def list_project_tasks(
     status_filter: str | None = None,
     assignee_id: str | None = None,
     include_sprint_tasks: bool = False,
+    include_archived: bool = False,
+    archived_only: bool = False,
     current_user: Developer = Depends(get_current_developer),
     db: AsyncSession = Depends(get_db),
 ):
@@ -183,13 +185,20 @@ async def list_project_tasks(
 
     By default, only returns tasks without a sprint (backlog items).
     Set include_sprint_tasks=True to get all tasks including those in sprints.
+    Set archived_only=True to list only archived tasks, or include_archived=True
+    to return both active and archived in one list.
     """
     team = await get_team_and_check_permission(team_id, current_user, db, "viewer")
 
     query = select(SprintTask).options(
         selectinload(SprintTask.assignee),
         selectinload(SprintTask.subtasks),
-    ).where(SprintTask.team_id == team_id).where(SprintTask.is_archived == False)
+    ).where(SprintTask.team_id == team_id)
+
+    if archived_only:
+        query = query.where(SprintTask.is_archived.is_(True))
+    elif not include_archived:
+        query = query.where(SprintTask.is_archived.is_(False))
 
     # By default, only get tasks without a sprint
     if not include_sprint_tasks:
@@ -613,6 +622,7 @@ async def move_task_to_project(
             source_action=body.source_action,
             subtask_strategy=body.subtask_strategy,
             actor_id=str(current_user.id),
+            target_status_slug=body.target_status_slug,
         )
     except TaskValidationError as exc:
         raise HTTPException(
@@ -641,6 +651,7 @@ async def bulk_move_tasks_to_project(
         source_action=body.source_action,
         subtask_strategy=body.subtask_strategy,
         actor_id=str(current_user.id),
+        target_status_slug=body.target_status_slug,
     )
     await db.commit()
     return {"results": results}

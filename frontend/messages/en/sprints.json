@@ -198,7 +198,17 @@
       "goToProjects": "Go to Projects",
       "truncatedNotice": "Showing the first {limit} tasks. Use filters to narrow the view.",
       "viewBoard": "Board",
-      "viewTable": "Table"
+      "viewTable": "Table",
+      "viewActive": "Active",
+      "viewArchived": "Archived",
+      "unarchive": "Unarchive",
+      "unarchiveBulk": "Restore selected",
+      "noArchivedTasks": "No archived tasks."
+    },
+
+    "move": {
+      "statusLabel": "Status on destination board",
+      "statusHint": "Status columns differ per project — pick where this task lands."
     }
   }
 }

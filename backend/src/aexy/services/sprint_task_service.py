@@ -297,6 +297,7 @@ class SprintTaskService:
         labels: list[str] | None = None,
         search: str | None = None,
         include_archived: bool = False,
+        archived_only: bool = False,
         limit: int = 500,
         offset: int = 0,
     ) -> list[SprintTask]:
@@ -317,7 +318,9 @@ class SprintTaskService:
             )
         )
 
-        if not include_archived:
+        if archived_only:
+            stmt = stmt.where(SprintTask.is_archived.is_(True))
+        elif not include_archived:
             stmt = stmt.where(SprintTask.is_archived.is_(False))
         if status:
             stmt = stmt.where(SprintTask.status.in_(status))
@@ -970,6 +973,7 @@ class SprintTaskService:
         target_project_id: str,
         new_parent_id: str | None,
         actor_id: str | None,
+        override_status_slug: str | None = None,
     ) -> SprintTask:
         """Create a new task in the target project copying the carry-over
         fields from `source`. Used by `move_to_project` for the parent task
@@ -991,9 +995,12 @@ class SprintTaskService:
         ):
             assignee_id = str(source.assignee_id)
 
-        open_slug = await self._resolve_open_status_slug(
-            str(source.workspace_id), target_project_id
-        )
+        if override_status_slug:
+            open_slug = override_status_slug
+        else:
+            open_slug = await self._resolve_open_status_slug(
+                str(source.workspace_id), target_project_id
+            )
 
         # Prepend a "Moved from <SOURCE-KEY>" breadcrumb so the new task
         # records its origin inline. Visible in every surface that already
@@ -1067,6 +1074,7 @@ class SprintTaskService:
         source_action: str,
         subtask_strategy: str = "block",
         actor_id: str | None = None,
+        target_status_slug: str | None = None,
     ) -> SprintTask:
         """Fork a task into another project in the same workspace.
 
@@ -1096,6 +1104,17 @@ class SprintTaskService:
         if str(target.workspace_id) != str(source.workspace_id):
             raise TaskValidationError("cross_workspace_move")
 
+        if target_status_slug is not None:
+            from aexy.services.task_config_service import TaskConfigService
+
+            target_statuses = await TaskConfigService(
+                self.db
+            ).get_statuses_for_project(
+                str(source.workspace_id), target_project_id
+            )
+            if not any(s.slug == target_status_slug for s in target_statuses):
+                raise TaskValidationError("invalid_target_status")
+
         # Detect live subtasks (one level — recursion deeper is deferred).
         sub_stmt = (
             select(SprintTask)
@@ -1112,6 +1131,7 @@ class SprintTaskService:
             target_project_id=target_project_id,
             new_parent_id=None,
             actor_id=actor_id,
+            override_status_slug=target_status_slug,
         )
 
         if subtasks and subtask_strategy == "cascade":
@@ -1187,6 +1207,7 @@ class SprintTaskService:
         source_action: str,
         subtask_strategy: str = "block",
         actor_id: str | None = None,
+        target_status_slug: str | None = None,
     ) -> list[dict]:
         """Per-task move; never aborts the whole batch on one failure.
 
@@ -1206,6 +1227,7 @@ class SprintTaskService:
                     source_action=source_action,
                     subtask_strategy=subtask_strategy,
                     actor_id=actor_id,
+                    target_status_slug=target_status_slug,
                 )
                 results.append({
                     "task_id": tid,

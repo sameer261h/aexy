@@ -5,6 +5,72 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.39] - 2026-05-28
+
+### Pick destination status when moving a task across projects
+
+Cross-project move (0.8.34) silently re-resolved the new task's
+status to the destination's first "open" status. For sibling boards
+that's fine; for cross-board moves (Product → Tech) the user
+usually has a specific column in mind and the default was wrong.
+
+`MoveToProjectModal` now fetches the destination project's status
+set via the existing `useTaskStatuses` hook once a target is
+picked, and renders a "Status on destination board" dropdown. The
+default selection follows: same slug on the target → same name
+(case-insensitive) → first active status by position. The picked
+slug rides through as `target_status_slug` on both the single and
+bulk move requests; the backend (`SprintTaskService.move_to_project`)
+validates it against `TaskConfigService.get_statuses_for_project`
+before any write, raising `invalid_target_status` (400) on
+mismatch. Bulk move applies one status to every cloned task.
+
+`_clone_task_to_project` now accepts an `override_status_slug` and
+short-circuits the open-status resolver when supplied. Subtasks
+under `cascade` still resolve their own open status — the picker is
+parent-only, which matches the existing "subtasks inherit the
+destination's defaults" semantics.
+
+### Archive view on the project board and workspace All-Tasks tab
+
+`SprintTask.is_archived` and the unarchive endpoint have existed
+since the early sprint module, but no UI ever surfaced archived
+rows. Once a task was archived (manually or as part of a cross-
+project move), it disappeared.
+
+Both `/sprints/[projectId]/board` and the workspace All-Tasks tab
+get an `Active | Archived` segmented toggle (URL-synced via
+`?view=archived` so reloads and link-shares round-trip). In
+archived view:
+
+- The kanban is replaced by `TaskTableView` — archived rows don't
+  belong in status columns, and the table is the right surface for
+  a flat list. The Board/Table layout toggle, Sprints/Status
+  view-mode toggle, Add Task, Columns shortcut, Import button, and
+  priority/labels/epics filters are all hidden (search, assignee,
+  project, sprint stay). On the board page this is driven by a new
+  `minimal` flag on the existing `FilterBar` component.
+- Each row has an Unarchive icon-button; the bulk-action toolbar on
+  the workspace tab gains an "Restore selected" entry that fires
+  parallel unarchives.
+- The workspace endpoint already accepted `include_archived`; both
+  endpoints now also accept `archived_only`. `list_project_tasks`
+  was hard-coded to `is_archived = false` — that's been generalized
+  to the same flag pair. `archived_only` is strict regardless of
+  `include_archived`.
+
+New `useUnarchiveTask` hook wraps `projectTasksApi.unarchive` and
+reuses `invalidateTaskCaches` so the active view re-fetches
+correctly when a row is restored.
+
+### Workload analytics no longer 500s
+
+`POST /analytics/workload` was crashing with
+`AttributeError: 'WorkloadRequest' object has no attribute 'days'`
+because the handler read `request.days` but the schema didn't
+declare the field. The frontend has been sending `days: 30` since
+that endpoint shipped. Added `days: int = 30` to the schema.
+
 ## [0.8.38] - 2026-05-23
 
 ### Visible move-link on cross-project moves
