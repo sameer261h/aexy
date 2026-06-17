@@ -32,7 +32,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var updaterAvailable: Bool {
         #if canImport(Sparkle)
-        return true
+        // Sparkle needs a real bundle (Info.plist with SUFeedURL/SUPublicEDKey).
+        // Under `swift run` there's no bundle, so hide the item instead of letting
+        // the updater fail to start ("Unable to Check For Updates").
+        return Bundle.main.bundleIdentifier != nil
         #else
         return false
         #endif
@@ -43,9 +46,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupStatusItem()
 
         #if canImport(Sparkle)
-        updaterController = SPUStandardUpdaterController(
-            startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
-        )
+        // Only start Sparkle from a real bundle; starting it under `swift run`
+        // (no Info.plist keys) is what produced the "updater failed to start" error.
+        if Bundle.main.bundleIdentifier != nil {
+            updaterController = SPUStandardUpdaterController(
+                startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
+            )
+        }
         #endif
 
         let stored = TrackerConfig.fromKeychain(store: keychain)

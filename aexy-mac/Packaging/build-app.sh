@@ -28,6 +28,10 @@ SPARKLE_FW=".build/$CONFIG/Sparkle.framework"
 if [ -d "$SPARKLE_FW" ]; then
     echo "→ embedding Sparkle.framework"
     cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
+    # SwiftPM links Sparkle via @rpath but doesn't add the standard app rpath, so
+    # dyld can't find Contents/Frameworks at launch. Add it (idempotent).
+    install_name_tool -add_rpath "@executable_path/../Frameworks" \
+        "$APP/Contents/MacOS/Aexy" 2>/dev/null || true
     # Sign frameworks first (inside-out), then the app bundle.
     codesign --force --options runtime --sign - \
         "$APP/Contents/Frameworks/Sparkle.framework"
