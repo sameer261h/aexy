@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-06-17
+
+### Added
+
+#### Aexy Tracker — macOS work tracker + AI auto-attribution
+A local-first macOS menu-bar app that captures lightweight semantic signals (frontmost app, window title, file/git context, dev/browser context, idle state) and uploads them as append-only, idempotent event batches. A downstream Temporal/LLM pipeline enriches, attributes, and narrates the activity so time tracking happens with no manual entry.
+
+- **macOS client** (`aexy-tracker-mac/`, Swift): durable local buffer, batched idempotent upload, OAuth device-code onboarding, Keychain-persisted config, and best-effort nil-safe collectors. Events are removed from the buffer only after the server confirms them.
+- **Ingest API** (`/tracker/*`): device enrollment, partial-success batch ingest (idempotent on `event_id`), heartbeat/config pull, sync high-water mark, and evidence presign. Sliding-window rate limiting (fail-open) and a 30d-past/5m-future timestamp guard. `category`/`attribution` are server-derived only — never accepted from the client.
+- **Enrich/attribute loop** (Temporal + LLM): collapses consecutive samples into spans, categorizes them (productive/neutral/personal), and attributes each to a candidate task — rolled up into inferred `TimeEntry` rows that show in the existing tracking module. Fire-and-forget per-batch dispatch (time-bucketed `workflow_id` coalescing) plus a 5-min safety-net sweep.
+- **Daily journal + proactive insights**: an LLM narrative per developer per day (idempotent `WorkLog` upsert), and deterministic insight signals (context switching, meeting load, after-hours, focus fragmentation) surfaced as deduped in-app notifications.
+- **Q&A + auto-attributed timesheet** (`/tracker/qa`, `/tracker/timesheet`): individual-scoped natural-language Q&A over one's own journals + inferred time, and a day-grouped timesheet view with confidence badges. New `/tracking/tracker` UI page + `useTrackerTimesheet` hook.
+
+### Fixed
+
+- Tracker enrich now locks pending event rows (`FOR UPDATE SKIP LOCKED`) and is backstopped by a partial unique index on inferred `time_entries` dedupe keys, so the per-batch dispatch and the periodic sweep can't double-attribute the same events into duplicate time entries.
+- Tracker enrich tolerates non-numeric LLM `confidence` values instead of crashing (and Temporal-retrying) the whole activity.
+- Tracker timesheet no longer leaks daily journals dated after the requested `end` date (added the missing upper `logged_at` bound).
+- Tracker ingest counts within-batch duplicates so `accepted + duplicates + rejected` reconciles to events sent; insight runs no longer overcount notifications suppressed by recipient preferences.
+- macOS client: onboarding completes when the server mints no enroll token (falls back to the device-code token), the local buffer is capped to bound offline growth, and the sample interval is clamped to the server's accepted `1…600s` range.
+
+## [0.7.2] - 2026-04-16
+
+### Added
+
+#### Workspace-level tasks Kanban (`/sprints?tab=tasks`)
+A single workspace-wide board that aggregates every task across every project, sprint, and backlog into one filterable Kanban — so users don't have to hop between per-project boards to see their work.
+
+- Backend `GET /workspaces/{id}/tasks` + `PATCH .../tasks/{id}/status`, scoped on the existing indexed `workspace_id` column (no joins required). PATCH verifies the task's workspace before mutating, so members can't flip tasks outside their workspace.
+- Status updates route through `SprintTaskService.update_task_status()` so drag-drop changes land in the unified activity log (matches the sprint-scoped endpoint).
+- `useWorkspaceTasks` React Query hook with server-scoped fetch, client-side filtering (search / assignee / priority / project / sprint / epic / labels / story points), and optimistic status updates with rollback.
+- `WorkspaceTasksTab` with dnd-kit Kanban, filter bar, and a per-card team badge so tasks from multiple projects stay distinguishable. Card clicks deep-link to the task's project board via `router.push()`.
+- Epic filter shows real epic titles (via `epicApi.list`) instead of UUIDs.
+- Surfaces a truncation banner when the backend's 1000-task cap is hit, so users know to narrow via filters rather than silently missing rows.
+- Full i18n: new `sprints.workspaceTasks` + `sprints.tabs.allTasks` strings in both `en` and `hi` locales.
+
+### Fixed
+
+- `POST /developers/me/api-tokens` returned a 307 to the trailing-slash variant; browsers drop the `Authorization` header following cross-origin redirects, so cross-subdomain token creation (aexy.io → server.aexy.io) failed. Routes now register without a trailing slash, matching the convention used elsewhere.
+- HTTPS redirects broken behind the prod nginx → backend proxy: uvicorn wasn't trusting `X-Forwarded-Proto`, so `Location` headers came back as `http://` and browsers blocked them as mixed content. Prod compose and Dockerfile now launch uvicorn with `--proxy-headers --forwarded-allow-ips=*` so slash canonicalization, auth flows, and any future redirect keep the original scheme.
+
 ## [0.7.1] - 2026-04-14
 
 ### Added

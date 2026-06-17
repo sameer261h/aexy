@@ -95,6 +95,7 @@ const trackingItems: SidebarItemConfig[] = [
     { href: "/tracking/standups", label: "Standups", icon: MessageSquare },
     { href: "/tracking/blockers", label: "Blockers", icon: Ban },
     { href: "/tracking/time", label: "Time", icon: Clock },
+    { href: "/tracking/tracker", label: "Tracker", icon: Activity },
 ];
 
 const planningItems: SidebarItemConfig[] = [

@@ -1,5 +1,6 @@
 node_modules
 .next
+.build
 .DS_Store
 
 # Auto-generated merged i18n files (run npm run i18n:merge to regenerate)

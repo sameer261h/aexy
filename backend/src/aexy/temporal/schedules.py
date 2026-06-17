@@ -496,6 +496,38 @@ SCHEDULES: list[dict] = [
         "interval": timedelta(weeks=1),
         "queue": TaskQueue.OPERATIONS,
     },
+
+    # === Aexy Tracker enrich/attribute safety-net sweep (every 5 min) ===
+    # Ingest dispatches per-project enrichment in real time; this sweep
+    # catches anything left un-enriched (e.g. a missed dispatch).
+    {
+        "id": "tracker-enrich-sweep",
+        "activity": "enrich_attribute_tracker_events",
+        "input_module": "aexy.temporal.activities.tracker_enrich",
+        "input_class": "EnrichTrackerEventsInput",
+        "interval": timedelta(minutes=5),
+        "queue": TaskQueue.ANALYSIS,
+    },
+
+    # === Aexy Tracker daily journal (refreshes today's narrative every 6h) ===
+    {
+        "id": "tracker-journal-sweep",
+        "activity": "generate_tracker_journal",
+        "input_module": "aexy.temporal.activities.tracker_journal",
+        "input_class": "GenerateTrackerJournalInput",
+        "interval": timedelta(hours=6),
+        "queue": TaskQueue.ANALYSIS,
+    },
+
+    # === Aexy Tracker proactive insights (every 3h) ===
+    {
+        "id": "tracker-insights-sweep",
+        "activity": "detect_tracker_insights",
+        "input_module": "aexy.temporal.activities.tracker_journal",
+        "input_class": "DetectTrackerInsightsInput",
+        "interval": timedelta(hours=3),
+        "queue": TaskQueue.ANALYSIS,
+    },
 ]
 
 
