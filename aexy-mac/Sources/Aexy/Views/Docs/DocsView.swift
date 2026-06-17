@@ -120,21 +120,31 @@ struct DocRow: View {
 struct DocEditorPane: View {
     @ObservedObject var docs: DocsState
     let workspaceId: String?
+    @State private var editedTitle = ""
 
     var body: some View {
         if let id = docs.selectedDocId {
             VStack(spacing: 0) {
-                // Single native header (the embedded web's own header is hidden).
+                // Single native header — editable title (the embedded web's own
+                // title header is hidden in embed mode).
                 HStack(spacing: 8) {
-                    Text(docs.title(for: id)).font(.headline).lineLimit(1)
+                    TextField("Untitled", text: $editedTitle)
+                        .textFieldStyle(.plain)
+                        .font(.headline)
+                        .onSubmit { Task { await docs.renameDoc(id, editedTitle) } }
                     Spacer()
-                    Button {
-                        export(id)
+                    Menu {
+                        Button("Markdown (.md)") { exportMarkdown(id) }
+                        Button("PDF (.pdf)") { exportPDF(id) }
                     } label: { Label("Export", systemImage: "square.and.arrow.up") }
-                    .buttonStyle(.borderless)
-                    .help("Export Markdown")
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
                 }
                 .padding(.horizontal, 12).padding(.vertical, 8)
+                .onAppear { editedTitle = docs.title(for: id) }
+                .onChange(of: docs.selectedDocId) { newId in
+                    editedTitle = docs.title(for: newId ?? "")
+                }
                 Divider()
                 if docs.offline {
                     OfflineDocView(docs: docs, id: id)
@@ -151,7 +161,7 @@ struct DocEditorPane: View {
         }
     }
 
-    private func export(_ id: String) {
+    private func exportMarkdown(_ id: String) {
         guard let out = docs.markdownExport(id) else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = out.name
@@ -159,6 +169,26 @@ struct DocEditorPane: View {
             if resp == .OK, let url = panel.url {
                 try? out.text.data(using: .utf8)?.write(to: url)
             }
+        }
+    }
+
+    private func exportPDF(_ id: String) {
+        guard let detail = docs.cachedDetail(id) else { return }
+        let full = "\(detail.title)\n\n\(detail.contentText ?? "")"
+        let width: CGFloat = 540
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: width, height: 10))
+        textView.string = full
+        textView.font = NSFont.systemFont(ofSize: 12)
+        if let lm = textView.layoutManager, let tc = textView.textContainer {
+            lm.ensureLayout(for: tc)
+            let h = lm.usedRect(for: tc).height + 40
+            textView.frame = NSRect(x: 0, y: 0, width: width, height: h)
+        }
+        let pdf = textView.dataWithPDF(inside: textView.bounds)
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(detail.title).pdf"
+        panel.begin { resp in
+            if resp == .OK, let url = panel.url { try? pdf.write(to: url) }
         }
     }
 }

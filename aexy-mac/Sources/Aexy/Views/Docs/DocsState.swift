@@ -96,6 +96,13 @@ final class DocsState: ObservableObject {
         return "Untitled"
     }
 
+    /// Rename a doc natively (the embedded editor's title header is hidden).
+    func renameDoc(_ id: String, _ title: String) async {
+        guard let client, let ws = workspaceId, !title.isEmpty else { return }
+        _ = try? await client.updateDocumentTitle(workspaceId: ws, documentId: id, title: title)
+        await load()
+    }
+
     func cachedDetail(_ id: String) -> DocDetail? { cache.load(id)?.detail }
     func cachedAt(_ id: String) -> Date? { cache.load(id)?.cachedAt }
 
