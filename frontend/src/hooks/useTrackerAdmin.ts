@@ -88,6 +88,73 @@ export function useWorkspaceTrackerProjects(workspaceId: string | null) {
   });
 }
 
+// --------------------------------------------------------------------------- //
+// Target hours (workspace default / per-project / per-developer overrides).
+// Backend: api/tracker_target.py
+//   GET    /tracker/target-hours?workspace_id=
+//   PUT    /tracker/target-hours?workspace_id=   body { project_id?, developer_id?, target_hours_per_day }
+//   DELETE /tracker/target-hours/{id}?workspace_id=
+// --------------------------------------------------------------------------- //
+export interface TargetHoursOverride {
+  id: string;
+  workspace_id: string;
+  project_id: string | null;
+  developer_id: string | null;
+  target_hours_per_day: number;
+  level: "workspace" | "project" | "developer";
+}
+
+export interface TargetHoursUpsert {
+  project_id?: string | null;
+  developer_id?: string | null;
+  target_hours_per_day: number;
+}
+
+export const DEFAULT_TARGET_HOURS = 8;
+
+export function useTargetHours(workspaceId: string | null) {
+  return useQuery<TargetHoursOverride[]>({
+    queryKey: ["tracker", "target-hours", workspaceId],
+    queryFn: async () => {
+      const res = await api.get("/tracker/target-hours", {
+        params: { workspace_id: workspaceId },
+      });
+      return res.data;
+    },
+    enabled: !!workspaceId,
+    retry: false,
+  });
+}
+
+export function useUpsertTargetHours(workspaceId: string | null) {
+  const qc = useQueryClient();
+  return useMutation<TargetHoursOverride, unknown, TargetHoursUpsert>({
+    mutationFn: async (body) => {
+      const res = await api.put("/tracker/target-hours", body, {
+        params: { workspace_id: workspaceId },
+      });
+      return res.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tracker", "target-hours", workspaceId] });
+    },
+  });
+}
+
+export function useDeleteTargetHours(workspaceId: string | null) {
+  const qc = useQueryClient();
+  return useMutation<void, unknown, string>({
+    mutationFn: async (id) => {
+      await api.delete(`/tracker/target-hours/${id}`, {
+        params: { workspace_id: workspaceId },
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tracker", "target-hours", workspaceId] });
+    },
+  });
+}
+
 // Another developer's timesheet (gated by can_view_tracker_records).
 export function useAdminTimesheet(
   workspaceId: string | null,

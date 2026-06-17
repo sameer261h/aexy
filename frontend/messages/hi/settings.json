@@ -585,7 +585,23 @@
       "noRecordsPermission": "आपको दूसरों के tracker रिकॉर्ड देखने की अनुमति नहीं है।",
       "noActivity": "चयनित अवधि में इस व्यक्ति के लिए कोई ट्रैक की गई गतिविधि नहीं।",
       "adminAccessDenied": "आपके पास Tracker प्रशासन तक पहुँच नहीं है।",
-      "totalTracked": "कुल ट्रैक किया गया"
+      "totalTracked": "कुल ट्रैक किया गया",
+      "tabTargets": "लक्ष्य घंटे",
+      "targetsTitle": "दैनिक लक्ष्य घंटे",
+      "targetsSubtitle": "डेस्कटॉप ऐप में check-in प्रगति के लिए दैनिक लक्ष्य सेट करें। सबसे विशिष्ट प्राथमिकता: developer override, project override को हराता है, जो workspace डिफ़ॉल्ट को हराता है।",
+      "workspaceDefault": "Workspace डिफ़ॉल्ट",
+      "workspaceDefaultHint": "जब तक project या developer override मौजूद न हो, सभी पर लागू होता है।",
+      "projectTargetTitle": "इस project के लिए लक्ष्य घंटे",
+      "projectTargetHint": "इस project में नामांकित सभी के लिए workspace डिफ़ॉल्ट को override करता है। इनहेरिट करने के लिए खाली छोड़ें।",
+      "developerOverrides": "प्रति-developer overrides",
+      "hoursPerDay": "घंटे / दिन",
+      "addOverride": "Override जोड़ें",
+      "remove": "हटाएं",
+      "clear": "साफ़ करें",
+      "targetSaved": "लक्ष्य घंटे सहेजे गए",
+      "noOverrides": "अभी तक कोई प्रति-developer override नहीं।",
+      "projectOverrides": "प्रति-project overrides",
+      "noProjectOverrides": "कोई प्रति-project override नहीं — इन्हें प्रत्येक project के Tracker पेज पर कॉन्फ़िगर करें।"
     }
   }
 }

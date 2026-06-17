@@ -47,6 +47,8 @@ interface CollaborativeEditorProps {
   userName: string;
   userEmail?: string;
   collaborationEnabled?: boolean;
+  /** Chromeless embed (macOS app): hide the title/breadcrumb header. */
+  embedded?: boolean;
 }
 
 export function CollaborativeEditor({
@@ -65,6 +67,7 @@ export function CollaborativeEditor({
   userName,
   userEmail,
   collaborationEnabled = true,
+  embedded = false,
 }: CollaborativeEditorProps) {
   const [localTitle, setLocalTitle] = useState(title);
   const [isSaving, setIsSaving] = useState(false);
@@ -324,7 +327,8 @@ export function CollaborativeEditor({
 
   return (
     <div className="flex flex-col h-full bg-background">
-      {/* Document Header */}
+      {/* Document Header (hidden in chromeless embed — native shows the title) */}
+      {!embedded && (
       <div className="border-b border-border/50 bg-gradient-to-b from-slate-900 to-slate-900/95 backdrop-blur-xl px-4 py-2">
         <div className="flex items-center gap-3">
           {icon && <span className="text-2xl">{icon}</span>}
@@ -365,6 +369,7 @@ export function CollaborativeEditor({
           </div>
         </div>
       </div>
+      )}
 
       {/* Editor Toolbar */}
       {editor && !readOnly && (

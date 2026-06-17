@@ -33,6 +33,30 @@ final class AppState: ObservableObject {
     @Published var sprints: [FlowSprint] = []
     @Published var filterSprintIds: Set<String> = []
 
+    // MARK: - Check-in / target hours
+    @Published var isCheckedIn = false
+    @Published var checkedInSecondsToday: Double = 0
+    @Published var targetHoursPerDay: Double = 8
+    /// "developer" | "project" | "workspace" | "default".
+    @Published var targetSource = "default"
+
+    /// True when a device is enrolled for capture; check-in drives the loop.
+    var captureEnrolled: Bool { config?.projectId?.isEmpty == false }
+
+    /// Set by AppController to start/stop the background capture loop on check-in.
+    var onToggleCapture: ((Bool) -> Void)?
+
+    private var checkInTimer: Timer?
+    private var checkInTicks = 0
+    private var currentCheckInKey = AppState.checkInKey()
+
+    var checkedInHoursToday: Double { checkedInSecondsToday / 3600 }
+    /// 0…1 progress of today's checked-in time toward the daily target.
+    var checkInProgress: Double {
+        let target = targetHoursPerDay * 3600
+        return target > 0 ? min(1, checkedInSecondsToday / target) : 0
+    }
+
     /// Distinct labels present on the current board (for the label filter).
     var availableLabels: [String] {
         Array(Set(board.flatMap { $0.labels ?? [] })).sorted()
@@ -60,6 +84,7 @@ final class AppState: ObservableObject {
         self.config = config
         self.selectedWorkspaceId = UserDefaults.standard.string(forKey: Self.wsKey)
         self.selectedProjectId = UserDefaults.standard.string(forKey: Self.projKey)
+        self.checkedInSecondsToday = UserDefaults.standard.double(forKey: currentCheckInKey)
     }
 
     /// Canonical column fallback when a project has no DB-driven statuses.
@@ -105,6 +130,9 @@ final class AppState: ObservableObject {
     }
 
     func signOut() {
+        persistCheckIn()
+        stopCheckInTimer()
+        isCheckedIn = false
         _ = keychain.delete()
         config = nil
         workspaces = []
@@ -147,6 +175,69 @@ final class AppState: ObservableObject {
             errorMessage = describe(error)
         }
         isLoading = false
+        await loadTargetHours()
+    }
+
+    // MARK: - Check-in / target hours
+
+    private static func checkInKey(_ date: Date = Date()) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return "aexy.checkin.\(f.string(from: date))"
+    }
+
+    /// Fetch the resolved daily target for the current developer in this workspace.
+    func loadTargetHours() async {
+        guard let client, let ws = selectedWorkspaceId else { return }
+        if let t = try? await client.targetHours(workspaceId: ws, projectId: config?.projectId) {
+            targetHoursPerDay = t.targetHoursPerDay
+            targetSource = t.source
+        }
+    }
+
+    func toggleCheckIn() { setCheckedIn(!isCheckedIn) }
+
+    /// Single source of truth for check-in. Drives the capture loop via
+    /// `onToggleCapture` and accumulates today's checked-in time.
+    func setCheckedIn(_ on: Bool) {
+        guard on != isCheckedIn else { return }
+        isCheckedIn = on
+        onToggleCapture?(on)
+        if on {
+            startCheckInTimer()
+        } else {
+            stopCheckInTimer()
+            persistCheckIn()
+        }
+    }
+
+    private func startCheckInTimer() {
+        checkInTimer?.invalidate()
+        checkInTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkInTick() }
+        }
+    }
+
+    private func stopCheckInTimer() {
+        checkInTimer?.invalidate()
+        checkInTimer = nil
+    }
+
+    private func checkInTick() {
+        // Roll over the accumulator at local midnight.
+        let key = Self.checkInKey()
+        if key != currentCheckInKey {
+            currentCheckInKey = key
+            checkedInSecondsToday = 0
+        }
+        checkedInSecondsToday += 1
+        checkInTicks += 1
+        if checkInTicks % 15 == 0 { persistCheckIn() }
+    }
+
+    private func persistCheckIn() {
+        UserDefaults.standard.set(checkedInSecondsToday, forKey: currentCheckInKey)
     }
 
     /// Poll for new notifications and surface them as native macOS notifications.

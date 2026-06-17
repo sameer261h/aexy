@@ -62,6 +62,12 @@ public struct FlowTimeEntries: Codable, Sendable, Equatable {
     public var totalMinutes: Int
 }
 
+public struct FlowTargetHours: Codable, Sendable, Equatable {
+    public var targetHoursPerDay: Double
+    /// "developer" | "project" | "workspace" | "default".
+    public var source: String
+}
+
 public struct FlowNotification: Codable, Sendable, Identifiable, Equatable {
     public let id: String
     public var eventType: String?
@@ -384,6 +390,19 @@ public struct FlowClient: Sendable {
     public func logTime(_ req: LogTimeRequest) async throws -> FlowTimeEntry {
         let body = try Self.encoder.encode(req)
         return try await send(makeRequest("POST", "tracking/time", body: body), as: FlowTimeEntry.self)
+    }
+
+    /// Resolved daily target hours for the current developer (developer →
+    /// project → workspace default → hard fallback). Drives check-in progress.
+    public func targetHours(workspaceId: String, projectId: String?) async throws -> FlowTargetHours {
+        var query = [URLQueryItem(name: "workspace_id", value: workspaceId)]
+        if let pid = projectId, !pid.isEmpty {
+            query.append(URLQueryItem(name: "project_id", value: pid))
+        }
+        return try await send(
+            makeRequest("GET", "tracker/target-hours/resolve", query: query),
+            as: FlowTargetHours.self
+        )
     }
 
     public func myTimeEntries(start: String, end: String) async throws -> FlowTimeEntries {

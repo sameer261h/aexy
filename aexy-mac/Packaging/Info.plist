@@ -10,6 +10,8 @@
     <string>io.aexy.desktop</string>
     <key>CFBundleExecutable</key>
     <string>Aexy</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -26,5 +28,16 @@
     <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <!-- Sparkle self-update. Replace SUFeedURL with the hosted appcast and
+         SUPublicEDKey with the EdDSA public key from `Sparkle/bin/generate_keys`
+         before shipping signed builds; until then updates are inert. -->
+    <key>SUFeedURL</key>
+    <string>https://aexy.io/desktop/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>REPLACE_WITH_SPARKLE_EDDSA_PUBLIC_KEY</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
 </dict>
 </plist>
