@@ -128,7 +128,8 @@ export default function DocumentPage() {
           isLoading={isUpdating}
           autoSave={true}
           autoSaveDelay={2000}
-          breadcrumb={<DocumentBreadcrumb workspaceId={currentWorkspaceId} documentId={documentId} />}
+          embedded={embedded}
+          breadcrumb={embedded ? undefined : <DocumentBreadcrumb workspaceId={currentWorkspaceId} documentId={documentId} />}
           userId={user.id}
           userName={user.name || "Unknown"}
           userEmail={user.email || undefined}
