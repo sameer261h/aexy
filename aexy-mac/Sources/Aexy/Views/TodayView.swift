@@ -3,6 +3,7 @@ import AexyCore
 
 struct TodayView: View {
     @ObservedObject var state: AppState
+    @State private var detailTask: FlowTask?
 
     var body: some View {
         ScrollView {
@@ -39,32 +40,42 @@ struct TodayView: View {
                 } else {
                     Text("My open tasks").font(.headline)
                     ForEach(state.tasks) { task in
-                        TaskRow(task: task) { status in
-                            Task { await state.setStatus(task, status) }
-                        }
+                        TaskRow(
+                            task: task,
+                            onStatus: { status in Task { await state.setStatus(task, status) } },
+                            onOpen: { detailTask = task }
+                        )
                     }
                 }
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .sheet(item: $detailTask) { task in TaskDetailView(state: state, task: task) }
     }
 }
 
 struct TaskRow: View {
     let task: FlowTask
     let onStatus: (String) -> Void
+    var onOpen: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(task.title).fontWeight(.medium)
-                HStack(spacing: 6) {
-                    if let s = task.status { Text(s).font(.caption).foregroundStyle(.secondary) }
-                    if let p = task.priority { Text(p).font(.caption).foregroundStyle(.secondary) }
+            // Tapping the task (anywhere but the Status menu) opens detail.
+            Button(action: { onOpen?() }) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(task.title).fontWeight(.medium)
+                    HStack(spacing: 6) {
+                        if let s = task.status { Text(s).font(.caption).foregroundStyle(.secondary) }
+                        if let p = task.priority { Text(p).font(.caption).foregroundStyle(.secondary) }
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            Spacer()
+            .buttonStyle(.plain)
+
             Menu("Status") {
                 ForEach(["todo", "in_progress", "done"], id: \.self) { s in
                     Button(s) { onStatus(s) }

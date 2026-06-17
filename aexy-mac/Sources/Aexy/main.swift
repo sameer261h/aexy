@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 import AexyCore
 
 // Menu-bar entry point for the Aexy companion app. Runs as an accessory; the
@@ -17,6 +18,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private let keychain = KeychainTokenStore()
     private var appState: AppState?
     private var mainWindow: NSWindow?
+    private var notifTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -26,6 +28,12 @@ final class AppController: NSObject, NSApplicationDelegate {
         let state = AppState(apiBaseURL: apiBaseURL(), keychain: keychain, config: stored)
         state.onCaptureReady = { [weak self] cfg in self?.startCapture(with: cfg) }
         appState = state
+
+        // Native notifications: request auth + poll every 60s (no-op when signed out).
+        NativeNotifier.requestAuthorization()
+        notifTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.appState?.pollNotificationsTick() }
+        }
 
         if let cfg = stored, let pid = cfg.projectId, !pid.isEmpty {
             // Previously enrolled → resume background capture.

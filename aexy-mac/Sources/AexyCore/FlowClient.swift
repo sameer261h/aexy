@@ -72,6 +72,87 @@ public struct FlowNotification: Codable, Sendable, Identifiable, Equatable {
     public var createdAt: String?
 }
 
+public struct FlowSprint: Codable, Sendable, Identifiable, Equatable {
+    public let id: String
+    public let name: String
+    public var status: String?
+}
+
+public struct FlowStandup: Codable, Sendable, Identifiable, Equatable {
+    public let id: String
+    public var standupDate: String?
+    public var yesterdaySummary: String?
+    public var todayPlan: String?
+    public var blockersSummary: String?
+    public var submittedAt: String?
+}
+
+struct FlowStandupsResponse: Codable { let standups: [FlowStandup] }
+struct FlowQAResponse: Codable { let answer: String }
+
+public struct FlowMember: Codable, Sendable, Identifiable, Equatable {
+    public var id: String { developerId }
+    public let developerId: String
+    public var developerName: String?
+    public var developerEmail: String?
+    public var developerAvatarUrl: String?
+    public var role: String?
+    public var status: String?
+
+    public var displayName: String { developerName ?? developerEmail ?? developerId }
+}
+
+// MARK: Docs
+
+public struct DocSpace: Codable, Sendable, Identifiable, Equatable {
+    public let id: String
+    public let name: String
+    public var icon: String?
+    public var color: String?
+    public var isDefault: Bool?
+}
+
+public struct DocNode: Codable, Sendable, Identifiable, Equatable {
+    public let id: String
+    public let title: String
+    public var icon: String?
+    public var parentId: String?
+    public var spaceId: String?
+    public var position: Int?
+    public var visibility: String?
+    public var isFavorited: Bool?
+    public var hasChildren: Bool?
+    public var children: [DocNode]?
+}
+
+public struct DocListItem: Codable, Sendable, Identifiable, Equatable {
+    public let id: String
+    public let title: String
+    public var icon: String?
+    public var parentId: String?
+}
+
+/// Document detail for native offline read — the rich `content` (TipTap JSON)
+/// is intentionally not modelled; the embedded web editor renders it online and
+/// `contentText` is cached for offline viewing.
+public struct DocDetail: Codable, Sendable, Identifiable, Equatable {
+    public let id: String
+    public let title: String
+    public var icon: String?
+    public var contentText: String?
+    public var visibility: String?
+    public var spaceId: String?
+    public var updatedAt: String?
+
+    public init(
+        id: String, title: String, icon: String? = nil, contentText: String? = nil,
+        visibility: String? = nil, spaceId: String? = nil, updatedAt: String? = nil
+    ) {
+        self.id = id; self.title = title; self.icon = icon; self.contentText = contentText
+        self.visibility = visibility; self.spaceId = spaceId; self.updatedAt = updatedAt
+    }
+}
+
 public struct FlowProject: Codable, Sendable, Identifiable, Equatable {
     public let id: String
     public let name: String
@@ -322,6 +403,46 @@ public struct FlowClient: Sendable {
         try await sendNoContent(makeRequest("POST", "tracking/standups", body: body))
     }
 
+    public func myStandups() async throws -> [FlowStandup] {
+        let q = [URLQueryItem(name: "limit", value: "30")]
+        let resp = try await send(
+            makeRequest("GET", "tracking/standups/me", query: q), as: FlowStandupsResponse.self
+        )
+        return resp.standups
+    }
+
+    /// AI-drafted standup from the day's tracked work (reuses /tracker/qa).
+    public func draftStandup() async throws -> String {
+        let body = try Self.encoder.encode(["question": "Draft my standup", "days": "1"])
+        let resp = try await send(makeRequest("POST", "tracker/qa", body: body), as: FlowQAResponse.self)
+        return resp.answer
+    }
+
+    // MARK: sprints / task create / unassign
+
+    public func sprints(workspaceId: String, teamId: String) async throws -> [FlowSprint] {
+        try await send(
+            makeRequest("GET", "workspaces/\(workspaceId)/teams/\(teamId)/sprints"), as: [FlowSprint].self
+        )
+    }
+
+    @discardableResult
+    public func createTask(teamId: String, title: String, status: String) async throws -> FlowTask {
+        struct Create: Codable { let title: String; let status: String }
+        let body = try Self.encoder.encode(Create(title: title, status: status))
+        return try await send(makeRequest("POST", "teams/\(teamId)/tasks", body: body), as: FlowTask.self)
+    }
+
+    /// Explicit unassign — sends literal `{"assignee_id":null}` (the omit-nil
+    /// encoder can't emit null). Sprint-scoped if a sprint id is given, else team.
+    public func unassignTask(sprintId: String?, teamId: String?, taskId: String) async throws {
+        let path: String
+        if let sid = sprintId { path = "sprints/\(sid)/tasks/\(taskId)" }
+        else if let tid = teamId { path = "teams/\(tid)/tasks/\(taskId)" }
+        else { return }
+        try await sendNoContent(makeRequest("PATCH", path, body: Data("{\"assignee_id\":null}".utf8)))
+    }
+
     // MARK: notifications
 
     public func notifications(page: Int = 1, unreadOnly: Bool = false) async throws -> FlowNotifications {
@@ -342,6 +463,69 @@ public struct FlowClient: Sendable {
     }
 
     // MARK: projects / board
+
+    public func workspaceMembers(workspaceId: String) async throws -> [FlowMember] {
+        try await send(makeRequest("GET", "workspaces/\(workspaceId)/members"), as: [FlowMember].self)
+    }
+
+    // MARK: docs
+
+    public func docSpaces(workspaceId: String) async throws -> [DocSpace] {
+        try await send(makeRequest("GET", "workspaces/\(workspaceId)/spaces"), as: [DocSpace].self)
+    }
+
+    public func docTree(workspaceId: String, spaceId: String? = nil) async throws -> [DocNode] {
+        var query: [URLQueryItem] = []
+        if let spaceId { query.append(URLQueryItem(name: "space_id", value: spaceId)) }
+        return try await send(
+            makeRequest("GET", "workspaces/\(workspaceId)/documents/tree", query: query), as: [DocNode].self
+        )
+    }
+
+    public func docFavorites(workspaceId: String) async throws -> [DocNode] {
+        try await send(
+            makeRequest("GET", "workspaces/\(workspaceId)/documents/favorites"), as: [DocNode].self
+        )
+    }
+
+    public func document(workspaceId: String, documentId: String) async throws -> DocDetail {
+        try await send(
+            makeRequest("GET", "workspaces/\(workspaceId)/documents/\(documentId)"), as: DocDetail.self
+        )
+    }
+
+    public func searchDocuments(workspaceId: String, query: String) async throws -> [DocListItem] {
+        let q = [URLQueryItem(name: "search", value: query), URLQueryItem(name: "limit", value: "20")]
+        return try await send(
+            makeRequest("GET", "workspaces/\(workspaceId)/documents", query: q), as: [DocListItem].self
+        )
+    }
+
+    @discardableResult
+    public func createDocument(
+        workspaceId: String, title: String, spaceId: String? = nil, parentId: String? = nil
+    ) async throws -> DocListItem {
+        struct Create: Codable { let title: String; let spaceId: String?; let parentId: String? }
+        let body = try Self.encoder.encode(Create(title: title, spaceId: spaceId, parentId: parentId))
+        return try await send(
+            makeRequest("POST", "workspaces/\(workspaceId)/documents", body: body), as: DocListItem.self
+        )
+    }
+
+    public func toggleDocFavorite(workspaceId: String, documentId: String) async throws {
+        try await sendNoContent(
+            makeRequest("POST", "workspaces/\(workspaceId)/documents/\(documentId)/favorite")
+        )
+    }
+
+    @discardableResult
+    public func updateDocumentTitle(workspaceId: String, documentId: String, title: String) async throws -> DocListItem {
+        let body = try Self.encoder.encode(["title": title])
+        return try await send(
+            makeRequest("PATCH", "workspaces/\(workspaceId)/documents/\(documentId)", body: body),
+            as: DocListItem.self
+        )
+    }
 
     public func projects(workspaceId: String) async throws -> [FlowProject] {
         let resp = try await send(
@@ -395,6 +579,31 @@ public struct FlowClient: Sendable {
         let body = try Self.encoder.encode(fields)
         return try await send(
             makeRequest("PATCH", "sprints/\(sprintId)/tasks/\(taskId)", body: body), as: FlowTask.self
+        )
+    }
+
+    // MARK: task detail / comments (project/team-scoped — for backlog tasks)
+
+    public func projectTaskActivities(teamId: String, taskId: String) async throws -> [FlowActivity] {
+        let resp = try await send(
+            makeRequest("GET", "teams/\(teamId)/tasks/\(taskId)/activities"),
+            as: FlowActivitiesResponse.self
+        )
+        return resp.activities
+    }
+
+    public func addProjectTaskComment(teamId: String, taskId: String, text: String) async throws {
+        let body = try Self.encoder.encode(["comment": text])
+        try await sendNoContent(
+            makeRequest("POST", "teams/\(teamId)/tasks/\(taskId)/comments", body: body)
+        )
+    }
+
+    @discardableResult
+    public func updateProjectTask(teamId: String, taskId: String, fields: TaskUpdateFields) async throws -> FlowTask {
+        let body = try Self.encoder.encode(fields)
+        return try await send(
+            makeRequest("PATCH", "teams/\(teamId)/tasks/\(taskId)", body: body), as: FlowTask.self
         )
     }
 }
