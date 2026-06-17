@@ -370,6 +370,9 @@ class Settings(BaseSettings):
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
     frontend_url: str = "http://localhost:3000"
+    # Extra origins (comma-separated, e.g. "https://aexy.io,https://app.aexy.io")
+    # allowed as post-OAuth redirect targets beyond frontend_url + loopback.
+    oauth_extra_redirect_hosts: str = ""
     backend_url: str = "http://localhost:8000"
     mailagent_url: str = "http://localhost:8001"
     # HMAC shared secret between backend and mailagent. Backend signs every

@@ -1,4 +1,4 @@
-"""Aexy Tracker — Q&A over a developer's own work history (AEXY_TRACKER.md §5.5).
+"""Aexy Tracker — Q&A over a developer's own work history (docs/aexy-tracker.md §5.5).
 
 A synchronous, individual-scoped endpoint: compile the developer's recent
 tracker artifacts (daily journals + inferred time entries) into context and let
@@ -11,21 +11,26 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from aexy.api.developers import get_current_developer
 from aexy.core.database import get_db
 from aexy.models.developer import Developer
+from aexy.models.sprint import SprintTask
 from aexy.models.tracking import TimeEntry, TrackingSource, WorkLog
 from aexy.schemas.tracker_ingest import (
+    TrackerCandidateTask,
+    TrackerEntryUpdateRequest,
+    TrackerEntryUpdateResponse,
     TrackerQARequest,
     TrackerQAResponse,
     TrackerTimesheetDay,
     TrackerTimesheetEntry,
     TrackerTimesheetResponse,
 )
+from aexy.temporal.activities.tracker_enrich import _candidate_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +174,11 @@ async def tracker_timesheet(
                     TimeEntry.source == TrackingSource.INFERRED.value,
                     TimeEntry.entry_date >= start_date,
                     TimeEntry.entry_date <= end_date,
+                    # Dismissed entries are rejected by the user — hide them.
+                    or_(
+                        TimeEntry.attribution_status.is_(None),
+                        TimeEntry.attribution_status != "dismissed",
+                    ),
                 )
                 .order_by(TimeEntry.entry_date, TimeEntry.started_at)
             )
@@ -227,6 +237,7 @@ async def tracker_timesheet(
                         task_title=e.task.title if e.task else None,
                         description=e.description,
                         confidence_score=e.confidence_score,
+                        attribution_status=e.attribution_status,
                     )
                     for e in day_entries
                 ],
@@ -235,4 +246,82 @@ async def tracker_timesheet(
 
     return TrackerTimesheetResponse(
         days=days, total_minutes=total_minutes, days_count=len(days)
+    )
+
+
+def _review_outcome(
+    action: str, task_id: str | None, valid_task_ids: set[str]
+) -> tuple[str | None, str]:
+    """Pure decision for a review action → (new_task_id_or_None, attribution_status).
+
+    ``new_task_id`` is None when the action leaves the task unchanged (confirm /
+    dismiss). Raises HTTPException(400) for an invalid ``correct``.
+    """
+    if action == "confirm":
+        return None, "confirmed"
+    if action == "dismiss":
+        return None, "dismissed"
+    # correct — reassign to one of the caller's own tasks.
+    if not task_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "task_id is required to correct an entry"
+        )
+    if task_id not in valid_task_ids:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "task_id is not an assignable task"
+        )
+    return task_id, "corrected"
+
+
+@router.get("/candidate-tasks", response_model=list[TrackerCandidateTask])
+async def tracker_candidate_tasks(
+    developer: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """The caller's open assigned tasks — the choices for correcting attribution."""
+    tasks = await _candidate_tasks(db, developer.id)
+    return [TrackerCandidateTask(**t) for t in tasks]
+
+
+@router.patch(
+    "/timesheet/entries/{entry_id}", response_model=TrackerEntryUpdateResponse
+)
+async def update_tracker_entry(
+    entry_id: str,
+    data: TrackerEntryUpdateRequest,
+    developer: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Review an AI-inferred entry: confirm / correct (reassign task) / dismiss.
+
+    Individual-scoped — only the caller's own inferred entries are mutable.
+    """
+    entry = await db.get(TimeEntry, entry_id)
+    if entry is None or entry.developer_id != developer.id or not entry.is_inferred:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Inferred entry not found")
+
+    # Candidate tasks only needed (and only queried) for a "correct" reassignment.
+    valid_ids: set[str] = set()
+    if data.action == "correct":
+        valid_ids = {t["id"] for t in await _candidate_tasks(db, developer.id)}
+
+    new_task_id, new_status = _review_outcome(data.action, data.task_id, valid_ids)
+    if new_task_id is not None:
+        entry.task_id = new_task_id
+    entry.attribution_status = new_status
+
+    await db.commit()
+
+    # Resolve the (possibly new) task title without relying on lazy loading.
+    task_title = None
+    if entry.task_id:
+        task_title = await db.scalar(
+            select(SprintTask.title).where(SprintTask.id == entry.task_id)
+        )
+
+    return TrackerEntryUpdateResponse(
+        id=entry.id,
+        task_id=entry.task_id,
+        task_title=task_title,
+        attribution_status=entry.attribution_status,
     )

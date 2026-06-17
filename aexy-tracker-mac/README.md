@@ -4,8 +4,8 @@ The macOS capture client for Aexy Tracker — a lightweight menu-bar app that
 samples semantic work signals and uploads them to the Aexy cloud Tracker module,
 where the AI loop turns them into attributed time, journals, and insights.
 
-See the product spec (`AEXY_TRACKER.md`) and the ingest contract
-(`AEXY_TRACKER_INGEST_API.md`) at the repo root.
+See the product spec (`docs/aexy-tracker.md`) and the ingest contract
+(`docs/api/tracker-ingest.md`) at the repo root.
 
 ## Layout
 
@@ -36,18 +36,32 @@ swift run AexyTracker         # launch the menu-bar app
 
 ## Configure (scaffold)
 
-Capture starts when these env vars are present (a shipping build replaces this
-with the OAuth device-code onboarding + Keychain flow, AEXY_TRACKER.md §6):
+On launch the app resolves credentials in this order:
+
+1. **Keychain** — a credential from a prior sign-in.
+2. **`AEXY_TRACKER_TOKEN`** — if set (headless/dev), the app enrolls with that
+   token, persists to the Keychain, then starts capture.
+3. **Browser sign-in** — otherwise it waits; pick **Sign in → GitHub / Google /
+   Microsoft** from the menu. The browser opens to the backend login; after you
+   authenticate, the token is captured on a `127.0.0.1` loopback listener,
+   exchanged for a long-lived `aexy_…` API token, and the device enrolls. No env
+   vars needed. (See `docs/aexy-tracker.md` → "Browser sign-in".)
+
+For headless/dev runs use path 2 with a developer JWT (no browser):
 
 ```bash
-export AEXY_API_URL="https://aexy.io/api/v1"
-export AEXY_TRACKER_TOKEN="trk_…"     # scoped device token
-export AEXY_SAMPLE_INTERVAL=60         # optional
+export AEXY_API_URL="http://localhost:8000/api/v1"
+# a developer JWT — e.g. docker exec aexy-backend python scripts/generate_test_token.py --first
+export AEXY_TRACKER_TOKEN="eyJ…"
+export AEXY_PROJECT_ID="<project-uuid>"   # optional; else the first Tracker-enabled project
+export AEXY_SAMPLE_INTERVAL=60             # optional
 swift run AexyTracker
 ```
 
-The menu-bar item shows capture state (`●` running, `❚❚` paused, `⚠︎` not
-configured) and offers Pause/Resume, Flush now, and Quit.
+The project must have the Tracker module enabled (`settings.tracker_enabled = true`)
+and the token's developer must be a member, or enrollment fails. The menu-bar item
+shows capture state (`●` running, `❚❚` paused, `…` enrolling, `⚠︎` failed/not
+configured) and offers Pause/Resume, Flush now, Sign out, and Quit.
 
 ## Scope of this scaffold
 

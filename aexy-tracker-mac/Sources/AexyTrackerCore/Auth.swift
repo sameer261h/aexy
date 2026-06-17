@@ -6,7 +6,7 @@ import FoundationNetworking
 #endif
 
 // OAuth 2.0 Device Authorization Grant + Keychain token storage for onboarding
-// (AEXY_TRACKER.md §6, AEXY_TRACKER_INGEST_API.md §2). In a shipping build the
+// (docs/aexy-tracker.md §6, docs/api/tracker-ingest.md §2). In a shipping build the
 // scoped device token is obtained by signing in at aexy.io and is stored in the
 // macOS Keychain so capture can resume without re-auth.
 //
@@ -147,8 +147,8 @@ public struct DeviceCodeConfig: Sendable {
         self.scope = scope
     }
 
-    /// Standard aexy.io OAuth surface (EXTERNAL dependency — must be added
-    /// server-side; see report). Base e.g. https://aexy.io
+    /// Standard aexy OAuth surface (EXTERNAL dependency — must be added
+    /// server-side; see report). Base e.g. https://server.aexy.io
     public static func aexy(authBase: URL) -> DeviceCodeConfig {
         DeviceCodeConfig(
             deviceCodeURL: authBase.appendingPathComponent("oauth/device/code"),

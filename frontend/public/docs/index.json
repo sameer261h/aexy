@@ -37,6 +37,12 @@
           "slug": "api/overview",
           "path": "api/overview.md",
           "description": "Base URL, live Swagger/ReDoc, pointers to the cross-cutting API docs"
+        },
+        {
+          "title": "Tracker ingest API",
+          "slug": "api/tracker-ingest",
+          "path": "api/tracker-ingest.md",
+          "description": "Aexy Tracker device enrollment + idempotent event ingest contract"
         }
       ]
     },
@@ -189,6 +195,12 @@
           "slug": "tracking",
           "path": "tracking.md",
           "description": "Standups, time entries, blockers, entity activity"
+        },
+        {
+          "title": "Aexy Tracker",
+          "slug": "aexy-tracker",
+          "path": "aexy-tracker.md",
+          "description": "macOS work tracker + AI auto-attribution (timesheet, journals, insights)"
         }
       ]
     },
@@ -350,6 +362,12 @@
       "description": "Base URL, live Swagger/ReDoc, pointers to the cross-cutting API docs",
       "path": "api/overview.md"
     },
+    "api/tracker-ingest": {
+      "title": "Tracker ingest API",
+      "section": "API Reference",
+      "description": "Aexy Tracker device enrollment + idempotent event ingest contract",
+      "path": "api/tracker-ingest.md"
+    },
     "guides/getting-started": {
       "title": "Getting Started",
       "section": "Getting started & operations",
@@ -481,6 +499,12 @@
       "section": "Modules — Work & planning",
       "description": "Standups, time entries, blockers, entity activity",
       "path": "tracking.md"
+    },
+    "aexy-tracker": {
+      "title": "Aexy Tracker",
+      "section": "Modules — Work & planning",
+      "description": "macOS work tracker + AI auto-attribution (timesheet, journals, insights)",
+      "path": "aexy-tracker.md"
     },
     "reviews-and-people": {
       "title": "Reviews, hiring & learning",
@@ -623,14 +647,24 @@
         "slug": "architecture/llm-integration"
       },
       "next": {
+        "title": "Tracker ingest API",
+        "slug": "api/tracker-ingest"
+      }
+    },
+    "api/tracker-ingest": {
+      "prev": {
+        "title": "API Overview",
+        "slug": "api/overview"
+      },
+      "next": {
         "title": "Getting Started",
         "slug": "guides/getting-started"
       }
     },
     "guides/getting-started": {
       "prev": {
-        "title": "API Overview",
-        "slug": "api/overview"
+        "title": "Tracker ingest API",
+        "slug": "api/tracker-ingest"
       },
       "next": {
         "title": "Deployment",
@@ -843,14 +877,24 @@
         "slug": "booking"
       },
       "next": {
+        "title": "Aexy Tracker",
+        "slug": "aexy-tracker"
+      }
+    },
+    "aexy-tracker": {
+      "prev": {
+        "title": "Tracking",
+        "slug": "tracking"
+      },
+      "next": {
         "title": "Reviews, hiring & learning",
         "slug": "reviews-and-people"
       }
     },
     "reviews-and-people": {
       "prev": {
-        "title": "Tracking",
-        "slug": "tracking"
+        "title": "Aexy Tracker",
+        "slug": "aexy-tracker"
       },
       "next": {
         "title": "Compliance",

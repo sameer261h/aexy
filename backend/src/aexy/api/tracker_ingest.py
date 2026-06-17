@@ -2,10 +2,10 @@
 
 The macOS Tracker client uploads append-only, idempotent event batches; the
 server stores them durably and a downstream Temporal/LangGraph pipeline enriches
-and attributes them (AEXY_TRACKER.md §5). This router covers ingest only:
+and attributes them (docs/aexy-tracker.md §5). This router covers ingest only:
 enrollment, batch ingest, evidence presign, heartbeat (config pull), and sync.
 
-Contract: AEXY_TRACKER_INGEST_API.md.
+Contract: docs/api/tracker-ingest.md.
 """
 
 import logging
@@ -49,7 +49,7 @@ SUPPORTED_SCHEMA_PREFIXES = ("1.",)
 _TS_PAST_LIMIT = timedelta(days=30)
 _TS_FUTURE_LIMIT = timedelta(minutes=5)
 
-# Rate limits (sliding window, fail-open) — see AEXY_TRACKER_INGEST_API.md §6.
+# Rate limits (sliding window, fail-open) — see docs/api/tracker-ingest.md §6.
 _RL_WINDOW_S = 60
 _RL_BATCH_PER_DEVICE = 30
 _RL_BATCH_PER_PROJECT = 600

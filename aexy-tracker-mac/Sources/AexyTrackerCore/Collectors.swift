@@ -7,7 +7,7 @@ import AppKit
 import CoreGraphics
 #endif
 
-// Semantic-signal collectors (AEXY_TRACKER.md §2). Metadata-first: frontmost app,
+// Semantic-signal collectors (docs/aexy-tracker.md §2). Metadata-first: frontmost app,
 // window title (best-effort via Accessibility), idle state, plus the richer
 // attribution signals — file/git context, dev context (terminal/editor), and
 // browser context. Everything here is best-effort and nil-safe: missing
@@ -18,7 +18,7 @@ public struct SampleContext: Sendable {
     public var activeApp: ActiveApp
     public var idleSeconds: Double
     public var system: SystemContext
-    // Richer semantic signals (AEXY_TRACKER.md §2; ingest schema §4). All optional —
+    // Richer semantic signals (docs/aexy-tracker.md §2; ingest schema §4). All optional —
     // populated best-effort, nil when the source/permission is unavailable.
     public var fileContext: FileContext?
     public var devContext: DevContext?
@@ -68,7 +68,7 @@ public struct MacActivityCollector: ActivityCollector {
             network: nil
         )
 
-        // Best-effort enrichment (AEXY_TRACKER.md §2). The focused document path
+        // Best-effort enrichment (docs/aexy-tracker.md §2). The focused document path
         // anchors file/git context; the window title feeds dev/browser parsing.
         let docPath = focusedDocumentPath()
         let fileContext = GitFileCollector.fileContext(forDocumentAt: docPath)
@@ -167,7 +167,7 @@ public struct MacActivityCollector: ActivityCollector {
     #endif
 }
 
-// MARK: - File / git context (AEXY_TRACKER.md §2: "Document / file context")
+// MARK: - File / git context (docs/aexy-tracker.md §2: "Document / file context")
 
 /// Derives file + git context (path / repo / branch) for a focused document.
 /// All filesystem IO is guarded; any failure degrades to a partial or nil result.
@@ -278,7 +278,7 @@ public enum GitFileCollector {
     }
 }
 
-// MARK: - Dev context (AEXY_TRACKER.md §2: "Dev context")
+// MARK: - Dev context (docs/aexy-tracker.md §2: "Dev context")
 
 /// Derives terminal cwd / last command (terminals) or editor file (editors) from
 /// the frontmost app's window title + focused document. Best-effort and nil-safe:
@@ -403,7 +403,7 @@ public enum DevContextCollector {
     }
 }
 
-// MARK: - Browser context (AEXY_TRACKER.md §2: "Browser context")
+// MARK: - Browser context (docs/aexy-tracker.md §2: "Browser context")
 
 /// Reads the active tab URL + title from the frontmost browser via AppleScript.
 /// Requires the macOS Automation permission at runtime; any error (no permission,

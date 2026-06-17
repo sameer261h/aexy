@@ -5,7 +5,7 @@ import FoundationNetworking
 #endif
 
 // Authenticated, batched, idempotent upload to POST /tracker/events:batch
-// (AEXY_TRACKER_INGEST_API.md §3.1). Safe to retry: events are removed from the
+// (docs/api/tracker-ingest.md §3.1). Safe to retry: events are removed from the
 // buffer only after the server confirms them (accepted + duplicates + rejected).
 
 public enum SyncError: Error, Sendable {

@@ -1,7 +1,7 @@
 import XCTest
 @testable import AexyTrackerCore
 
-// Tests for the onboarding/auth pieces (AEXY_TRACKER.md §6): Keychain round-trip
+// Tests for the onboarding/auth pieces (docs/aexy-tracker.md §6): Keychain round-trip
 // and Codable decoding of the device-code + token responses.
 //
 // NOTE: `swift test` cannot run here (no bundled XCTest); these must COMPILE and

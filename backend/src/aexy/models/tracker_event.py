@@ -1,6 +1,6 @@
 """Aexy Tracker — ingest models.
 
-The macOS Tracker client (see AEXY_TRACKER.md / AEXY_TRACKER_INGEST_API.md)
+The macOS Tracker client (see docs/aexy-tracker.md / docs/api/tracker-ingest.md)
 captures lightweight semantic signals and uploads them as append-only,
 idempotent event records. ``category`` and ``attribution`` are *server-derived*
 by the downstream AI loop and are never accepted from the client.
@@ -121,7 +121,7 @@ class TrackerEvent(Base):
     system: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     evidence_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
-    # --- server-derived by the AI loop (AEXY_TRACKER.md §5) ---
+    # --- server-derived by the AI loop (docs/aexy-tracker.md §5) ---
     category: Mapped[str | None] = mapped_column(String(32), nullable=True)
     attribution: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     enriched_at: Mapped[datetime | None] = mapped_column(

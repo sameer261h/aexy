@@ -4,7 +4,7 @@ import Foundation
 import FoundationNetworking
 #endif
 
-// Orchestrates first-run onboarding (AEXY_TRACKER.md §6):
+// Orchestrates first-run onboarding (docs/aexy-tracker.md §6):
 //   1. OAuth 2.0 device-code grant → scoped device token.
 //   2. GET /tracker/projects → list Tracker-enabled projects, user picks one.
 //   3. POST /tracker/devices:enroll → bind device to project, persist to Keychain.
@@ -12,11 +12,11 @@ import FoundationNetworking
 //
 // NOTE: the device-code OAuth endpoints are an EXTERNAL aexy.io dependency that
 // need not exist for this to build (see Auth.swift). The /tracker/projects and
-// /tracker/devices:enroll endpoints are defined in AEXY_TRACKER_INGEST_API.md §3.
+// /tracker/devices:enroll endpoints are defined in docs/api/tracker-ingest.md §3.
 
 // MARK: - Wire models
 
-/// One row of `GET /tracker/projects` (AEXY_TRACKER_INGEST_API.md §3).
+/// One row of `GET /tracker/projects` (docs/api/tracker-ingest.md §3).
 public struct TrackerProject: Codable, Sendable, Equatable, Identifiable {
     public var id: String
     public var name: String
@@ -99,24 +99,74 @@ public struct Onboarding: Sendable {
         self.presentCode = presentCode
     }
 
-    /// Run the full flow and return a persisted, ready-to-use config.
+    /// Run the full flow (device-code grant → enroll) and return a persisted,
+    /// ready-to-use config.
     public func run() async throws -> TrackerConfig {
         // 1. Device-code grant.
         let code = try await authenticator.requestCode()
         presentCode(code)
         let token = try await authenticator.poll(for: code)
+        // 2-4. List projects, enroll, persist.
+        return try await completeEnrollment(token: token)
+    }
 
-        // 2. List Tracker-enabled projects and pick one.
+    /// Enroll using a token obtained out-of-band (e.g. a developer JWT supplied
+    /// via env / paste), skipping the device-code grant. Used by dev/scaffold
+    /// runs where the OAuth device-code surface isn't deployed yet.
+    public func enroll(usingToken token: String) async throws -> TrackerConfig {
+        try await completeEnrollment(token: token)
+    }
+
+    /// Browser sign-in: open the system browser to `/auth/device/login`, capture
+    /// the developer JWT on a loopback listener, exchange it for a long-lived
+    /// `aexy_` API token, then enroll. This is the primary onboarding path.
+    public func signInViaBrowser(provider: String) async throws -> TrackerConfig {
+        let jwt = try await loginViaBrowser(provider: provider, apiBaseURL: apiBaseURL)
+        let apiToken = try await exchangeForApiToken(jwt: jwt)
+        return try await completeEnrollment(token: apiToken)
+    }
+
+    /// Exchange a freshly-minted developer JWT for a long-lived, revocable API
+    /// token (`POST /developers/me/api-tokens`) so capture survives JWT expiry.
+    public func exchangeForApiToken(jwt: String) async throws -> String {
+        struct CreateReq: Codable { let name: String; let expiresInDays: Int }
+        struct CreateResp: Codable { let token: String }
+
+        var request = URLRequest(
+            url: apiBaseURL.appendingPathComponent("developers/me/api-tokens")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+        let name = "Aexy Tracker (\(ProcessInfo.processInfo.hostName))"
+        request.httpBody = try? TrackerJSON.encoder.encode(
+            CreateReq(name: name, expiresInDays: 365)
+        )
+
+        let (data, http) = try await perform(request)
+        guard (200..<300).contains(http.statusCode) else {
+            throw OnboardingError.unexpectedStatus(http.statusCode)
+        }
+        guard let decoded = try? TrackerJSON.decoder.decode(CreateResp.self, from: data) else {
+            throw OnboardingError.decode
+        }
+        return decoded.token
+    }
+
+    /// Steps 2-4, shared by `run()` and `enroll(usingToken:)`: list Tracker
+    /// projects, pick one, enroll the device, persist to the Keychain.
+    private func completeEnrollment(token: String) async throws -> TrackerConfig {
         let projects = try await fetchProjects(token: token)
         guard !projects.isEmpty else { throw OnboardingError.noTrackerProjects }
         guard let project = selectProject(projects) else { throw OnboardingError.selectionFailed }
 
-        // 3. Enroll the device. The server reuses the device-code token for
-        //    ingest auth, so fall back to it when enroll mints no token.
+        // The server reuses the bearer token for ingest auth, so fall back to it
+        // when enroll mints no token.
         let enrolled = try await enroll(token: token, project: project)
         let bearerToken = enrolled.token ?? token
 
-        // 4. Persist to the Keychain so relaunches skip onboarding.
+        // Persist to the Keychain so relaunches skip onboarding.
         let credential = StoredCredential(
             token: bearerToken,
             projectId: enrolled.projectId,

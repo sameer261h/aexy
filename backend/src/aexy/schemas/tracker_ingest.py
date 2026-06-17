@@ -1,6 +1,6 @@
 """Aexy Tracker — ingest request/response schemas.
 
-See AEXY_TRACKER_INGEST_API.md for the full contract. The client supplies only
+See docs/api/tracker-ingest.md for the full contract. The client supplies only
 raw semantic signals; ``category`` and ``attribution`` are server-derived and
 intentionally absent from ``EventRecord``.
 """
@@ -155,7 +155,7 @@ class TrackerProjectResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Q&A over tracker history (AEXY_TRACKER.md §5.5)
+# Q&A over tracker history (docs/aexy-tracker.md §5.5)
 # --------------------------------------------------------------------------- #
 class TrackerQARequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
@@ -180,6 +180,32 @@ class TrackerTimesheetEntry(BaseModel):
     task_title: str | None = None
     description: str | None = None
     confidence_score: float | None = None
+    # Review state of the AI attribution: inferred | confirmed | corrected.
+    # (Dismissed entries are excluded from the timesheet.)
+    attribution_status: str | None = None
+
+
+# --------------------------------------------------------------------------- #
+# Review actions over inferred entries (confirm / correct / dismiss)
+# --------------------------------------------------------------------------- #
+class TrackerCandidateTask(BaseModel):
+    id: str
+    title: str
+    status: str | None = None
+
+
+class TrackerEntryUpdateRequest(BaseModel):
+    # "confirm" accepts the AI attribution; "correct" reassigns to task_id;
+    # "dismiss" rejects the entry (drops it from the timesheet/totals).
+    action: str = Field(pattern="^(confirm|correct|dismiss)$")
+    task_id: str | None = None
+
+
+class TrackerEntryUpdateResponse(BaseModel):
+    id: str
+    task_id: str | None = None
+    task_title: str | None = None
+    attribution_status: str | None = None
 
 
 class TrackerTimesheetDay(BaseModel):
