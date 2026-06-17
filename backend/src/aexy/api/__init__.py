@@ -163,6 +163,9 @@ from aexy.api.team_calendar import router as team_calendar_router
 # GTM (Go-To-Market)
 from aexy.api.gtm import router as gtm_router
 from aexy.api.event_ingestion import router as event_ingestion_router
+# Aexy Tracker (macOS work-tracker ingest)
+from aexy.api.tracker_ingest import router as tracker_ingest_router
+from aexy.api.tracker_qa import router as tracker_qa_router
 # Standalone Tables
 from aexy.api.tables import router as tables_router, custom_field_types_router
 from aexy.api.public_tables import router as public_tables_router
@@ -346,6 +349,8 @@ api_router.include_router(team_calendar_router, tags=["team-calendar"])
 # GTM (Go-To-Market)
 api_router.include_router(gtm_router, tags=["gtm"])
 api_router.include_router(event_ingestion_router, tags=["event-ingestion"])
+api_router.include_router(tracker_ingest_router, tags=["tracker-ingest"])
+api_router.include_router(tracker_qa_router, tags=["tracker-qa"])
 # Standalone Tables
 api_router.include_router(tables_router, tags=["tables"])
 api_router.include_router(custom_field_types_router, tags=["custom-field-types"])

@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.40] - 2026-06-17
+
+### Added
+
+#### Aexy Tracker — macOS work tracker + AI auto-attribution
+A local-first macOS menu-bar app that captures lightweight semantic signals (frontmost app, window title, file/git context, dev/browser context, idle state) and uploads them as append-only, idempotent event batches. A downstream Temporal/LLM pipeline enriches, attributes, and narrates the activity so time tracking happens with no manual entry.
+
+- **macOS client** (`aexy-tracker-mac/`, Swift): durable local buffer, batched idempotent upload, OAuth device-code onboarding, Keychain-persisted config, and best-effort nil-safe collectors. Events are removed from the buffer only after the server confirms them.
+- **Ingest API** (`/tracker/*`): device enrollment, partial-success batch ingest (idempotent on `event_id`), heartbeat/config pull, sync high-water mark, and evidence presign. Sliding-window rate limiting (fail-open) and a 30d-past/5m-future timestamp guard. `category`/`attribution` are server-derived only — never accepted from the client.
+- **Enrich/attribute loop** (Temporal + LLM): collapses consecutive samples into spans, categorizes them (productive/neutral/personal), and attributes each to a candidate task — rolled up into inferred `TimeEntry` rows that show in the existing tracking module. Fire-and-forget per-batch dispatch (time-bucketed `workflow_id` coalescing) plus a 5-min safety-net sweep.
+- **Daily journal + proactive insights**: an LLM narrative per developer per day (idempotent `WorkLog` upsert), and deterministic insight signals (context switching, meeting load, after-hours, focus fragmentation) surfaced as deduped in-app notifications.
+- **Q&A + auto-attributed timesheet** (`/tracker/qa`, `/tracker/timesheet`): individual-scoped natural-language Q&A over one's own journals + inferred time, and a day-grouped timesheet view with confidence badges. New `/tracking/tracker` UI page + `useTrackerTimesheet` hook.
+
+### Fixed
+
+- Tracker enrich now locks pending event rows (`FOR UPDATE SKIP LOCKED`) and is backstopped by a partial unique index on inferred `time_entries` dedupe keys, so the per-batch dispatch and the periodic sweep can't double-attribute the same events into duplicate time entries.
+- Tracker enrich tolerates non-numeric LLM `confidence` values instead of crashing (and Temporal-retrying) the whole activity.
+- Tracker timesheet no longer leaks daily journals dated after the requested `end` date (added the missing upper `logged_at` bound).
+- Tracker ingest counts within-batch duplicates so `accepted + duplicates + rejected` reconciles to events sent; insight runs no longer overcount notifications suppressed by recipient preferences.
+- macOS client: onboarding completes when the server mints no enroll token (falls back to the device-code token), the local buffer is capped to bound offline growth, and the sample interval is clamped to the server's accepted `1…600s` range.
+
 ## [0.8.39] - 2026-05-28
 
 ### Pick destination status when moving a task across projects

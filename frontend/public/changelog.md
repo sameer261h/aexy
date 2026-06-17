@@ -5,6 +5,141 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.40] - 2026-06-17
+
+### Added
+
+#### Aexy Tracker — macOS work tracker + AI auto-attribution
+A local-first macOS menu-bar app that captures lightweight semantic signals (frontmost app, window title, file/git context, dev/browser context, idle state) and uploads them as append-only, idempotent event batches. A downstream Temporal/LLM pipeline enriches, attributes, and narrates the activity so time tracking happens with no manual entry.
+
+- **macOS client** (`aexy-tracker-mac/`, Swift): durable local buffer, batched idempotent upload, OAuth device-code onboarding, Keychain-persisted config, and best-effort nil-safe collectors. Events are removed from the buffer only after the server confirms them.
+- **Ingest API** (`/tracker/*`): device enrollment, partial-success batch ingest (idempotent on `event_id`), heartbeat/config pull, sync high-water mark, and evidence presign. Sliding-window rate limiting (fail-open) and a 30d-past/5m-future timestamp guard. `category`/`attribution` are server-derived only — never accepted from the client.
+- **Enrich/attribute loop** (Temporal + LLM): collapses consecutive samples into spans, categorizes them (productive/neutral/personal), and attributes each to a candidate task — rolled up into inferred `TimeEntry` rows that show in the existing tracking module. Fire-and-forget per-batch dispatch (time-bucketed `workflow_id` coalescing) plus a 5-min safety-net sweep.
+- **Daily journal + proactive insights**: an LLM narrative per developer per day (idempotent `WorkLog` upsert), and deterministic insight signals (context switching, meeting load, after-hours, focus fragmentation) surfaced as deduped in-app notifications.
+- **Q&A + auto-attributed timesheet** (`/tracker/qa`, `/tracker/timesheet`): individual-scoped natural-language Q&A over one's own journals + inferred time, and a day-grouped timesheet view with confidence badges. New `/tracking/tracker` UI page + `useTrackerTimesheet` hook.
+
+### Fixed
+
+- Tracker enrich now locks pending event rows (`FOR UPDATE SKIP LOCKED`) and is backstopped by a partial unique index on inferred `time_entries` dedupe keys, so the per-batch dispatch and the periodic sweep can't double-attribute the same events into duplicate time entries.
+- Tracker enrich tolerates non-numeric LLM `confidence` values instead of crashing (and Temporal-retrying) the whole activity.
+- Tracker timesheet no longer leaks daily journals dated after the requested `end` date (added the missing upper `logged_at` bound).
+- Tracker ingest counts within-batch duplicates so `accepted + duplicates + rejected` reconciles to events sent; insight runs no longer overcount notifications suppressed by recipient preferences.
+- macOS client: onboarding completes when the server mints no enroll token (falls back to the device-code token), the local buffer is capped to bound offline growth, and the sample interval is clamped to the server's accepted `1…600s` range.
+
+## [0.8.39] - 2026-05-28
+
+### Pick destination status when moving a task across projects
+
+Cross-project move (0.8.34) silently re-resolved the new task's
+status to the destination's first "open" status. For sibling boards
+that's fine; for cross-board moves (Product → Tech) the user
+usually has a specific column in mind and the default was wrong.
+
+`MoveToProjectModal` now fetches the destination project's status
+set via the existing `useTaskStatuses` hook once a target is
+picked, and renders a "Status on destination board" dropdown. The
+default selection follows: same slug on the target → same name
+(case-insensitive) → first active status by position. The picked
+slug rides through as `target_status_slug` on both the single and
+bulk move requests; the backend (`SprintTaskService.move_to_project`)
+validates it against `TaskConfigService.get_statuses_for_project`
+before any write, raising `invalid_target_status` (400) on
+mismatch. Bulk move applies one status to every cloned task.
+
+`_clone_task_to_project` now accepts an `override_status_slug` and
+short-circuits the open-status resolver when supplied. Subtasks
+under `cascade` still resolve their own open status — the picker is
+parent-only, which matches the existing "subtasks inherit the
+destination's defaults" semantics.
+
+### Archive view on the project board and workspace All-Tasks tab
+
+`SprintTask.is_archived` and the unarchive endpoint have existed
+since the early sprint module, but no UI ever surfaced archived
+rows. Once a task was archived (manually or as part of a cross-
+project move), it disappeared.
+
+Both `/sprints/[projectId]/board` and the workspace All-Tasks tab
+get an `Active | Archived` segmented toggle (URL-synced via
+`?view=archived` so reloads and link-shares round-trip). In
+archived view:
+
+- The kanban is replaced by `TaskTableView` — archived rows don't
+  belong in status columns, and the table is the right surface for
+  a flat list. The Board/Table layout toggle, Sprints/Status
+  view-mode toggle, Add Task, Columns shortcut, Import button, and
+  priority/labels/epics filters are all hidden (search, assignee,
+  project, sprint stay). On the board page this is driven by a new
+  `minimal` flag on the existing `FilterBar` component.
+- Each row has an Unarchive icon-button; the bulk-action toolbar on
+  the workspace tab gains an "Restore selected" entry that fires
+  parallel unarchives.
+- The workspace endpoint already accepted `include_archived`; both
+  endpoints now also accept `archived_only`. `list_project_tasks`
+  was hard-coded to `is_archived = false` — that's been generalized
+  to the same flag pair. `archived_only` is strict regardless of
+  `include_archived`.
+
+New `useUnarchiveTask` hook wraps `projectTasksApi.unarchive` and
+reuses `invalidateTaskCaches` so the active view re-fetches
+correctly when a row is restored.
+
+### Workload analytics no longer 500s
+
+`POST /analytics/workload` was crashing with
+`AttributeError: 'WorkloadRequest' object has no attribute 'days'`
+because the handler read `request.days` but the schema didn't
+declare the field. The frontend has been sending `days: 30` since
+that endpoint shipped. Added `days: int = 30` to the schema.
+
+## [0.8.38] - 2026-05-23
+
+### Visible move-link on cross-project moves
+
+Cross-project moves (shipped in 0.8.34) already created a
+`task_dependencies` row linking the new task back to the source —
+but nothing in the UI rendered that linkage. Anyone opening either
+side of the move saw a context-free task.
+
+`SprintTaskService.move_to_project` now prepends a one-line
+"Moved from <KEY> — <title>" breadcrumb to the new task's
+description and a matching "Moved to" line on the source. The
+breadcrumb is written into both `description` (plain text) and
+`description_json` (a ProseMirror paragraph with a `link` mark
+pointing at `/sprints/<team>/board?task=<id>`) so every surface
+that renders descriptions shows it without any extra UI plumbing.
+Cascade subtasks each get their own pair of breadcrumbs pointing
+at the corresponding clone — the parent's pointer alone wouldn't
+reach the children.
+
+The existing `task_dependencies` row is still recorded as the
+structured source of truth for any future banner work.
+
+### Docs sidebar: Recent apps + section-grouped app list
+
+The flat "Apps" section in the docs sidebar (0.8.35) is replaced
+with a sidebar that mirrors the main app sidebar's grouping —
+Engineering / People / Business / AI / Compliance — plus a
+"Recent" strip at the top tracking the user's last-visited apps.
+
+Implementation:
+
+- `recentAppsStore` (Zustand + localStorage, cap 8) records each
+  app visit. Mounted once in `app/(app)/layout.tsx` via
+  `useRecentApps()` so visits from any surface count.
+- `NotionSidebar` reads the main sidebar's `GROUPED_LAYOUT`,
+  applies the same persona filter (`useSidebarPersona`) and
+  app-access filter (`useAppAccess`) the main sidebar uses, and
+  renders each section collapsed by default to keep the docs
+  surface focused.
+- The Knowledge section is hidden in the docs sidebar (the docs
+  sidebar IS the knowledge view; re-listing it would be
+  tautological). Docs and Drive are filtered out of the Recent
+  strip for the same reason.
+- New `SidebarAppGroup` component renders apps with sub-items
+  (Tracking → Standups/Blockers/Time, etc.) as expandable rows
+  inside the section, matching the main sidebar's depth.
+
 ## [0.8.37] - 2026-05-23
 
 ### Doc editor no longer unmounts on every save

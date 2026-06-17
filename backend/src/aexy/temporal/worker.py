@@ -213,6 +213,11 @@ def get_all_activities() -> list:
         execute_workflow_action,
     )
     from aexy.temporal.activities.platform import handle_new_signup
+    from aexy.temporal.activities.tracker_enrich import enrich_attribute_tracker_events
+    from aexy.temporal.activities.tracker_journal import (
+        detect_tracker_insights,
+        generate_tracker_journal,
+    )
     from aexy.temporal.activities.gtm import (
         identify_visitor_session,
         process_visitor_events,
@@ -432,6 +437,10 @@ def get_all_activities() -> list:
         check_bulk_compliance_rates,
         # Platform
         handle_new_signup,
+        # Aexy Tracker
+        enrich_attribute_tracker_events,
+        generate_tracker_journal,
+        detect_tracker_insights,
     ]
 
 

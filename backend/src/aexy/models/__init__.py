@@ -156,6 +156,10 @@ from aexy.models.tracking import (
     WorkLogType,
     ChannelType,
 )
+from aexy.models.tracker_event import (
+    TrackerDevice,
+    TrackerEvent,
+)
 from aexy.models.ticketing import (
     TicketForm,
     TicketFormField,
@@ -698,6 +702,8 @@ __all__ = [
     "DeveloperActivityPattern",
     "StandupSummary",
     "TrackingSource",
+    "TrackerDevice",
+    "TrackerEvent",
     "BlockerSeverity",
     "BlockerCategory",
     "BlockerStatus",
