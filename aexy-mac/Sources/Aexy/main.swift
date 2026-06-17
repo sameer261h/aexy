@@ -2,6 +2,9 @@ import AppKit
 import SwiftUI
 import UserNotifications
 import AexyCore
+#if canImport(Sparkle)
+import Sparkle
+#endif
 
 // Menu-bar entry point for the Aexy companion app. Runs as an accessory; the
 // main window (Open Aexy) hosts the SwiftUI app and handles web sign-in. The
@@ -9,9 +12,10 @@ import AexyCore
 // Tracker-enabled project.
 
 @MainActor
-final class AppController: NSObject, NSApplicationDelegate {
+final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var headerItem: NSMenuItem?
+    private var statusText = "Not signed in"
     private var client: TrackerClient?
     private var capturing = false
     private var onboarding = false
@@ -19,10 +23,29 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var appState: AppState?
     private var mainWindow: NSWindow?
     private var notifTimer: Timer?
+    #if canImport(Sparkle)
+    // Self-update via Sparkle 2. Feed URL + EdDSA key come from Info.plist
+    // (SUFeedURL / SUPublicEDKey); automatic background checks start at launch.
+    private var updaterController: SPUStandardUpdaterController?
+    #endif
+
+    private var updaterAvailable: Bool {
+        #if canImport(Sparkle)
+        return true
+        #else
+        return false
+        #endif
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         setupStatusItem()
+
+        #if canImport(Sparkle)
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
+        )
+        #endif
 
         let stored = TrackerConfig.fromKeychain(store: keychain)
         let state = AppState(apiBaseURL: apiBaseURL(), keychain: keychain, config: stored)
@@ -104,9 +127,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         client = TrackerClient(config: config)
         capturing = true
         updateTitle("● Aexy")
-        setHeader("Aexy")
+        setHeader("Checked in — tracking")
         appState?.config = config
         Task { await client?.start() }
+        rebuildMenu()
     }
 
     // MARK: - Status item
@@ -114,23 +138,50 @@ final class AppController: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.title = "○ Aexy"
-
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Open Aexy", action: #selector(openMainWindow), keyEquivalent: "o"))
-        menu.addItem(.separator())
-        let header = NSMenuItem(title: "Aexy", action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
-        headerItem = header
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Pause / Resume", action: #selector(togglePause), keyEquivalent: "p"))
-        menu.addItem(NSMenuItem(title: "Flush now", action: #selector(flushNow), keyEquivalent: "f"))
-        menu.addItem(NSMenuItem(title: "Sign out", action: #selector(signOut), keyEquivalent: ""))
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
-        for menuItem in menu.items where menuItem.action != nil { menuItem.target = self }
+        menu.delegate = self        // rebuilt by state on every open (NSMenuDelegate)
         item.menu = menu
         statusItem = item
+        rebuildMenu()
+    }
+
+    /// Rebuild the dropdown to match the current state. Signed out shows just
+    /// Sign in / Quit; signed in shows the office check-in controls + updates.
+    private func rebuildMenu() {
+        guard let menu = statusItem?.menu else { return }
+        menu.removeAllItems()
+        let signedIn = appState?.isSignedIn ?? false
+
+        if signedIn {
+            menu.addItem(NSMenuItem(title: "Open Aexy", action: #selector(openMainWindow), keyEquivalent: "o"))
+            menu.addItem(.separator())
+            let header = NSMenuItem(title: statusText, action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+            headerItem = header
+            menu.addItem(.separator())
+            // Capture controls only when a device is enrolled for tracking.
+            if client != nil {
+                let title = capturing ? "Check out" : "Check in"
+                menu.addItem(NSMenuItem(title: title, action: #selector(toggleCheckIn), keyEquivalent: "i"))
+            }
+            menu.addItem(NSMenuItem(title: "Sign out", action: #selector(signOut), keyEquivalent: ""))
+            if updaterAvailable {
+                menu.addItem(.separator())
+                menu.addItem(NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: ""))
+            }
+            menu.addItem(.separator())
+            menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
+        } else {
+            menu.addItem(NSMenuItem(title: "Sign in", action: #selector(openMainWindow), keyEquivalent: ""))
+            menu.addItem(.separator())
+            menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
+        }
+        for menuItem in menu.items where menuItem.action != nil { menuItem.target = self }
+    }
+
+    nonisolated func menuNeedsUpdate(_ menu: NSMenu) {
+        MainActor.assumeIsolated { rebuildMenu() }
     }
 
     private func updateTitle(_ title: String) {
@@ -138,6 +189,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     private func setHeader(_ text: String) {
+        statusText = text
         headerItem?.title = text
     }
 
@@ -164,17 +216,16 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     // MARK: - Menu actions
 
-    @objc private func togglePause() {
+    /// Check in (start tracking) / Check out (stop) — the office metaphor for
+    /// the capture loop. Data syncs automatically; there is no manual flush.
+    @objc private func toggleCheckIn() {
         guard let client else { return }
         capturing.toggle()
-        updateTitle(capturing ? "● Aexy" : "❚❚ Aexy")
+        updateTitle(capturing ? "● Aexy" : "○ Aexy")
+        setHeader(capturing ? "Checked in — tracking" : "Checked out")
         Task {
             if capturing { await client.start() } else { await client.stop() }
         }
-    }
-
-    @objc private func flushNow() {
-        Task { await client?.flush() }
     }
 
     @objc private func signOut() {
@@ -184,7 +235,14 @@ final class AppController: NSObject, NSApplicationDelegate {
             capturing = false
             appState?.signOut()
             showSignedOut()
+            rebuildMenu()
         }
+    }
+
+    @objc private func checkForUpdates() {
+        #if canImport(Sparkle)
+        updaterController?.checkForUpdates(nil)
+        #endif
     }
 
     @objc private func quit() {

@@ -16,11 +16,24 @@ BIN=".build/$CONFIG/Aexy"
 
 echo "→ assembling $APP"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$BIN" "$APP/Contents/MacOS/Aexy"
 cp Packaging/Info.plist "$APP/Contents/Info.plist"
 [ -f Resources/AppIcon.icns ] || swift Packaging/generate-icon.swift
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+
+# Embed Sparkle.framework (and its XPC services) if the dependency resolved.
+# SwiftPM stages it under .build/<config>/Sparkle.framework.
+SPARKLE_FW=".build/$CONFIG/Sparkle.framework"
+if [ -d "$SPARKLE_FW" ]; then
+    echo "→ embedding Sparkle.framework"
+    cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
+    # Sign frameworks first (inside-out), then the app bundle.
+    codesign --force --options runtime --sign - \
+        "$APP/Contents/Frameworks/Sparkle.framework"
+else
+    echo "→ Sparkle.framework not found ($SPARKLE_FW) — building without self-update"
+fi
 
 echo "→ ad-hoc code-signing"
 codesign --force --deep --sign - "$APP"

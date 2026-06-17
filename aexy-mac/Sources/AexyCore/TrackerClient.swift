@@ -1,7 +1,9 @@
 import Foundation
+import Network
 
 // Wires the pieces together (docs/aexy-tracker.md §4): on a fixed interval, sample
-// the active context, buffer it, and flush in batches. Backs off when idle.
+// the active context, buffer it, and flush in batches. Backs off when idle, and
+// flushes immediately when network connectivity returns (auto-sync on reconnect).
 
 public actor TrackerClient {
     private let config: TrackerConfig
@@ -12,6 +14,10 @@ public actor TrackerClient {
     private var clientSeq: Int = 0
     private var samplesSinceFlush = 0
     private var running = false
+
+    private let pathMonitor = NWPathMonitor()
+    private let monitorQueue = DispatchQueue(label: "io.aexy.netmonitor")
+    private var wasReachable = true
 
     public init(
         config: TrackerConfig,
@@ -28,10 +34,31 @@ public actor TrackerClient {
     public func start() {
         guard !running else { return }
         running = true
+        startReachabilityMonitor()
         Task { await loop() }
     }
 
-    public func stop() { running = false }
+    public func stop() {
+        running = false
+        pathMonitor.cancel()
+    }
+
+    // MARK: - Auto-sync on reconnect
+
+    private func startReachabilityMonitor() {
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            guard let self else { return }
+            Task { await self.handleReachability(path.status == .satisfied) }
+        }
+        pathMonitor.start(queue: monitorQueue)
+    }
+
+    private func handleReachability(_ reachable: Bool) async {
+        let recovered = reachable && !wasReachable
+        wasReachable = reachable
+        // On an offline → online transition, push the buffered backlog at once.
+        if recovered { await flush() }
+    }
 
     /// One tick: capture a sample (unless idle) and flush when due. Exposed for
     /// tests; the loop just calls this on a cadence.
