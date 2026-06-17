@@ -124,26 +124,55 @@ final class WebNavigator: NSObject, ObservableObject, WKScriptMessageHandler {
     private func record(path: String, title: String) {
         guard !path.isEmpty else { return }
         currentPath = path
-        if !title.isEmpty { currentTitle = title }
+        let name = Self.displayName(path: path, title: title)
+        currentTitle = name
         UserDefaults.standard.set(path, forKey: Self.pathKey)
 
         // Auth pages aren't worth resuming/recents.
         if path.hasPrefix("/login") || path.hasPrefix("/auth") { return }
-        let display = title.isEmpty ? Self.prettyName(path) : title
         var list = recents.filter { $0.path != path }
         list.insert(
-            WebRecent(path: path, title: display, ts: Date().timeIntervalSince1970), at: 0
+            WebRecent(path: path, title: name, ts: Date().timeIntervalSince1970), at: 0
         )
         if list.count > Self.maxRecents { list = Array(list.prefix(Self.maxRecents)) }
         recents = list
         saveRecents()
     }
 
-    /// Fallback label from a path, e.g. "/crm/deals" → "Deals".
+    /// A distinct, brand-free label for a page. The web app uses one constant
+    /// `<title>` ("Aexy | AI Superapp for Companies") everywhere, so a brand-free
+    /// title is preferred when present, otherwise we derive a name from the path.
+    static func displayName(path: String, title: String) -> String {
+        if let cleaned = cleanTitle(title) { return cleaned }
+        return prettyName(path)
+    }
+
+    /// Strip brand/tagline segments ("Aexy", "… Superapp …"); nil if nothing
+    /// meaningful remains (e.g. the constant brand title).
+    static func cleanTitle(_ title: String) -> String? {
+        let parts = title
+            .components(separatedBy: CharacterSet(charactersIn: "|—–·"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        func isBrand(_ s: String) -> Bool {
+            let l = s.lowercased()
+            return l.contains("aexy") || l.contains("superapp")
+        }
+        return parts.first(where: { !isBrand($0) })
+    }
+
+    /// Name from a path, e.g. "/crm" → "CRM", "/crm/deals" → "CRM · Deals".
     static func prettyName(_ path: String) -> String {
-        let last = path.split(separator: "?").first.map(String.init) ?? path
-        let seg = last.split(separator: "/").last.map(String.init) ?? "Page"
-        return seg.replacingOccurrences(of: "-", with: " ").capitalized
+        let clean = path.split(separator: "?").first.map(String.init) ?? path
+        let segs = clean.split(separator: "/").map(String.init).filter { !$0.isEmpty }
+        guard !segs.isEmpty else { return "Home" }
+        func cap(_ s: String) -> String {
+            if s.count <= 3 { return s.uppercased() }   // crm → CRM, ai → AI
+            return s.replacingOccurrences(of: "-", with: " ")
+                .split(separator: " ").map { $0.capitalized }.joined(separator: " ")
+        }
+        if segs.count == 1 { return cap(segs[0]) }
+        return cap(segs[0]) + " · " + cap(segs[segs.count - 1])
     }
 
     // MARK: - Persistence
