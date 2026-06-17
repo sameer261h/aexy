@@ -46,6 +46,9 @@ interface DocumentEditorProps {
   autoSave?: boolean;
   autoSaveDelay?: number;
   breadcrumb?: React.ReactNode;
+  /** Chromeless embed (macOS app): hide the title/breadcrumb header; the native
+   * app shows the title. The toolbar + content still render. */
+  embedded?: boolean;
 }
 
 export function DocumentEditor({
@@ -59,6 +62,7 @@ export function DocumentEditor({
   autoSave = true,
   autoSaveDelay = 1000,
   breadcrumb,
+  embedded = false,
 }: DocumentEditorProps) {
   const [localTitle, setLocalTitle] = useState(title);
   const [localIcon, setLocalIcon] = useState(icon || "📄");
@@ -319,7 +323,8 @@ export function DocumentEditor({
     <div className="flex flex-col h-full bg-background">
       {/* Document Header + Toolbar (sticky together) */}
       <div className="sticky top-0 z-10">
-        {/* Document Header */}
+        {/* Document Header (hidden in chromeless embed — native shows the title) */}
+        {!embedded && (
         <div className="border-b border-border/50 bg-background/95 backdrop-blur-xl">
           <div className="px-4 py-2">
             <div className="flex items-center gap-3">
@@ -407,6 +412,7 @@ export function DocumentEditor({
             </div>
           </div>
         </div>
+        )}
 
         {/* Editor Toolbar — no manual Save button: autosave handles it.
             Audit found the dual affordance created "is autosave actually

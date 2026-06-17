@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useDocument, useDocumentCodeLinks } from "@/hooks/useDocuments";
@@ -20,6 +20,20 @@ export default function DocumentPage() {
   const { user } = useAuth();
   // Disable collaboration until WebSocket issues are resolved
   const [collaborationEnabled] = useState(false);
+
+  // Chromeless embed (macOS app): hide the title/breadcrumb header — the native
+  // app renders the title and provides navigation.
+  const [embedded, setEmbedded] = useState(false);
+  useEffect(() => {
+    try {
+      setEmbedded(
+        new URLSearchParams(window.location.search).get("embed") === "true" ||
+          window.localStorage.getItem("aexy_embed") === "1"
+      );
+    } catch {
+      /* SSR / no storage */
+    }
+  }, []);
 
   const {
     document,
@@ -168,7 +182,8 @@ export default function DocumentPage() {
         // save state without unmounting anything.
         autoSave={true}
         autoSaveDelay={1000}
-        breadcrumb={<DocumentBreadcrumb workspaceId={currentWorkspaceId} documentId={documentId} />}
+        embedded={embedded}
+        breadcrumb={embedded ? undefined : <DocumentBreadcrumb workspaceId={currentWorkspaceId} documentId={documentId} />}
       />
     </div>
   );

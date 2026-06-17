@@ -95,6 +95,29 @@ async def _check_rate_limit(key: str, max_count: int, weight: int = 1) -> bool:
         return True
 
 
+_CONFIG_FIELDS = (
+    "sample_interval_s",
+    "screenshot_policy",
+    "screenshot_every_n_samples",
+    "idle_threshold_s",
+    "paused",
+    "excluded_bundle_ids",
+)
+
+
+def _apply_project_config(device: TrackerDevice, cfg: dict) -> None:
+    """Seed a device's capture config from a project's ``tracker_config`` defaults.
+
+    Only keys present in ``cfg`` are applied, so a project with no configured
+    defaults leaves the model defaults intact.
+    """
+    if not cfg:
+        return
+    for key in _CONFIG_FIELDS:
+        if key in cfg:
+            setattr(device, key, cfg[key])
+
+
 def _device_config(device: TrackerDevice) -> DeviceConfig:
     return DeviceConfig(
         config_etag=device.config_etag,
@@ -177,7 +200,9 @@ async def enroll_device(
     db: AsyncSession = Depends(get_db),
 ):
     """Register (or re-bind) a device to a Tracker-enabled project."""
-    await _require_project_membership(db, developer.id, data.project_id)
+    project = await _require_project_membership(db, developer.id, data.project_id)
+    # Seed the device's capture config from the project's defaults (if any).
+    project_cfg = (project.settings or {}).get("tracker_config") or {}
 
     device = await db.get(TrackerDevice, data.device_id)
     if device is None:
@@ -188,15 +213,18 @@ async def enroll_device(
             name=data.name,
             platform=data.platform,
         )
+        _apply_project_config(device, project_cfg)
         db.add(device)
     else:
         if device.developer_id != developer.id:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, "Device belongs to another developer"
             )
-        # Re-enrollment can re-point the device at a different project.
+        # Re-enrollment can re-point the device at a different project; refresh
+        # its capture config from that project's defaults.
         device.project_id = data.project_id
         device.name = data.name or device.name
+        _apply_project_config(device, project_cfg)
     await db.commit()
     await db.refresh(device)
 
