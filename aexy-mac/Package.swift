@@ -2,20 +2,20 @@
 import PackageDescription
 
 let package = Package(
-    name: "AexyTracker",
+    name: "Aexy",
     platforms: [.macOS(.v13)],
     targets: [
         // Platform-free-ish core: capture model, buffer, uploader, scheduler.
         // Depends on AppKit/CoreGraphics for collectors but holds no UI.
-        .target(name: "AexyTrackerCore"),
+        .target(name: "AexyCore"),
         // Menu-bar app entry point.
         .executableTarget(
-            name: "AexyTracker",
-            dependencies: ["AexyTrackerCore"]
+            name: "Aexy",
+            dependencies: ["AexyCore"]
         ),
         .testTarget(
-            name: "AexyTrackerCoreTests",
-            dependencies: ["AexyTrackerCore"]
+            name: "AexyCoreTests",
+            dependencies: ["AexyCore"]
         ),
     ]
 )

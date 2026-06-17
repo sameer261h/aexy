@@ -1,6 +1,6 @@
-# Aexy Tracker (macOS)
+# Aexy (macOS)
 
-The macOS capture client for Aexy Tracker — a lightweight menu-bar app that
+The macOS capture client for Aexy — a lightweight menu-bar app that
 samples semantic work signals and uploads them to the Aexy cloud Tracker module,
 where the AI loop turns them into attributed time, journals, and insights.
 
@@ -11,16 +11,16 @@ See the product spec (`docs/aexy-tracker.md`) and the ingest contract
 
 ```
 Sources/
-  AexyTrackerCore/      # headless, testable core
+  AexyCore/      # headless, testable core
     EventRecord.swift   #   wire model (snake_case ↔ ingest contract §4)
     Config.swift        #   runtime config + persistent device id
     LocalBuffer.swift   #   offline-first, append-only buffer (actor)
     Collectors.swift    #   frontmost app / window title / idle (NSWorkspace, AX, CGEventSource)
     SyncUploader.swift   #   batched, idempotent POST /tracker/events:batch
     TrackerClient.swift #   the sample → buffer → flush loop
-  AexyTracker/
+  Aexy/
     main.swift          # menu-bar app (NSStatusItem, accessory policy)
-Tests/AexyTrackerCoreTests/   # XCTest: encoding + buffer semantics
+Tests/AexyCoreTests/   # XCTest: encoding + buffer semantics
 ```
 
 ## Build & test
@@ -28,7 +28,7 @@ Tests/AexyTrackerCoreTests/   # XCTest: encoding + buffer semantics
 ```bash
 swift build                  # builds core + menu-bar executable
 swift test                   # requires full Xcode (XCTest); CI has it
-swift run AexyTracker         # launch the menu-bar app
+swift run Aexy         # launch the menu-bar app
 ```
 
 > The command-line-tools-only toolchain can `swift build`/`swift run` but not
@@ -55,7 +55,7 @@ export AEXY_API_URL="http://localhost:8000/api/v1"
 export AEXY_TRACKER_TOKEN="eyJ…"
 export AEXY_PROJECT_ID="<project-uuid>"   # optional; else the first Tracker-enabled project
 export AEXY_SAMPLE_INTERVAL=60             # optional
-swift run AexyTracker
+swift run Aexy
 ```
 
 The project must have the Tracker module enabled (`settings.tracker_enabled = true`)

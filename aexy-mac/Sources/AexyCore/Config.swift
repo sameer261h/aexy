@@ -85,7 +85,7 @@ public struct TrackerConfig: Sendable {
 public enum PersistentDeviceID {
     public static func load() -> String {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first!.appendingPathComponent("AexyTracker", isDirectory: true)
+            .first!.appendingPathComponent("Aexy", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("device_id")
         if let existing = try? String(contentsOf: file, encoding: .utf8),

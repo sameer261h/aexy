@@ -1,5 +1,5 @@
 import XCTest
-@testable import AexyTrackerCore
+@testable import AexyCore
 
 // Tests for the loopback callback parser used by browser sign-in.
 final class BrowserLoginTests: XCTestCase {

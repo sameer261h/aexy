@@ -86,7 +86,7 @@ public struct Onboarding: Sendable {
         keychain: KeychainTokenStore = KeychainTokenStore(),
         selectProject: @escaping ProjectSelector = { $0.first },
         presentCode: @escaping CodePresenter = { code in
-            NSLog("Aexy Tracker: sign in at \(code.verificationUri) and enter code \(code.userCode)")
+            NSLog("Aexy: sign in at \(code.verificationUri) and enter code \(code.userCode)")
         }
     ) {
         self.apiBaseURL = apiBaseURL
@@ -139,7 +139,7 @@ public struct Onboarding: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
-        let name = "Aexy Tracker (\(ProcessInfo.processInfo.hostName))"
+        let name = "Aexy (\(ProcessInfo.processInfo.hostName))"
         request.httpBody = try? TrackerJSON.encoder.encode(
             CreateReq(name: name, expiresInDays: 365)
         )

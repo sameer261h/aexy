@@ -43,7 +43,7 @@ public func parseTokenFromRequest(_ request: String) -> String? {
 /// A one-shot loopback HTTP listener that captures the OAuth callback token.
 public final class LoopbackReceiver: @unchecked Sendable {
     private let listener: NWListener
-    private let queue = DispatchQueue(label: "io.aexy.tracker.loopback")
+    private let queue = DispatchQueue(label: "io.aexy.loopback")
     private var readyCont: CheckedContinuation<UInt16, Error>?
     private var tokenCont: CheckedContinuation<String, Error>?
     private var buffered: Result<String, Error>?
@@ -132,9 +132,9 @@ public final class LoopbackReceiver: @unchecked Sendable {
             let raw = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
             let token = parseTokenFromRequest(raw)
             let body = """
-            <html><head><meta charset="utf-8"><title>Aexy Tracker</title></head>\
+            <html><head><meta charset="utf-8"><title>Aexy</title></head>\
             <body style="font-family:-apple-system,sans-serif;text-align:center;padding:3rem">\
-            <h2>\(token != nil ? "Signed in to Aexy Tracker" : "Sign-in failed")</h2>\
+            <h2>\(token != nil ? "Signed in to Aexy" : "Sign-in failed")</h2>\
             <p>You can close this window and return to the app.</p></body></html>
             """
             let statusLine = token != nil ? "200 OK" : "400 Bad Request"

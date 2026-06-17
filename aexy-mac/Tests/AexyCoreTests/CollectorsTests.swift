@@ -1,5 +1,5 @@
 import XCTest
-@testable import AexyTrackerCore
+@testable import AexyCore
 
 // Unit tests for the PURE collector logic that needs no live UI / permissions:
 // the `.git/HEAD` branch parser, the git-root directory walk, and the

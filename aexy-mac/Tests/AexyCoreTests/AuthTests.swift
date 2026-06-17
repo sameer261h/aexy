@@ -1,5 +1,5 @@
 import XCTest
-@testable import AexyTrackerCore
+@testable import AexyCore
 
 // Tests for the onboarding/auth pieces (docs/aexy-tracker.md §6): Keychain round-trip
 // and Codable decoding of the device-code + token responses.
@@ -11,7 +11,7 @@ import XCTest
 
 final class KeychainTokenStoreTests: XCTestCase {
     private func uniqueStore() -> KeychainTokenStore {
-        KeychainTokenStore(service: "io.aexy.tracker.tests.\(UUID().uuidString)")
+        KeychainTokenStore(service: "io.aexy.tests.\(UUID().uuidString)")
     }
 
     func testSaveLoadDeleteRoundTrip() {

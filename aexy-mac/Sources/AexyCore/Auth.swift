@@ -40,7 +40,7 @@ public struct KeychainTokenStore: Sendable {
 
     /// `service` defaults to the app bundle identity; tests inject a unique
     /// service so they never collide with a real install.
-    public init(service: String = "io.aexy.tracker", account: String = "device-credential") {
+    public init(service: String = "io.aexy", account: String = "device-credential") {
         self.service = service
         self.account = account
     }
@@ -138,7 +138,7 @@ public struct DeviceCodeConfig: Sendable {
     public init(
         deviceCodeURL: URL,
         tokenURL: URL,
-        clientId: String = "aexy-tracker-mac",
+        clientId: String = "aexy-mac",
         scope: String = "tracker:read tracker:write"
     ) {
         self.deviceCodeURL = deviceCodeURL

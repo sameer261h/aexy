@@ -1,5 +1,5 @@
 import XCTest
-@testable import AexyTrackerCore
+@testable import AexyCore
 
 final class EventRecordTests: XCTestCase {
     func testEncodesSnakeCaseAndOmitsServerDerivedFields() throws {

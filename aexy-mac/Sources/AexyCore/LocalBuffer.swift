@@ -18,7 +18,7 @@ public actor LocalBuffer {
             self.fileURL = url
         } else {
             let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-                .first!.appendingPathComponent("AexyTracker", isDirectory: true)
+                .first!.appendingPathComponent("Aexy", isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             self.fileURL = dir.appendingPathComponent("buffer.json")
         }

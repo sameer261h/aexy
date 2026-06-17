@@ -55,9 +55,9 @@ A project must opt in: set `settings.tracker_enabled = true` (JSON boolean) on t
 
 Frontend: `frontend/src/app/(app)/tracking/tracker/page.tsx`, `hooks/useTrackerTimesheet.ts`, `components/tracking/TaskSelect.tsx`. All strings are localized via the `tracking.tracker` i18n namespace (`en`/`hi`).
 
-## macOS client (`aexy-tracker-mac/`)
+## macOS client (`aexy-mac/`)
 
-A SwiftPM menu-bar app (`swift build` / `swift run AexyTracker`; `swift test` needs full Xcode for XCTest). On launch it resolves credentials in order:
+A SwiftPM menu-bar app (`swift build` / `swift run Aexy`; `swift test` needs full Xcode for XCTest). On launch it resolves credentials in order:
 
 1. **Keychain** — a credential from a prior sign-in.
 2. **`AEXY_TRACKER_TOKEN`** — if set (headless/dev), the app enrolls with that token, persists to the Keychain, then starts capture.
@@ -70,7 +70,7 @@ A SwiftPM menu-bar app (`swift build` / `swift run AexyTracker`; `swift test` ne
 3. The user logs in; the provider callback 302s `…/callback?token=<JWT>` to the loopback listener, which captures the JWT and shows a "you can close this window" page.
 4. The app exchanges the JWT for a revocable `aexy_…` token via `POST /developers/me/api-tokens` (named per device, 365-day expiry; manage under settings → API tokens) and enrolls the device.
 
-`Sources/AexyTrackerCore/BrowserLogin.swift` runs the listener; `Onboarding.signInViaBrowser(provider:)` ties login → token exchange → enroll. The host is server-forced to loopback so the JWT can only be delivered to the local machine.
+`Sources/AexyCore/BrowserLogin.swift` runs the listener; `Onboarding.signInViaBrowser(provider:)` ties login → token exchange → enroll. The host is server-forced to loopback so the JWT can only be delivered to the local machine.
 
 Local/dev run (token path, no browser):
 
@@ -79,10 +79,10 @@ export AEXY_API_URL="http://localhost:8000/api/v1"   # default: https://server.a
 export AEXY_TRACKER_TOKEN="<a developer JWT>"          # docker exec aexy-backend python scripts/generate_test_token.py --first
 export AEXY_PROJECT_ID="<tracker-enabled project uuid>"  # optional; else first Tracker-enabled project
 export AEXY_SAMPLE_INTERVAL=60                          # optional, clamped to 1..600
-swift run AexyTracker
+swift run Aexy
 ```
 
-The menu-bar item shows capture state (`●` running, `❚❚` paused, `…` enrolling, `⚠︎` failed/not configured) and offers Pause/Resume, Flush now, Sign out, Quit. The local buffer is capped to bound offline growth, and events are removed only after the server confirms the batch (safe idempotent retries). See `aexy-tracker-mac/README.md` for layout.
+The menu-bar item shows capture state (`●` running, `❚❚` paused, `…` enrolling, `⚠︎` failed/not configured) and offers Pause/Resume, Flush now, Sign out, Quit. The local buffer is capped to bound offline growth, and events are removed only after the server confirms the batch (safe idempotent retries). See `aexy-mac/README.md` for layout.
 
 ## Related
 
