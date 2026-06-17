@@ -40,6 +40,8 @@ struct MainView: View {
         NavEntry(id: "standups", label: "Standups", icon: "bubble.left.and.bubble.right", route: nil),
     ]
     static let webItems: [NavEntry] = [
+        // Chat = the embedded communicator (Threads / Notifications / Activity / AI).
+        NavEntry(id: "web-chat", label: "Chat", icon: "bubble.left.and.bubble.right", route: "/communicator"),
         NavEntry(id: "web-crm", label: "CRM", icon: "person.2", route: "/crm"),
         NavEntry(id: "web-analytics", label: "Analytics", icon: "chart.bar", route: "/analytics"),
         NavEntry(id: "web-agents", label: "Agents", icon: "sparkles", route: "/agents"),
@@ -84,7 +86,12 @@ struct MainView: View {
                         }
                         Section("More in Aexy") {
                             ForEach(Self.webItems) { item in
-                                Label(label(for: item), systemImage: item.icon).tag(item.id)
+                                Label(label(for: item), systemImage: item.icon)
+                                    .tag(item.id)
+                                    .badge(
+                                        item.id == "web-chat" && state.unreadCount > 0
+                                            ? Text("\(state.unreadCount)") : nil
+                                    )
                             }
                         }
                         if !web.recents.isEmpty {
