@@ -68,6 +68,14 @@ public struct FlowTargetHours: Codable, Sendable, Equatable {
     public var source: String
 }
 
+public struct FlowChatInboxTopic: Codable, Sendable, Equatable {
+    public var unreadCount: Int?
+}
+
+public struct FlowChatInbox: Codable, Sendable, Equatable {
+    public var topics: [FlowChatInboxTopic]
+}
+
 public struct FlowNotification: Codable, Sendable, Identifiable, Equatable {
     public let id: String
     public var eventType: String?
@@ -402,6 +410,13 @@ public struct FlowClient: Sendable {
         return try await send(
             makeRequest("GET", "tracker/target-hours/resolve", query: query),
             as: FlowTargetHours.self
+        )
+    }
+
+    /// Unread chat topics (the communicator "Threads" inbox) for the badge.
+    public func chatInbox(workspaceId: String) async throws -> FlowChatInbox {
+        try await send(
+            makeRequest("GET", "workspaces/\(workspaceId)/chat/inbox"), as: FlowChatInbox.self
         )
     }
 

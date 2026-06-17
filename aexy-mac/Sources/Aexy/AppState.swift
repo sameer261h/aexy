@@ -14,6 +14,14 @@ final class AppState: ObservableObject {
     @Published var tasks: [FlowTask] = []
     @Published var notifications: [FlowNotification] = []
     @Published var unreadCount: Int = 0
+    @Published var chatUnreadCount: Int = 0
+
+    /// Total unread surfaced by the communicator (notifications + chat inbox).
+    var communicatorUnread: Int { unreadCount + chatUnreadCount }
+
+    /// Set to a sidebar item id (e.g. "web-chat") to deep-link the main window to
+    /// that section. MainView observes this and clears it after navigating.
+    @Published var pendingSection: String?
     @Published var isLoading = false
     @Published var errorMessage: String?
 
@@ -176,7 +184,19 @@ final class AppState: ObservableObject {
         }
         isLoading = false
         await loadTargetHours()
+        await loadChatUnread()
     }
+
+    /// Refresh the unread chat-inbox count for the Chat badge.
+    func loadChatUnread() async {
+        guard let client, let ws = selectedWorkspaceId else { chatUnreadCount = 0; return }
+        if let inbox = try? await client.chatInbox(workspaceId: ws) {
+            chatUnreadCount = inbox.topics.reduce(0) { $0 + ($1.unreadCount ?? 0) }
+        }
+    }
+
+    /// Deep-link the main window to a sidebar section (e.g. "web-chat").
+    func openSection(_ id: String) { pendingSection = id }
 
     // MARK: - Check-in / target hours
 
@@ -260,6 +280,7 @@ final class AppState: ObservableObject {
         } catch {
             /* transient — try again next tick */
         }
+        await loadChatUnread()
     }
 
     func setStatus(_ task: FlowTask, _ status: String) async {

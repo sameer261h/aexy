@@ -13,7 +13,7 @@ import Sparkle
 // Tracker-enabled project.
 
 @MainActor
-final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
     private var statusItem: NSStatusItem?
     private var headerItem: NSMenuItem?
     private var statusText = "Not signed in"
@@ -72,6 +72,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // Native notifications: request auth + poll every 60s (no-op when signed out).
         NativeNotifier.requestAuthorization()
+        // Handle taps + show banners while the app is active.
+        if NativeNotifier.isAvailable {
+            UNUserNotificationCenter.current().delegate = self
+        }
         notifTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.appState?.pollNotificationsTick() }
         }
@@ -190,6 +194,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if signedIn {
             menu.addItem(NSMenuItem(title: "Open Aexy", action: #selector(openMainWindow), keyEquivalent: "o"))
+            let unread = appState?.communicatorUnread ?? 0
+            let chat = NSMenuItem(
+                title: unread > 0 ? "Open Chat (\(unread))" : "Open Chat",
+                action: #selector(openChat), keyEquivalent: "j"
+            )
+            menu.addItem(chat)
             menu.addItem(.separator())
             let header = NSMenuItem(title: statusText, action: nil, keyEquivalent: "")
             header.isEnabled = false
@@ -267,6 +277,36 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showSignedOut()
             rebuildMenu()
         }
+    }
+
+    /// Open the window and deep-link to the Chat (communicator) section.
+    @objc private func openChat() {
+        openMainWindow()
+        appState?.openSection("web-chat")
+    }
+
+    // MARK: - Notification delegate
+
+    /// Show banners even while the app is frontmost.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound, .badge])
+    }
+
+    /// Tapping a notification opens the app and jumps to the Chat section, where
+    /// the Notifications tab surfaces it.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        Task { @MainActor in
+            self.openChat()
+        }
+        completionHandler()
     }
 
     @objc private func checkForUpdates() {
