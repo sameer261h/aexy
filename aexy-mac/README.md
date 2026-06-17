@@ -34,6 +34,21 @@ swift run Aexy         # launch the menu-bar app
 > The command-line-tools-only toolchain can `swift build`/`swift run` but not
 > `swift test` (no bundled XCTest). Run tests under a full Xcode install.
 
+## Package as a .app
+
+`swift run` produces an **unbundled** binary with no bundle identifier, so
+bundle-dependent APIs (native notifications via `UNUserNotificationCenter`) are
+skipped. Build a proper, ad-hoc-signed `.app` to exercise the full app:
+
+```bash
+./Packaging/build-app.sh        # → Aexy.app  (release build + ad-hoc sign)
+open Aexy.app
+```
+
+`Packaging/Info.plist` sets the bundle id (`io.aexy.desktop`) and `LSUIElement`
+(menu-bar accessory). For distribution, replace the ad-hoc identity with a
+Developer ID, notarize, and add auto-update (e.g. Sparkle).
+
 ## Configure (scaffold)
 
 On launch the app resolves credentials in this order:
