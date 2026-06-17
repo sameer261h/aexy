@@ -1,6 +1,6 @@
 import Foundation
 
-// Wires the pieces together (AEXY_TRACKER.md §4): on a fixed interval, sample
+// Wires the pieces together (docs/aexy-tracker.md §4): on a fixed interval, sample
 // the active context, buffer it, and flush in batches. Backs off when idle.
 
 public actor TrackerClient {

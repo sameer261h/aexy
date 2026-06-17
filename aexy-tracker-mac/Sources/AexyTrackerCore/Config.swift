@@ -1,11 +1,11 @@
 import Foundation
 
 // Runtime configuration for the tracker client. In a shipping build these come
-// from onboarding + Keychain (AEXY_TRACKER.md §5–6); for the scaffold they're
+// from onboarding + Keychain (docs/aexy-tracker.md §5–6); for the scaffold they're
 // read from environment variables so the loop can be exercised end-to-end.
 
 public struct TrackerConfig: Sendable {
-    public var apiBaseURL: URL          // e.g. https://aexy.io/api/v1
+    public var apiBaseURL: URL          // e.g. https://server.aexy.io/api/v1
     public var bearerToken: String      // scoped device token (Keychain in prod)
     public var deviceId: String         // stable per-install UUID
     public var schemaVersion: String

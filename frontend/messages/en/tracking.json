@@ -14,6 +14,34 @@
     "time": {
       "title": "Time Tracking",
       "log": "Log Time"
+    },
+    "tracker": {
+      "title": "Auto-attributed Timesheet",
+      "subtitle": "AI-inferred time from Aexy Tracker — confirm, reassign, or dismiss each entry.",
+      "metricTotal": "Total tracked",
+      "metricDays": "Days tracked",
+      "metricEntries": "Attributed entries",
+      "metricAvg": "Avg / day",
+      "askTitle": "Ask about your work",
+      "askPlaceholder": "What did I ship last week? · Draft my standup",
+      "askAriaLabel": "Ask a question about your tracked work",
+      "ask": "Ask",
+      "suggestStandup": "Draft my standup",
+      "suggestShipped": "What did I ship this week?",
+      "suggestWhereTime": "Where did my time go?",
+      "basedOn": "Based on {journals} journal(s) · {entries} time entries",
+      "qaError": "Couldn't get an answer. The AI gateway may be unavailable.",
+      "empty": "No tracked activity in this range yet. Install Aexy Tracker to start capturing.",
+      "journalOnly": "Journal only — no attributed entries.",
+      "unattributed": "Unattributed",
+      "confidence": "{pct}% conf",
+      "confirm": "Confirm",
+      "reassign": "Reassign",
+      "dismiss": "Dismiss",
+      "statusConfirmed": "Confirmed",
+      "statusCorrected": "Corrected",
+      "reassignPlaceholder": "Reassign to task…",
+      "noTasks": "No assignable tasks"
     }
   }
 }

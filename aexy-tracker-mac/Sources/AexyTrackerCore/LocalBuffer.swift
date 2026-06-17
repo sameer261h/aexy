@@ -1,6 +1,6 @@
 import Foundation
 
-// Local-first buffer (AEXY_TRACKER.md §4). Events survive offline and process
+// Local-first buffer (docs/aexy-tracker.md §4). Events survive offline and process
 // restarts: the in-memory queue is persisted to a JSON file after each mutation.
 // A production build would back this with SQLite; the contract only requires
 // durable, append-only, idempotent capture.

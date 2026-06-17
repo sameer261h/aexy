@@ -1,4 +1,4 @@
-"""Aexy Tracker — enrich & attribute activity (the AI loop, AEXY_TRACKER.md §5).
+"""Aexy Tracker — enrich & attribute activity (the AI loop, docs/aexy-tracker.md §5).
 
 Reads un-enriched ``TrackerEvent`` rows (driven by the partial index
 ``ix_tracker_events_pending_enrich``), collapses consecutive samples into
@@ -279,6 +279,7 @@ async def enrich_attribute_tracker_events(input: EnrichTrackerEventsInput) -> di
                                     ended_at=span["end"],
                                     source=TrackingSource.INFERRED.value,
                                     is_inferred=True,
+                                    attribution_status="inferred",
                                     confidence_score=confidence,
                                     inference_metadata={
                                         "origin": "tracker",

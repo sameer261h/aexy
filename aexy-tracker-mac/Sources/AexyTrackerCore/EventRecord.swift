@@ -1,6 +1,6 @@
 import Foundation
 
-// Wire model for the Aexy Tracker ingest contract (AEXY_TRACKER_INGEST_API.md §4).
+// Wire model for the Aexy Tracker ingest contract (docs/api/tracker-ingest.md §4).
 // Encoded with `.convertToSnakeCase`, so `eventId` → `event_id`, `intervalS` →
 // `interval_s`, etc. `category`/`attribution` are server-derived and never sent.
 

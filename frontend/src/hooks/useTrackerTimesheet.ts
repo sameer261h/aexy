@@ -1,10 +1,18 @@
 "use client";
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 
-// Aexy Tracker — auto-attributed timesheet + Q&A.
-// Backend: api/tracker_qa.py (GET /tracker/timesheet, POST /tracker/qa).
+// Aexy Tracker — auto-attributed timesheet + Q&A + review actions.
+// Backend: api/tracker_qa.py (GET /tracker/timesheet, POST /tracker/qa,
+// GET /tracker/candidate-tasks, PATCH /tracker/timesheet/entries/{id}).
+
+export type AttributionStatus =
+  | "inferred"
+  | "confirmed"
+  | "corrected"
+  | "dismissed"
+  | null;
 
 export interface TrackerTimesheetEntry {
   id: string;
@@ -14,7 +22,16 @@ export interface TrackerTimesheetEntry {
   task_title: string | null;
   description: string | null;
   confidence_score: number | null;
+  attribution_status: AttributionStatus;
 }
+
+export interface TrackerCandidateTask {
+  id: string;
+  title: string;
+  status: string | null;
+}
+
+export type TrackerEntryAction = "confirm" | "correct" | "dismiss";
 
 export interface TrackerTimesheetDay {
   date: string;
@@ -56,6 +73,41 @@ export function useTrackerQA() {
         days: vars.days ?? 7,
       });
       return res.data;
+    },
+  });
+}
+
+// The caller's open assigned tasks — choices for correcting an attribution.
+export function useTrackerCandidateTasks(enabled = true) {
+  return useQuery<TrackerCandidateTask[]>({
+    queryKey: ["tracker", "candidate-tasks"],
+    queryFn: async () => {
+      const res = await api.get("/tracker/candidate-tasks");
+      return res.data;
+    },
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
+// Confirm / correct (reassign) / dismiss an inferred entry. Invalidates the
+// timesheet so the row's badge/visibility updates.
+export function useUpdateTrackerEntry() {
+  const qc = useQueryClient();
+  return useMutation<
+    { id: string; task_id: string | null; task_title: string | null; attribution_status: AttributionStatus },
+    unknown,
+    { entryId: string; action: TrackerEntryAction; taskId?: string }
+  >({
+    mutationFn: async ({ entryId, action, taskId }) => {
+      const res = await api.patch(`/tracker/timesheet/entries/${entryId}`, {
+        action,
+        task_id: taskId ?? null,
+      });
+      return res.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tracker", "timesheet"] });
     },
   });
 }

@@ -18,6 +18,7 @@ We're on a mission to bring positive change by building world-class tools actual
 
 ### API Reference
 - [API Overview](./api/overview.md) - Base URL, live Swagger/ReDoc, pointers to the cross-cutting API docs
+- [Tracker ingest API](./api/tracker-ingest.md) - Aexy Tracker device enrollment + idempotent event ingest contract
 
 ### Getting started & operations
 - [Getting Started](./guides/getting-started.md) - Quick start guide
@@ -47,6 +48,7 @@ We're on a mission to bring positive change by building world-class tools actual
 - [Tickets & projects](./tickets-and-projects.md) - Tickets, sprint tasks, projects, templates, ticket forms
 - [Booking](./booking.md) - Calendar scheduling, team bookings & RSVP
 - [Tracking](./tracking.md) - Standups, time entries, blockers, entity activity
+- [Aexy Tracker](./aexy-tracker.md) - macOS work tracker + AI auto-attribution (timesheet, journals, insights)
 
 ### Modules — People
 - [Reviews, hiring & learning](./reviews-and-people.md) - Performance reviews, hiring & assessments, learning paths

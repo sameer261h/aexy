@@ -1,4 +1,4 @@
-"""Aexy Tracker — journal & insight stages (AEXY_TRACKER.md §5.3–5.4).
+"""Aexy Tracker — journal & insight stages (docs/aexy-tracker.md §5.3–5.4).
 
 Runs after enrich/attribute (``tracker_enrich.py``) over already-enriched events.
 

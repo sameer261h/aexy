@@ -319,6 +319,11 @@ class TimeEntry(Base):
     inference_metadata: Mapped[dict | None] = mapped_column(
         JSONB, nullable=True, default=None
     )  # {method, signals_used, source_messages}
+    # Review state for AI-inferred (Aexy Tracker) entries; NULL for manual rows.
+    # inferred → confirmed | corrected | dismissed (see api/tracker_qa.py).
+    attribution_status: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, index=True
+    )
 
     # External task reference
     external_task_ref: Mapped[str | None] = mapped_column(String(100), nullable=True)
