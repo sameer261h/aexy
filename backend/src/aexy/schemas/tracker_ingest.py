@@ -219,3 +219,39 @@ class TrackerTimesheetResponse(BaseModel):
     days: list[TrackerTimesheetDay]
     total_minutes: int
     days_count: int
+
+
+# --------------------------------------------------------------------------- #
+# Admin: per-project enable + capture config (api/tracker_admin.py)
+# --------------------------------------------------------------------------- #
+class TrackerCaptureConfig(BaseModel):
+    """Per-project capture defaults; seeded onto devices at enroll + pushed via
+    heartbeat. Mirrors the server-controlled columns on TrackerDevice."""
+
+    model_config = ConfigDict(extra="forbid")
+    sample_interval_s: int = Field(default=60, ge=1, le=600)
+    screenshot_policy: str = Field(default="off", pattern="^(off|active_window|full_screen)$")
+    screenshot_every_n_samples: int = Field(default=5, ge=1, le=100)
+    idle_threshold_s: int = Field(default=300, ge=30, le=3600)
+    paused: bool = False
+    excluded_bundle_ids: list[str] = Field(default_factory=list)
+
+
+class TrackerProjectConfigResponse(BaseModel):
+    project_id: str
+    enabled: bool
+    config: TrackerCaptureConfig
+
+
+class TrackerConfigUpdateRequest(BaseModel):
+    enabled: bool
+    config: TrackerCaptureConfig = Field(default_factory=TrackerCaptureConfig)
+
+
+class TrackerAdminProject(BaseModel):
+    id: str
+    name: str
+    slug: str
+    enabled: bool
+    device_count: int
+    active_devices: int

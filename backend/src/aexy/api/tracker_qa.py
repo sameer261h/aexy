@@ -147,21 +147,12 @@ def _parse_date(value: str | None, default: date) -> date:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid date (use YYYY-MM-DD)") from e
 
 
-@router.get("/timesheet", response_model=TrackerTimesheetResponse)
-async def tracker_timesheet(
-    start: str | None = Query(default=None, description="YYYY-MM-DD (default: 7 days ago)"),
-    end: str | None = Query(default=None, description="YYYY-MM-DD (default: today)"),
-    developer: Developer = Depends(get_current_developer),
-    db: AsyncSession = Depends(get_db),
-):
-    """Auto-attributed timesheet: AI-inferred time entries + daily journals,
-    grouped by day, for the calling developer."""
-    today = datetime.now(timezone.utc).date()
-    end_date = _parse_date(end, today)
-    start_date = _parse_date(start, end_date - timedelta(days=6))
-    if start_date > end_date:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "start must be <= end")
-
+async def build_timesheet(
+    db: AsyncSession, developer_id: str, start_date: date, end_date: date
+) -> TrackerTimesheetResponse:
+    """Build the auto-attributed timesheet (inferred entries + journals, grouped
+    by day) for one developer. Shared by the self endpoint and the admin
+    record-viewer (api/tracker_admin.py); the caller is responsible for authz."""
     # Inferred time entries (with task title eager-loaded).
     entries = list(
         (
@@ -169,7 +160,7 @@ async def tracker_timesheet(
                 select(TimeEntry)
                 .options(selectinload(TimeEntry.task))
                 .where(
-                    TimeEntry.developer_id == developer.id,
+                    TimeEntry.developer_id == developer_id,
                     TimeEntry.is_inferred.is_(True),
                     TimeEntry.source == TrackingSource.INFERRED.value,
                     TimeEntry.entry_date >= start_date,
@@ -192,7 +183,7 @@ async def tracker_timesheet(
         (
             await db.execute(
                 select(WorkLog).where(
-                    WorkLog.developer_id == developer.id,
+                    WorkLog.developer_id == developer_id,
                     WorkLog.external_task_ref.like("tracker-journal:%"),
                     WorkLog.logged_at
                     >= datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc),
@@ -247,6 +238,22 @@ async def tracker_timesheet(
     return TrackerTimesheetResponse(
         days=days, total_minutes=total_minutes, days_count=len(days)
     )
+
+
+@router.get("/timesheet", response_model=TrackerTimesheetResponse)
+async def tracker_timesheet(
+    start: str | None = Query(default=None, description="YYYY-MM-DD (default: 7 days ago)"),
+    end: str | None = Query(default=None, description="YYYY-MM-DD (default: today)"),
+    developer: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Auto-attributed timesheet for the calling developer (self-scoped)."""
+    today = datetime.now(timezone.utc).date()
+    end_date = _parse_date(end, today)
+    start_date = _parse_date(start, end_date - timedelta(days=6))
+    if start_date > end_date:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "start must be <= end")
+    return await build_timesheet(db, developer.id, start_date, end_date)
 
 
 def _review_outcome(

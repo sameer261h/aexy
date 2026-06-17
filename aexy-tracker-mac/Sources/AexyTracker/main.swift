@@ -78,6 +78,11 @@ final class AppController: NSObject, NSApplicationDelegate {
                 onboarding = false
                 setHeader("Aexy Tracker")
                 startCapture(with: config)
+            } catch OnboardingError.noTrackerProjects {
+                onboarding = false
+                updateTitle("⚠︎ Aexy")
+                setHeader("No Tracker-enabled project — enable Tracker on a project in Aexy")
+                NSLog("Aexy Tracker: signed in, but no Tracker-enabled project for this account")
             } catch {
                 onboarding = false
                 updateTitle("⚠︎ Aexy")
