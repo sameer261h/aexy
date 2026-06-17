@@ -204,7 +204,7 @@ struct ProjectSwitcher: View {
     }
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
             if !state.workspaces.isEmpty {
                 Menu {
                     ForEach(state.workspaces) { ws in
@@ -219,6 +219,7 @@ struct ProjectSwitcher: View {
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             if !state.projects.isEmpty {
                 Menu {
@@ -232,8 +233,10 @@ struct ProjectSwitcher: View {
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func pill(icon: String, title: String, muted: Bool = false) -> some View {
