@@ -31,7 +31,7 @@ final class WebNavigator: NSObject, ObservableObject, WKScriptMessageHandler {
     private static let maxRecents = 8
 
     override init() {
-        currentPath = UserDefaults.standard.string(forKey: Self.pathKey) ?? ""
+        currentPath = Self.stripQuery(UserDefaults.standard.string(forKey: Self.pathKey) ?? "")
         recents = Self.loadRecents()
         webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
         super.init()
@@ -57,7 +57,7 @@ final class WebNavigator: NSObject, ObservableObject, WKScriptMessageHandler {
           function post() {
             try {
               window.webkit.messageHandlers.aexyNav.postMessage({
-                path: location.pathname + location.search,
+                path: location.pathname,
                 title: document.title || ''
               });
             } catch (e) {}
@@ -95,8 +95,17 @@ final class WebNavigator: NSObject, ObservableObject, WKScriptMessageHandler {
         if hasLoaded { webView.reload() }
     }
 
+    /// Drop any query string (raw "?" or a previously double-encoded "%3F") so
+    /// stored/resumed paths stay clean and don't re-encode into the path segment.
+    static func stripQuery(_ p: String) -> String {
+        var s = p
+        if let i = s.firstIndex(of: "?") { s = String(s[..<i]) }
+        if let r = s.range(of: "%3F", options: .caseInsensitive) { s = String(s[..<r.lowerBound]) }
+        return s
+    }
+
     private static func url(for route: String) -> URL {
-        let path = route.drop(while: { $0 == "/" })
+        let path = stripQuery(route).drop(while: { $0 == "/" })
         guard var comps = URLComponents(
             url: AexyWeb.url.appendingPathComponent(String(path)),
             resolvingAgainstBaseURL: false
@@ -117,33 +126,63 @@ final class WebNavigator: NSObject, ObservableObject, WKScriptMessageHandler {
         // WKScriptMessageHandler callbacks are delivered on the main thread.
         MainActor.assumeIsolated {
             guard let body = message.body as? [String: Any] else { return }
-            record(path: (body["path"] as? String) ?? "", title: (body["title"] as? String) ?? "")
+            record(rawPath: (body["path"] as? String) ?? "", title: (body["title"] as? String) ?? "")
         }
     }
 
-    private func record(path: String, title: String) {
+    private func record(rawPath: String, title: String) {
+        let path = Self.stripQuery(rawPath)
         guard !path.isEmpty else { return }
         currentPath = path
-        if !title.isEmpty { currentTitle = title }
+        let name = Self.displayName(path: path, title: title)
+        currentTitle = name
         UserDefaults.standard.set(path, forKey: Self.pathKey)
 
         // Auth pages aren't worth resuming/recents.
         if path.hasPrefix("/login") || path.hasPrefix("/auth") { return }
-        let display = title.isEmpty ? Self.prettyName(path) : title
         var list = recents.filter { $0.path != path }
         list.insert(
-            WebRecent(path: path, title: display, ts: Date().timeIntervalSince1970), at: 0
+            WebRecent(path: path, title: name, ts: Date().timeIntervalSince1970), at: 0
         )
         if list.count > Self.maxRecents { list = Array(list.prefix(Self.maxRecents)) }
         recents = list
         saveRecents()
     }
 
-    /// Fallback label from a path, e.g. "/crm/deals" → "Deals".
+    /// A distinct, brand-free label for a page. The web app uses one constant
+    /// `<title>` ("Aexy | AI Superapp for Companies") everywhere, so a brand-free
+    /// title is preferred when present, otherwise we derive a name from the path.
+    static func displayName(path: String, title: String) -> String {
+        if let cleaned = cleanTitle(title) { return cleaned }
+        return prettyName(path)
+    }
+
+    /// Strip brand/tagline segments ("Aexy", "… Superapp …"); nil if nothing
+    /// meaningful remains (e.g. the constant brand title).
+    static func cleanTitle(_ title: String) -> String? {
+        let parts = title
+            .components(separatedBy: CharacterSet(charactersIn: "|—–·"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        func isBrand(_ s: String) -> Bool {
+            let l = s.lowercased()
+            return l.contains("aexy") || l.contains("superapp")
+        }
+        return parts.first(where: { !isBrand($0) })
+    }
+
+    /// Name from a path, e.g. "/crm" → "CRM", "/crm/deals" → "CRM · Deals".
     static func prettyName(_ path: String) -> String {
-        let last = path.split(separator: "?").first.map(String.init) ?? path
-        let seg = last.split(separator: "/").last.map(String.init) ?? "Page"
-        return seg.replacingOccurrences(of: "-", with: " ").capitalized
+        let clean = path.split(separator: "?").first.map(String.init) ?? path
+        let segs = clean.split(separator: "/").map(String.init).filter { !$0.isEmpty }
+        guard !segs.isEmpty else { return "Home" }
+        func cap(_ s: String) -> String {
+            if s.count <= 3 { return s.uppercased() }   // crm → CRM, ai → AI
+            return s.replacingOccurrences(of: "-", with: " ")
+                .split(separator: " ").map { $0.capitalized }.joined(separator: " ")
+        }
+        if segs.count == 1 { return cap(segs[0]) }
+        return cap(segs[0]) + " · " + cap(segs[segs.count - 1])
     }
 
     // MARK: - Persistence
@@ -158,7 +197,17 @@ final class WebNavigator: NSObject, ObservableObject, WKScriptMessageHandler {
         guard let data = UserDefaults.standard.data(forKey: recentsKey),
               let list = try? JSONDecoder().decode([WebRecent].self, from: data)
         else { return [] }
-        return list
+        // Migrate any pre-fix entries that captured the query string in the path.
+        var seen = Set<String>()
+        var out: [WebRecent] = []
+        for r in list {
+            let p = stripQuery(r.path)
+            guard !p.isEmpty, !seen.contains(p) else { continue }
+            seen.insert(p)
+            let title = r.path == p ? r.title : prettyName(p)
+            out.append(WebRecent(path: p, title: title, ts: r.ts))
+        }
+        return out
     }
 }
 

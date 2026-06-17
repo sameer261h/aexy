@@ -59,9 +59,11 @@ struct MainView: View {
         Self.webItems.contains { $0.id == id }
     }
 
-    /// Active web section shows the live page title; others keep their base label.
+    /// The active web section shows the live page name only when navigated deeper
+    /// than its root (e.g. CRM → "CRM · Deals"); otherwise it keeps its base label.
     private func label(for item: NavEntry) -> String {
-        if item.id == selectedId, isWebSection(selectedId), !web.currentTitle.isEmpty {
+        if item.id == selectedId, isWebSection(selectedId), let route = item.route,
+           web.currentPath.hasPrefix(route + "/"), !web.currentTitle.isEmpty {
             return web.currentTitle
         }
         return item.label
@@ -89,8 +91,8 @@ struct MainView: View {
                                 Label(label(for: item), systemImage: item.icon)
                                     .tag(item.id)
                                     .badge(
-                                        item.id == "web-chat" && state.unreadCount > 0
-                                            ? Text("\(state.unreadCount)") : nil
+                                        item.id == "web-chat" && state.communicatorUnread > 0
+                                            ? Text("\(state.communicatorUnread)") : nil
                                     )
                             }
                         }
@@ -115,11 +117,19 @@ struct MainView: View {
             .task {
                 await state.loadProjectsAndBoard()
                 web.configure(workspaceId: state.selectedWorkspaceId)
-                // Resume: if we left off on a web section, reopen the exact route.
-                if isWebSection(selectedId) {
+                if let pending = state.pendingSection {
+                    state.pendingSection = nil
+                    goToSection(pending)
+                } else if isWebSection(selectedId) {
+                    // Resume: if we left off on a web section, reopen the exact route.
                     let route = Self.webItems.first { $0.id == selectedId }?.route ?? "/"
                     web.navigate(to: web.currentPath.isEmpty ? route : web.currentPath)
                 }
+            }
+            .onChange(of: state.pendingSection) { pending in
+                guard let pending else { return }
+                state.pendingSection = nil
+                goToSection(pending)
             }
             .onChange(of: selectedId) { newValue in
                 UserDefaults.standard.set(newValue, forKey: Self.selKey)
@@ -150,6 +160,16 @@ struct MainView: View {
         }
     }
 
+    /// Select a sidebar section, navigating the web container only if we're not
+    /// already inside it (so a deep-link doesn't needlessly reload the page).
+    private func goToSection(_ id: String) {
+        selectedId = id
+        if let route = Self.webItems.first(where: { $0.id == id })?.route,
+           Self.webSection(for: web.currentPath)?.id != id {
+            web.navigate(to: route)
+        }
+    }
+
     @ViewBuilder private var detail: some View {
         if isWebSection(selectedId) {
             WebContainerView(navigator: web)
@@ -168,38 +188,75 @@ struct MainView: View {
 }
 
 // Global workspace + project switcher (drives the native board + embedded web).
+// Styled as two rounded "pill" menus with icons so the sidebar header reads as a
+// proper account/context switcher rather than raw form controls.
 struct ProjectSwitcher: View {
     @ObservedObject var state: AppState
     static let allProjectsTag = "__all__"
 
+    private var workspaceName: String {
+        state.workspaces.first { $0.id == state.selectedWorkspaceId }?.name
+            ?? state.workspaces.first?.name ?? "Workspace"
+    }
+    private var projectName: String {
+        guard let pid = state.selectedProjectId else { return "All projects" }
+        return state.projects.first { $0.id == pid }?.name ?? "All projects"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if !state.workspaces.isEmpty {
-                Picker("Workspace", selection: Binding(
-                    get: { state.selectedWorkspaceId ?? state.workspaces.first?.id ?? "" },
-                    set: { ws in
-                        state.selectedWorkspaceId = ws
-                        state.selectedProjectId = nil
-                        Task { await state.loadProjectsAndBoard() }
+                Menu {
+                    ForEach(state.workspaces) { ws in
+                        Button(ws.name) {
+                            state.selectedWorkspaceId = ws.id
+                            state.selectedProjectId = nil
+                            Task { await state.loadProjectsAndBoard() }
+                        }
                     }
-                )) {
-                    ForEach(state.workspaces) { ws in Text(ws.name).tag(ws.id) }
+                } label: {
+                    pill(icon: "building.2.fill", title: workspaceName)
                 }
-                .labelsHidden()
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             if !state.projects.isEmpty {
-                Picker("Project", selection: Binding(
-                    get: { state.selectedProjectId ?? Self.allProjectsTag },
-                    set: { value in
-                        if value == Self.allProjectsTag { state.selectAllProjects() }
-                        else { state.selectProject(value) }
+                Menu {
+                    Button("All projects") { state.selectAllProjects() }
+                    Divider()
+                    ForEach(state.projects) { p in
+                        Button(p.name) { state.selectProject(p.id) }
                     }
-                )) {
-                    Text("All projects").tag(Self.allProjectsTag)
-                    ForEach(state.projects) { p in Text(p.name).tag(p.id) }
+                } label: {
+                    pill(icon: "folder.fill", title: projectName, muted: state.selectedProjectId == nil)
                 }
-                .labelsHidden()
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func pill(icon: String, title: String, muted: Bool = false) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .foregroundStyle(muted ? Color.secondary : Color.accentColor)
+            Text(title)
+                .fontWeight(.medium)
+                .lineLimit(1)
+                .foregroundStyle(.primary)
+            Spacer(minLength: 4)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.secondary.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .contentShape(Rectangle())
     }
 }
