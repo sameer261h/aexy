@@ -31,7 +31,7 @@ final class WebNavigator: NSObject, ObservableObject, WKScriptMessageHandler {
     private static let maxRecents = 8
 
     override init() {
-        currentPath = UserDefaults.standard.string(forKey: Self.pathKey) ?? ""
+        currentPath = Self.stripQuery(UserDefaults.standard.string(forKey: Self.pathKey) ?? "")
         recents = Self.loadRecents()
         webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
         super.init()
@@ -57,7 +57,7 @@ final class WebNavigator: NSObject, ObservableObject, WKScriptMessageHandler {
           function post() {
             try {
               window.webkit.messageHandlers.aexyNav.postMessage({
-                path: location.pathname + location.search,
+                path: location.pathname,
                 title: document.title || ''
               });
             } catch (e) {}
@@ -95,8 +95,17 @@ final class WebNavigator: NSObject, ObservableObject, WKScriptMessageHandler {
         if hasLoaded { webView.reload() }
     }
 
+    /// Drop any query string (raw "?" or a previously double-encoded "%3F") so
+    /// stored/resumed paths stay clean and don't re-encode into the path segment.
+    static func stripQuery(_ p: String) -> String {
+        var s = p
+        if let i = s.firstIndex(of: "?") { s = String(s[..<i]) }
+        if let r = s.range(of: "%3F", options: .caseInsensitive) { s = String(s[..<r.lowerBound]) }
+        return s
+    }
+
     private static func url(for route: String) -> URL {
-        let path = route.drop(while: { $0 == "/" })
+        let path = stripQuery(route).drop(while: { $0 == "/" })
         guard var comps = URLComponents(
             url: AexyWeb.url.appendingPathComponent(String(path)),
             resolvingAgainstBaseURL: false
@@ -117,11 +126,12 @@ final class WebNavigator: NSObject, ObservableObject, WKScriptMessageHandler {
         // WKScriptMessageHandler callbacks are delivered on the main thread.
         MainActor.assumeIsolated {
             guard let body = message.body as? [String: Any] else { return }
-            record(path: (body["path"] as? String) ?? "", title: (body["title"] as? String) ?? "")
+            record(rawPath: (body["path"] as? String) ?? "", title: (body["title"] as? String) ?? "")
         }
     }
 
-    private func record(path: String, title: String) {
+    private func record(rawPath: String, title: String) {
+        let path = Self.stripQuery(rawPath)
         guard !path.isEmpty else { return }
         currentPath = path
         let name = Self.displayName(path: path, title: title)
@@ -187,7 +197,17 @@ final class WebNavigator: NSObject, ObservableObject, WKScriptMessageHandler {
         guard let data = UserDefaults.standard.data(forKey: recentsKey),
               let list = try? JSONDecoder().decode([WebRecent].self, from: data)
         else { return [] }
-        return list
+        // Migrate any pre-fix entries that captured the query string in the path.
+        var seen = Set<String>()
+        var out: [WebRecent] = []
+        for r in list {
+            let p = stripQuery(r.path)
+            guard !p.isEmpty, !seen.contains(p) else { continue }
+            seen.insert(p)
+            let title = r.path == p ? r.title : prettyName(p)
+            out.append(WebRecent(path: p, title: title, ts: r.ts))
+        }
+        return out
     }
 }
 
