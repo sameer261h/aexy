@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +34,37 @@ from aexy.models.documentation import (
 from aexy.services.github_service import GitHubService
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# LLM JSON helpers
+# ---------------------------------------------------------------------------
+#
+# Local models routinely wrap their JSON output in markdown fences
+# (```json ... ```) or prefix it with a short preamble. The provider's
+# `_parse_json_response` strips these before parsing, but the parsed
+# dict is then discarded — `AnalysisResult.raw_response` carries the
+# ORIGINAL response text, so `json.loads(result.raw_response)` here
+# would fail on any wrapped output and fall through to the empty-shape
+# fallback. Centralising the strip-then-parse step here keeps the
+# service-side parses robust without coupling them to provider internals.
+
+_FENCE_PREFIX_RE = re.compile(r"^```(?:json)?\s*", re.IGNORECASE)
+_FENCE_SUFFIX_RE = re.compile(r"\s*```\s*$")
+
+
+def _parse_llm_json(text: str) -> dict[str, Any]:
+    """Parse a raw LLM response as JSON, tolerating markdown fences.
+
+    Raises `json.JSONDecodeError` on genuine parse failures so callers
+    can implement their own fallback.
+    """
+    if not text:
+        raise json.JSONDecodeError("empty response", text or "", 0)
+    cleaned = text.strip()
+    cleaned = _FENCE_PREFIX_RE.sub("", cleaned)
+    cleaned = _FENCE_SUFFIX_RE.sub("", cleaned)
+    return json.loads(cleaned)
 
 
 class DocumentGenerationService:
@@ -114,7 +146,7 @@ class DocumentGenerationService:
 
         # Parse the result
         try:
-            doc_content = json.loads(result.raw_response)
+            doc_content = _parse_llm_json(result.raw_response)
             return doc_content
         except json.JSONDecodeError:
             logger.error(f"Failed to parse LLM response as JSON: {result.raw_response[:200]}")
@@ -255,7 +287,7 @@ class DocumentGenerationService:
         )
 
         try:
-            return json.loads(result.raw_response)
+            return _parse_llm_json(result.raw_response)
         except json.JSONDecodeError:
             return self._create_fallback_document(result.raw_response, TemplateCategory.MODULE_DOCS)
 
@@ -310,7 +342,7 @@ class DocumentGenerationService:
         )
 
         try:
-            return json.loads(result.raw_response)
+            return _parse_llm_json(result.raw_response)
         except json.JSONDecodeError:
             logger.error("Failed to parse update response")
             return {"updated_doc": existing_doc, "changes_made": [], "suggestions": []}
@@ -360,7 +392,7 @@ class DocumentGenerationService:
         )
 
         try:
-            return json.loads(result.raw_response)
+            return _parse_llm_json(result.raw_response)
         except json.JSONDecodeError:
             return {
                 "quality_score": 0,
@@ -417,7 +449,7 @@ class DocumentGenerationService:
         )
 
         try:
-            return json.loads(result.raw_response)
+            return _parse_llm_json(result.raw_response)
         except json.JSONDecodeError:
             return self._create_fallback_document(result.raw_response, template.category)
 

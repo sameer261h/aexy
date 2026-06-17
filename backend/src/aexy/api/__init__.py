@@ -6,6 +6,7 @@ from aexy.api.admin import router as admin_router
 from aexy.api.platform_admin import router as platform_admin_router
 from aexy.api.admin_rate_limits import router as admin_rate_limits_router
 from aexy.api.analysis import router as analysis_router
+from aexy.api.code_insights import router as code_insights_router
 from aexy.api.auth import router as auth_router
 from aexy.api.career import router as career_router
 from aexy.api.developers import router as developers_router
@@ -27,6 +28,7 @@ from aexy.api.predictions import router as predictions_router
 from aexy.api.exports import router as exports_router
 from aexy.api.slack import router as slack_router
 from aexy.api.repositories import router as repositories_router
+from aexy.api.workspace_repositories import router as workspace_repositories_router
 from aexy.api.billing import router as billing_router
 # Organization & Team Management
 from aexy.api.workspaces import router as workspaces_router, invites_router
@@ -40,6 +42,7 @@ from aexy.api.planning_poker import router as planning_poker_router
 from aexy.api.project_tasks import router as project_tasks_router
 from aexy.api.workspace_tasks import router as workspace_tasks_router
 from aexy.api.task_templates import router as task_templates_router
+from aexy.api.task_links import router as task_links_router
 # Task Configuration
 from aexy.api.task_config import router as task_config_router
 # External Integrations
@@ -148,6 +151,12 @@ from aexy.api.questionnaires import router as questionnaires_router
 # Compliance Document Center
 from aexy.api.compliance_documents import router as compliance_documents_router
 from aexy.api.compliance_documents import folder_router as compliance_folders_router
+# Drive (collaborative file storage + AI metadata)
+from aexy.api.drive import router as drive_router
+# Workspace-wide file search + per-file metadata
+from aexy.api.file_search import router as file_search_router
+# Super-admin: edit Plan rows + workspace overrides
+from aexy.api.admin_plans import router as admin_plans_router
 # Leave Management & Team Calendar
 from aexy.api.leave import router as leave_router
 from aexy.api.team_calendar import router as team_calendar_router
@@ -179,6 +188,7 @@ api_router.include_router(developers_router, prefix="/developers", tags=["develo
 api_router.include_router(webhooks_router, prefix="/webhooks", tags=["webhooks"])
 api_router.include_router(teams_router, prefix="/teams", tags=["teams"])
 api_router.include_router(analysis_router, tags=["analysis"])
+api_router.include_router(code_insights_router, tags=["code-insights"])
 api_router.include_router(admin_router, tags=["admin"])
 api_router.include_router(platform_admin_router, tags=["platform-admin"])
 api_router.include_router(admin_rate_limits_router, tags=["admin-rate-limits"])
@@ -201,6 +211,7 @@ api_router.include_router(exports_router, tags=["exports"])
 api_router.include_router(slack_router, tags=["slack"])
 # Repository Management
 api_router.include_router(repositories_router, tags=["repositories"])
+api_router.include_router(workspace_repositories_router)
 # Billing & Subscriptions
 api_router.include_router(billing_router, tags=["billing"])
 # Organization & Team Management
@@ -216,6 +227,7 @@ api_router.include_router(retrospectives_router, tags=["retrospectives"])
 api_router.include_router(project_tasks_router, tags=["project-tasks"])
 api_router.include_router(workspace_tasks_router, tags=["workspace-tasks"])
 api_router.include_router(task_templates_router, tags=["task-templates"])
+api_router.include_router(task_links_router, tags=["task-links"])
 # Task Configuration
 api_router.include_router(task_config_router, tags=["task-config"])
 # External Integrations
@@ -325,6 +337,12 @@ api_router.include_router(questionnaires_router, tags=["questionnaires"])
 # Compliance Document Center
 api_router.include_router(compliance_documents_router, tags=["compliance-documents"])
 api_router.include_router(compliance_folders_router, tags=["compliance-folders"])
+# Drive
+api_router.include_router(drive_router, tags=["drive"])
+# Workspace file search + per-file metadata (polymorphic across all sources)
+api_router.include_router(file_search_router, tags=["file-search"])
+# Super-admin plan editor + AI backfill
+api_router.include_router(admin_plans_router, tags=["platform-admin-plans"])
 # Leave Management & Team Calendar
 api_router.include_router(leave_router, tags=["leave"])
 api_router.include_router(team_calendar_router, tags=["team-calendar"])

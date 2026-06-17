@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Any, Annotated, TypedDict, Sequence
+from typing import Any, Annotated, AsyncIterator, TypedDict, Sequence
 import logging
 import operator
 
@@ -67,6 +67,25 @@ class BaseAgent(ABC):
                     model=self.model_name if self.model_name.startswith("gemini") else "gemini-1.5-pro",
                     google_api_key=settings.llm.gemini_api_key,
                     max_output_tokens=4096,
+                )
+            elif self.llm_provider == "lmstudio":
+                # Local LM Studio via OpenAI-compatible chat completions.
+                # Imported lazily so the agent module doesn't require
+                # langchain-openai in production deployments that never
+                # use the local provider.
+                from langchain_openai import ChatOpenAI
+
+                model_id = (
+                    self.model_name
+                    if self.model_name and self.model_name != self.default_model
+                    else settings.llm.lmstudio_model
+                )
+                self._llm = ChatOpenAI(
+                    model=model_id,
+                    base_url=settings.llm.lmstudio_base_url,
+                    api_key=settings.llm.lmstudio_api_key or "lm-studio",
+                    max_tokens=4096,
+                    temperature=0.0,
                 )
             else:
                 # Default to Claude
@@ -398,6 +417,7 @@ IMPORTANT: You MUST use the available tools to accomplish this task. Do not just
                     final_state["final_output"] = {
                         "content": last_message.content,
                         "tool_calls": getattr(last_message, "tool_calls", []),
+                        "usage_metadata": getattr(last_message, "usage_metadata", None),
                     }
 
             return {
@@ -413,3 +433,134 @@ IMPORTANT: You MUST use the available tools to accomplish this task. Do not just
                 "steps": state.get("steps", []),
                 "error": str(e),
             }
+
+    async def astream(
+        self,
+        record_id: str | None = None,
+        record_data: dict | None = None,
+        context: dict | None = None,
+        conversation_history: list[BaseMessage] | None = None,
+    ) -> AsyncIterator[dict]:
+        """Execute the agent and yield streaming events.
+
+        Yields dicts shaped for SSE consumption. Event types:
+
+            - text_delta:     {type, text}                    — token chunk
+            - tool_use_start: {type, tool, id, input}         — tool call begins
+            - tool_result:    {type, tool, id, output}        — tool call returns
+            - assistant_end:  {type, content, tool_calls,
+                               usage_metadata}                — full assistant msg
+            - error:          {type, message}                 — fatal error
+
+        Built on `compiled.astream_events(v2)` so we get token-level deltas
+        + tool boundaries from one stream. The agent's existing `run`
+        path is left untouched for non-streaming callers (executions
+        triggered by Temporal, etc.); only the chat surface uses this.
+        """
+        record_data = record_data or {}
+        context = context or {}
+
+        if conversation_history:
+            messages = [HumanMessage(content=self.system_prompt)]
+            messages.extend(conversation_history)
+        else:
+            initial_message = self.build_initial_message(record_data, context)
+            messages = [
+                HumanMessage(content=self.system_prompt + "\n\n" + initial_message)
+            ]
+
+        state: AgentState = {
+            "messages": messages,
+            "record_id": record_id,
+            "record_data": record_data,
+            "context": context,
+            "steps": [],
+            "final_output": None,
+            "error": None,
+        }
+
+        compiled = self.graph.compile()
+
+        # Track pending tool-call ids so tool_result events can be
+        # matched back to their tool_use_start. LangChain emits the
+        # tool name + args once at on_tool_start, then on_tool_end has
+        # the same run_id; we key by run_id and resolve the name from
+        # the lookup.
+        tool_calls_by_run: dict[str, dict] = {}
+        last_assistant_payload: dict | None = None
+
+        try:
+            async for event in compiled.astream_events(state, version="v2"):
+                event_type = event.get("event")
+                data = event.get("data", {})
+
+                if event_type == "on_chat_model_stream":
+                    chunk = data.get("chunk")
+                    if chunk is None:
+                        continue
+                    text = getattr(chunk, "content", "")
+                    # Some providers stream content as list-of-blocks
+                    # (e.g. Anthropic content block deltas). Normalize
+                    # to a plain string so the frontend doesn't care.
+                    if isinstance(text, list):
+                        text = "".join(
+                            (b.get("text", "") if isinstance(b, dict) else str(b))
+                            for b in text
+                        )
+                    if text:
+                        yield {"type": "text_delta", "text": text}
+
+                elif event_type == "on_tool_start":
+                    run_id = event.get("run_id", "")
+                    tool_name = event.get("name", "tool")
+                    tool_input = data.get("input")
+                    tool_calls_by_run[run_id] = {"name": tool_name}
+                    yield {
+                        "type": "tool_use_start",
+                        "tool": tool_name,
+                        "id": run_id,
+                        "input": tool_input if isinstance(tool_input, dict) else {"input": tool_input},
+                    }
+
+                elif event_type == "on_tool_end":
+                    run_id = event.get("run_id", "")
+                    tool_meta = tool_calls_by_run.pop(run_id, {})
+                    tool_output = data.get("output")
+                    # LangChain ToolMessage has .content; raw outputs
+                    # may be strings or dicts. Pass through as-is.
+                    output_payload: Any
+                    if hasattr(tool_output, "content"):
+                        output_payload = tool_output.content
+                    else:
+                        output_payload = tool_output
+                    yield {
+                        "type": "tool_result",
+                        "tool": tool_meta.get("name", event.get("name", "tool")),
+                        "id": run_id,
+                        "output": output_payload,
+                    }
+
+                elif event_type == "on_chat_model_end":
+                    # The full AIMessage post-LLM-completion. We hold
+                    # onto the latest one so the caller can persist
+                    # tool_calls + usage_metadata after the stream
+                    # finishes.
+                    output = data.get("output")
+                    if output is not None:
+                        content = getattr(output, "content", "")
+                        if isinstance(content, list):
+                            content = "".join(
+                                (b.get("text", "") if isinstance(b, dict) else str(b))
+                                for b in content
+                            )
+                        last_assistant_payload = {
+                            "content": content,
+                            "tool_calls": getattr(output, "tool_calls", []),
+                            "usage_metadata": getattr(output, "usage_metadata", None),
+                        }
+
+            if last_assistant_payload is not None:
+                yield {"type": "assistant_end", **last_assistant_payload}
+        except Exception as e:
+            logger.exception("Agent streaming failed: %s", e)
+            yield {"type": "error", "message": str(e)}

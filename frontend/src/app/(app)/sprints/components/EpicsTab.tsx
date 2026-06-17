@@ -31,7 +31,7 @@ const PRIORITY_COLORS: Record<EpicPriority, string> = {
 };
 
 function EpicCard({ epic }: { epic: EpicListItem }) {
-  const statusStyle = STATUS_COLORS[epic.status];
+  const statusStyle = STATUS_COLORS[epic.status] ?? STATUS_COLORS.open;
   const progress = epic.progress_percentage;
 
   return (

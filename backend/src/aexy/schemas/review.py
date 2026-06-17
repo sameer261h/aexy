@@ -350,9 +350,15 @@ class AnonymousPeerReviewSubmission(ReviewSubmissionBase):
 
 
 class ManagerReviewSubmission(ReviewSubmissionBase):
-    """Manager review submission."""
+    """Manager review submission (draft-friendly).
 
-    overall_rating: float = Field(ge=1, le=5)
+    `overall_rating` is optional because this endpoint backs the
+    Save Draft action — managers can stash responses + axis ratings
+    before they've settled on a final number. The final-required
+    constraint lives on `FinalReviewData` (the finalize endpoint).
+    """
+
+    overall_rating: float | None = Field(default=None, ge=1, le=5)
     ratings_breakdown: dict[str, float] = {}
 
 
@@ -608,7 +614,7 @@ class ContributionSummaryRequest(BaseModel):
 
 # Goal suggestions
 class GoalSuggestion(BaseModel):
-    """Goal suggestion from learning path."""
+    """Goal suggestion from learning path or other AI analyzers."""
 
     title: str
     goal_type: GoalType
@@ -616,3 +622,9 @@ class GoalSuggestion(BaseModel):
     suggested_keywords: list[str]
     learning_milestone_id: str | None = None
     skill_name: str | None = None
+    # Provenance + confidence — the manage dashboard surfaces the
+    # source as a chip and the confidence as a percentage pill. See
+    # `GoalSuggestion` dataclass in services/goal_service.py for the
+    # value contract.
+    source: str = "learning_path"
+    confidence: float = 1.0

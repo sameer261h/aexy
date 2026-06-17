@@ -488,7 +488,9 @@ async def edit_message(
 ):
     await _check_workspace(db, workspace_id, str(current_user.id))
     service = ChatService(db)
-    msg = await service.update_message(message_id, str(current_user.id), data.content)
+    msg = await service.update_message(
+        message_id, str(current_user.id), data.content, workspace_id=workspace_id
+    )
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found or not owned by you")
     await db.commit()
@@ -507,7 +509,9 @@ async def delete_message(
 ):
     await _check_workspace(db, workspace_id, str(current_user.id))
     service = ChatService(db)
-    ok = await service.delete_message(message_id, str(current_user.id))
+    ok = await service.delete_message(
+        message_id, str(current_user.id), workspace_id=workspace_id
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="Message not found or not owned by you")
     await db.commit()
@@ -669,32 +673,26 @@ async def create_meet_link(
             detail="No Google Calendar connected. Connect your Google Calendar in Settings > Integrations.",
         )
 
-    # Refresh token if needed
-    if connection.token_expires_at:
-        now = datetime.now(ZoneInfo("UTC"))
-        if connection.token_expires_at <= now + timedelta(minutes=5):
-            if not connection.refresh_token:
-                raise HTTPException(status_code=400, detail="Calendar token expired. Please reconnect.")
-            settings = get_settings()
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    "https://oauth2.googleapis.com/token",
-                    data={
-                        "client_id": settings.google_client_id,
-                        "client_secret": settings.google_client_secret,
-                        "refresh_token": connection.refresh_token,
-                        "grant_type": "refresh_token",
-                    },
-                    timeout=30.0,
-                )
-                if resp.status_code != 200:
-                    raise HTTPException(status_code=400, detail="Failed to refresh calendar token. Please reconnect.")
-                token_data = resp.json()
-            connection.access_token = token_data["access_token"]
-            connection.token_expires_at = now + timedelta(seconds=token_data.get("expires_in", 3600))
-            if "refresh_token" in token_data:
-                connection.refresh_token = token_data["refresh_token"]
-            await db.flush()
+    # Refresh token if needed (handles rotation + invalid_grant centrally)
+    from aexy.services.oauth_token_service import (
+        RefreshTokenRevokedError,
+        TokenRefreshError,
+        ensure_valid_calendar_connection_token,
+    )
+
+    try:
+        await ensure_valid_calendar_connection_token(db, connection)
+    except RefreshTokenRevokedError:
+        raise HTTPException(
+            status_code=400,
+            detail="Calendar token revoked. Please reconnect your calendar.",
+        )
+    except TokenRefreshError:
+        # Transient failure — tell the user to retry, don't imply revocation
+        raise HTTPException(
+            status_code=502,
+            detail="Temporarily unable to refresh calendar token. Please try again.",
+        )
 
     # Create a calendar event with Meet conference
     now = datetime.now(ZoneInfo("UTC"))

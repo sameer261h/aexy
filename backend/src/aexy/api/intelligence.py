@@ -12,15 +12,61 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.core.database import get_db
 from aexy.api.developers import get_current_developer_id
 from aexy.models.developer import Developer
+from aexy.models.workspace import WorkspaceMember
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/intelligence", tags=["intelligence"])
+
+
+async def get_workspace_member_ids_or_403(
+    db: AsyncSession,
+    workspace_id: str,
+    current_developer_id: str,
+) -> list[str]:
+    """Authorize the caller and return the workspace's developer ids.
+
+    Two distinct concerns are deliberately separated:
+
+      1. **Authorization** — the caller must hold an *active* workspace
+         membership. A "removed" (former employee) or "suspended" row
+         still exists in `workspace_members` so we can keep their
+         historical attribution intact; that row must not be enough
+         to keep accessing intelligence data.
+
+      2. **Analytics population** — the returned id list is the set of
+         developers whose activity feeds the intelligence aggregates.
+         Here we DO want all-time members (status-agnostic) so a
+         former employee's prior contributions still show up in the
+         period they were active.
+
+    Returns 403 if the caller isn't an active member; 404 if the
+    workspace has no members at all (empty / nonexistent).
+    """
+    # 1. Authorize — active-membership-only.
+    auth_stmt = select(WorkspaceMember.developer_id).where(
+        WorkspaceMember.workspace_id == workspace_id,
+        WorkspaceMember.developer_id == current_developer_id,
+        WorkspaceMember.status == "active",
+    )
+    if not (await db.execute(auth_stmt)).scalar_one_or_none():
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
+
+    # 2. Population — all members for analytics, status-agnostic.
+    pop_stmt = select(WorkspaceMember.developer_id).where(
+        WorkspaceMember.workspace_id == workspace_id,
+    )
+    developer_ids = [row[0] for row in (await db.execute(pop_stmt)).all()]
+    if not developer_ids:
+        raise HTTPException(status_code=404, detail="Workspace not found or empty")
+
+    return developer_ids
 
 
 # =============================================================================
@@ -473,20 +519,9 @@ async def get_team_burnout_overview(
     """
     from aexy.services.burnout_detector import get_team_burnout_overview
 
-    # TODO: Add workspace access check
-    # For now, get all developers in the workspace
-    from sqlalchemy import select
-    from aexy.models.workspace import WorkspaceMember
-
-    member_stmt = (
-        select(WorkspaceMember.developer_id)
-        .where(WorkspaceMember.workspace_id == workspace_id)
+    developer_ids = await get_workspace_member_ids_or_403(
+        db, workspace_id, developer_id
     )
-    result = await db.execute(member_stmt)
-    developer_ids = [row[0] for row in result.all()]
-
-    if not developer_ids:
-        raise HTTPException(status_code=404, detail="Workspace not found or empty")
 
     overview = await get_team_burnout_overview(db, developer_ids)
 
@@ -503,19 +538,9 @@ async def compare_team_expertise(
     """Compare expertise in a skill across team members."""
     from aexy.services.expertise_confidence import compare_developer_expertise
 
-    # Get team members
-    from sqlalchemy import select
-    from aexy.models.workspace import WorkspaceMember
-
-    member_stmt = (
-        select(WorkspaceMember.developer_id)
-        .where(WorkspaceMember.workspace_id == workspace_id)
+    developer_ids = await get_workspace_member_ids_or_403(
+        db, workspace_id, developer_id
     )
-    result = await db.execute(member_stmt)
-    developer_ids = [row[0] for row in result.all()]
-
-    if not developer_ids:
-        raise HTTPException(status_code=404, detail="Workspace not found or empty")
 
     comparisons = await compare_developer_expertise(db, developer_ids, skill_name)
 
@@ -578,19 +603,9 @@ async def get_team_collaboration(
     - Top connectors in the team
     """
     from aexy.services.collaboration_network import CollaborationNetworkAnalyzer
-    from sqlalchemy import select
-    from aexy.models.workspace import WorkspaceMember
-
-    # Get team members
-    member_stmt = (
-        select(WorkspaceMember.developer_id)
-        .where(WorkspaceMember.workspace_id == workspace_id)
+    developer_ids = await get_workspace_member_ids_or_403(
+        db, workspace_id, developer_id
     )
-    result = await db.execute(member_stmt)
-    developer_ids = [row[0] for row in result.all()]
-
-    if not developer_ids:
-        raise HTTPException(status_code=404, detail="Workspace not found or empty")
 
     analyzer = CollaborationNetworkAnalyzer(db)
     cohesion = await analyzer.analyze_team_cohesion(developer_ids, days)
@@ -622,19 +637,9 @@ async def get_collaboration_graph(
     - Last interaction timestamp
     """
     from aexy.services.collaboration_network import CollaborationNetworkAnalyzer
-    from sqlalchemy import select
-    from aexy.models.workspace import WorkspaceMember
-
-    # Get team members
-    member_stmt = (
-        select(WorkspaceMember.developer_id)
-        .where(WorkspaceMember.workspace_id == workspace_id)
+    developer_ids = await get_workspace_member_ids_or_403(
+        db, workspace_id, developer_id
     )
-    result = await db.execute(member_stmt)
-    developer_ids = [row[0] for row in result.all()]
-
-    if not developer_ids:
-        raise HTTPException(status_code=404, detail="Workspace not found or empty")
 
     analyzer = CollaborationNetworkAnalyzer(db)
     edges = await analyzer.build_collaboration_graph(developer_ids, days)
@@ -735,19 +740,9 @@ async def get_team_complexity(
     - Critical change handlers
     """
     from aexy.services.complexity_classifier import get_complexity_summary
-    from sqlalchemy import select
-    from aexy.models.workspace import WorkspaceMember
-
-    # Get team members
-    member_stmt = (
-        select(WorkspaceMember.developer_id)
-        .where(WorkspaceMember.workspace_id == workspace_id)
+    developer_ids = await get_workspace_member_ids_or_403(
+        db, workspace_id, developer_id
     )
-    result = await db.execute(member_stmt)
-    developer_ids = [row[0] for row in result.all()]
-
-    if not developer_ids:
-        raise HTTPException(status_code=404, detail="Workspace not found or empty")
 
     summary = await get_complexity_summary(db, developer_ids, days)
 
@@ -820,19 +815,9 @@ async def get_team_technology(
     - Critical upgrades needed
     """
     from aexy.services.technology_tracker import get_team_technology_overview
-    from sqlalchemy import select
-    from aexy.models.workspace import WorkspaceMember
-
-    # Get team members
-    member_stmt = (
-        select(WorkspaceMember.developer_id)
-        .where(WorkspaceMember.workspace_id == workspace_id)
+    developer_ids = await get_workspace_member_ids_or_403(
+        db, workspace_id, developer_id
     )
-    result = await db.execute(member_stmt)
-    developer_ids = [row[0] for row in result.all()]
-
-    if not developer_ids:
-        raise HTTPException(status_code=404, detail="Workspace not found or empty")
 
     overview = await get_team_technology_overview(db, developer_ids, days)
 

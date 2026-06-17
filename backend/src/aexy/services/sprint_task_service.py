@@ -7,7 +7,7 @@ from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from aexy.models.sprint import Sprint, SprintTask, TaskActivity
+from aexy.models.sprint import Sprint, SprintTask, TaskActivity, TaskAttachment, WorkspaceTaskStatus
 from aexy.services.task_sources.base import TaskItem, TaskSourceConfig, TaskStatus
 from aexy.services.task_sources.github_issues import GitHubIssuesSource
 from aexy.services.task_sources.jira import JiraSource
@@ -19,6 +19,80 @@ from aexy.services.notification_service import (
     notify_mention,
     _get_text_snippet,
 )
+from aexy.services.github_task_sync_service import GitHubTaskSyncService
+
+
+class TaskValidationError(Exception):
+    """Raised when task-create/update inputs reference invalid relationships
+    (sprint outside project, status from a sibling project, project without
+    a team, …). Carries a stable ``code`` the API layer maps to a 400 detail
+    so the frontend can branch on the code without parsing prose.
+    """
+
+    def __init__(self, code: str, message: str | None = None) -> None:
+        self.code = code
+        super().__init__(message or code)
+
+
+def _stringify_field(value: object) -> str | None:
+    """Render a field value into TaskActivity.old_value / new_value text.
+
+    Returns None for None inputs so the History tab can render "—" or "none"
+    consistently instead of the literal string "None".
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+    return str(value)
+
+
+def _move_breadcrumb(other_task: SprintTask, *, kind: str) -> tuple[str, dict]:
+    """Build a one-line "Moved from/to <KEY> — <title>" breadcrumb.
+
+    Returns (plain_text, prosemirror_paragraph_node). The text form is
+    prefixed to the receiving task's ``description``; the node is
+    prepended to its ``description_json`` so every surface that already
+    renders descriptions also shows the breadcrumb without any extra UI.
+    """
+    verb = "Moved from" if kind == "from" else "Moved to"
+    text = f"{verb} {other_task.task_key} — {other_task.title}"
+    url = f"/sprints/{other_task.team_id}/board?task={other_task.id}"
+    node = {
+        "type": "paragraph",
+        "content": [
+            {
+                "type": "text",
+                "marks": [
+                    {
+                        "type": "link",
+                        "attrs": {
+                            "href": url,
+                            "target": "_blank",
+                            "rel": "noopener noreferrer",
+                        },
+                    }
+                ],
+                "text": text,
+            }
+        ],
+    }
+    return text, node
+
+
+def _prepend_node_to_doc(doc: dict | None, node: dict) -> dict:
+    """Return a ProseMirror doc with ``node`` inserted at the top."""
+    if not doc or not isinstance(doc, dict) or "content" not in doc:
+        return {"type": "doc", "content": [node]}
+    return {**doc, "content": [node, *list(doc.get("content") or [])]}
+
+
+def _prefix_description(existing: str | None, prefix: str) -> str:
+    if not existing:
+        return prefix
+    return f"{prefix}\n\n{existing}"
 
 
 class SprintTaskService:
@@ -43,6 +117,10 @@ class SprintTaskService:
         status: str = "backlog",
         epic_id: str | None = None,
         parent_task_id: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        estimated_hours: float | None = None,
+        actor_id: str | None = None,
     ) -> SprintTask:
         """Add a task to a sprint.
 
@@ -90,9 +168,13 @@ class SprintTaskService:
             status=status,
             epic_id=epic_id,
             parent_task_id=parent_task_id,
+            start_date=start_date,
+            end_date=end_date,
+            estimated_hours=estimated_hours,
         )
         self.db.add(task)
         await self.db.flush()
+        await GitHubTaskSyncService(self.db).auto_link_issue_references(task)
 
         # Re-fetch with relationships loaded to avoid lazy loading issues
         stmt = (
@@ -114,10 +196,17 @@ class SprintTaskService:
                 entity_type="task",
                 entity_id=str(created_task.id),
                 activity_type="created",
-                actor_id=assignee_id,
+                actor_id=actor_id,
                 title=f"Created task '{title}'",
                 metadata={"sprint_id": sprint_id, "source_type": source_type},
             )
+
+        # Per-task activity row so the History tab shows who created the task.
+        await self.log_activity(
+            task_id=str(created_task.id),
+            action="created",
+            actor_id=actor_id,
+        )
 
         # Dispatch task.created event for automations
         if workspace_id:
@@ -208,6 +297,7 @@ class SprintTaskService:
         labels: list[str] | None = None,
         search: str | None = None,
         include_archived: bool = False,
+        archived_only: bool = False,
         limit: int = 500,
         offset: int = 0,
     ) -> list[SprintTask]:
@@ -228,7 +318,9 @@ class SprintTaskService:
             )
         )
 
-        if not include_archived:
+        if archived_only:
+            stmt = stmt.where(SprintTask.is_archived.is_(True))
+        elif not include_archived:
             stmt = stmt.where(SprintTask.is_archived.is_(False))
         if status:
             stmt = stmt.where(SprintTask.status.in_(status))
@@ -311,6 +403,7 @@ class SprintTaskService:
         task_id: str,
         title: str | None = None,
         description: str | None = None,
+        description_json: dict | None = ...,  # Sentinel: distinct from explicit None
         story_points: int | None = None,
         priority: str | None = None,
         status: str | None = None,
@@ -318,22 +411,47 @@ class SprintTaskService:
         epic_id: str | None = ...,  # Use sentinel to distinguish from None
         assignee_id: str | None = ...,  # Use sentinel to distinguish from None
         contributes_to_goal: bool | None = None,
+        start_date: datetime | None = ...,  # Sentinel: explicit None clears the date
+        end_date: datetime | None = ...,
+        estimated_hours: float | None = ...,
+        actor_id: str | None = None,
     ) -> SprintTask | None:
         """Update task details."""
         task = await self.get_task(task_id)
         if not task:
             return None
 
+        # Snapshot the fields we want to log before mutation, so each field that
+        # actually changes produces a per-task activity row attributed to the
+        # acting user. Without this, the History tab can't show "X changed
+        # priority from medium to high" — only the assignment edge case was
+        # logged before.
+        field_changes: list[tuple[str, str, object, object]] = []
+
+        def _record(action: str, field: str, old: object, new: object) -> None:
+            if old != new:
+                field_changes.append((action, field, old, new))
+
         if title is not None:
+            _record("title_changed", "title", task.title, title)
             task.title = title
         if description is not None:
+            _record("description_changed", "description", task.description, description)
             task.description = description
+        if description_json is not ...:
+            # Rich-text representation of description; not activity-logged
+            # because `description_changed` already covers the change event.
+            task.description_json = description_json
         if story_points is not None:
+            _record("points_changed", "story_points", task.story_points, story_points)
             task.story_points = story_points
         if priority is not None:
+            _record("priority_changed", "priority", task.priority, priority)
             task.priority = priority
         if status is not None:
+            await self.validate_status_slug(task, status)
             old_status = task.status
+            _record("status_changed", "status", old_status, status)
             task.status = status
             now = datetime.now(timezone.utc)
             # Track status change timestamps
@@ -347,20 +465,119 @@ class SprintTaskService:
                     task.cycle_time_hours = (now - task.work_started_at).total_seconds() / 3600
                 task.lead_time_hours = (now - task.created_at).total_seconds() / 3600
         if labels is not None:
+            _record("labels_changed", "labels", task.labels or [], labels)
             task.labels = labels
         if epic_id is not ...:  # Only update if explicitly passed (including None)
+            _record("epic_changed", "epic_id", task.epic_id, epic_id)
             task.epic_id = epic_id
+
+        prior_assignee_id: str | None = None
+        assignee_changed = False
         if assignee_id is not ...:  # Only update if explicitly passed (including None)
+            prior_assignee_id = task.assignee_id
+            assignee_changed = prior_assignee_id != assignee_id
             task.assignee_id = assignee_id
         if contributes_to_goal is not None:
             task.contributes_to_goal = contributes_to_goal
+        if start_date is not ...:
+            _record("start_date_changed", "start_date", task.start_date, start_date)
+            task.start_date = start_date
+        if end_date is not ...:
+            _record("end_date_changed", "end_date", task.end_date, end_date)
+            task.end_date = end_date
+        if estimated_hours is not ...:
+            _record("estimated_hours_changed", "estimated_hours", task.estimated_hours, estimated_hours)
+            task.estimated_hours = estimated_hours
 
         await self.db.flush()
+        await GitHubTaskSyncService(self.db).auto_link_issue_references(task)
 
-        # Re-fetch with relationships loaded
-        return await self.get_task(task_id)
+        # Persist a per-task activity row for every field that actually changed.
+        # Description is intentionally not stringified into old/new — it's often
+        # large rich text — only that it changed is recorded.
+        for action, field, old_v, new_v in field_changes:
+            log_old = None if action == "description_changed" else _stringify_field(old_v)
+            log_new = None if action == "description_changed" else _stringify_field(new_v)
+            await self.log_activity(
+                task_id=task_id,
+                action=action,
+                actor_id=actor_id,
+                field_name=field,
+                old_value=log_old,
+                new_value=log_new,
+            )
 
-    async def remove_task(self, task_id: str) -> bool:
+        # Log assignment change made via the generic update path so the
+        # assignment history shows the full chain even when reassignment
+        # is performed through PATCH /sprint-tasks/{id} rather than the
+        # dedicated /assign endpoint.
+        if assignee_changed:
+            # Per-task activity stream (rendered by the History tab).
+            await self.log_activity(
+                task_id=task_id,
+                action="assigned" if assignee_id else "unassigned",
+                actor_id=actor_id,
+                field_name="assignee_id",
+                old_value=prior_assignee_id,
+                new_value=assignee_id,
+                metadata={
+                    "from_assignee_id": prior_assignee_id,
+                    "to_assignee_id": assignee_id,
+                },
+            )
+            # Workspace-wide unified activity feed.
+            if task.workspace_id:
+                await log_activity(
+                    self.db,
+                    workspace_id=str(task.workspace_id),
+                    entity_type="task",
+                    entity_id=str(task.id),
+                    activity_type="assigned" if assignee_id else "unassigned",
+                    actor_id=actor_id,
+                    title=(
+                        f"Assigned task '{task.title}'"
+                        if assignee_id
+                        else f"Unassigned task '{task.title}'"
+                    ),
+                    changes={"assignee_id": {"old": prior_assignee_id, "new": assignee_id}},
+                    metadata={
+                        "from_assignee_id": prior_assignee_id,
+                        "to_assignee_id": assignee_id,
+                    },
+                )
+
+        # Re-fetch with relationships loaded (assignee may have changed).
+        refreshed = await self.get_task(task_id)
+
+        # Dispatch task.assigned automation trigger so PATCH-based reassignments
+        # fire automations the same way the dedicated /assign endpoint does.
+        # Mirrors the dispatch in `assign_task` — keep these in sync.
+        if (
+            assignee_changed
+            and assignee_id
+            and refreshed
+            and refreshed.workspace_id
+        ):
+            await dispatch_automation_event(
+                db=self.db,
+                workspace_id=refreshed.workspace_id,
+                module="sprints",
+                trigger_type="task.assigned",
+                entity_id=refreshed.id,
+                trigger_data={
+                    "task_id": refreshed.id,
+                    "task_title": refreshed.title,
+                    "sprint_id": refreshed.sprint_id,
+                    "assignee_id": assignee_id,
+                    "assignee_email": refreshed.assignee.email if refreshed.assignee else None,
+                    "status": refreshed.status,
+                    "workspace_id": refreshed.workspace_id,
+                },
+            )
+
+        return refreshed
+
+    async def remove_task(self, task_id: str, actor_id: str | None = None) -> bool:
         """Remove a task from a sprint (soft delete via archive)."""
         task = await self.get_task(task_id)
         if not task:
@@ -374,14 +591,23 @@ class SprintTaskService:
                 entity_type="task",
                 entity_id=str(task.id),
                 activity_type="deleted",
+                actor_id=actor_id,
                 title=f"Removed task '{task.title}'",
             )
+        # History tab event so the timeline shows the archive action.
+        await self.log_activity(
+            task_id=task_id,
+            action="archived",
+            actor_id=actor_id,
+        )
 
         task.is_archived = True
         await self.db.flush()
         return True
 
-    async def archive_task(self, task_id: str) -> SprintTask | None:
+    async def archive_task(
+        self, task_id: str, actor_id: str | None = None
+    ) -> SprintTask | None:
         """Archive a task (soft delete)."""
         task = await self.get_task(task_id)
         if not task:
@@ -389,9 +615,16 @@ class SprintTaskService:
 
         task.is_archived = True
         await self.db.flush()
+        await self.log_activity(
+            task_id=task_id,
+            action="archived",
+            actor_id=actor_id,
+        )
         return await self.get_task(task_id)
 
-    async def unarchive_task(self, task_id: str) -> SprintTask | None:
+    async def unarchive_task(
+        self, task_id: str, actor_id: str | None = None
+    ) -> SprintTask | None:
         """Unarchive a task (restore from soft delete)."""
         task = await self.get_task(task_id)
         if not task:
@@ -399,6 +632,11 @@ class SprintTaskService:
 
         task.is_archived = False
         await self.db.flush()
+        await self.log_activity(
+            task_id=task_id,
+            action="unarchived",
+            actor_id=actor_id,
+        )
         return await self.get_task(task_id)
 
     # Assignment
@@ -408,6 +646,7 @@ class SprintTaskService:
         developer_id: str,
         reason: str | None = None,
         confidence: float | None = None,
+        actor_id: str | None = None,
     ) -> SprintTask | None:
         """Assign a task to a developer.
 
@@ -416,6 +655,7 @@ class SprintTaskService:
             developer_id: Developer ID to assign.
             reason: Optional reason for assignment (e.g., AI explanation).
             confidence: Optional confidence score (0-1).
+            actor_id: Developer performing the assignment (for history).
 
         Returns:
             Updated SprintTask.
@@ -424,6 +664,7 @@ class SprintTaskService:
         if not task:
             return None
 
+        prior_assignee_id = task.assignee_id
         task.assignee_id = developer_id
         task.assignment_reason = reason
         task.assignment_confidence = confidence
@@ -433,7 +674,23 @@ class SprintTaskService:
         # Re-fetch with relationships loaded
         updated_task = await self.get_task(task_id)
 
-        # Log unified activity for assignment
+        # Per-task activity stream consumed by the History tab.
+        await self.log_activity(
+            task_id=task_id,
+            action="assigned",
+            actor_id=actor_id,
+            field_name="assignee_id",
+            old_value=prior_assignee_id,
+            new_value=developer_id,
+            metadata={
+                "assignment_reason": reason,
+                "from_assignee_id": prior_assignee_id,
+                "to_assignee_id": developer_id,
+            },
+        )
+
+        # Log unified activity for assignment — capture both old and new
+        # assignee in metadata so the history UI can render the full chain.
         if updated_task and updated_task.workspace_id:
             await log_activity(
                 self.db,
@@ -441,9 +698,14 @@ class SprintTaskService:
                 entity_type="task",
                 entity_id=str(updated_task.id),
                 activity_type="assigned",
+                actor_id=actor_id,
                 title=f"Assigned task '{updated_task.title}'",
-                changes={"assignee_id": {"new": developer_id}},
-                metadata={"assignment_reason": reason},
+                changes={"assignee_id": {"old": prior_assignee_id, "new": developer_id}},
+                metadata={
+                    "assignment_reason": reason,
+                    "from_assignee_id": prior_assignee_id,
+                    "to_assignee_id": developer_id,
+                },
             )
 
         # Dispatch task.assigned event for automations
@@ -468,17 +730,49 @@ class SprintTaskService:
 
         return updated_task
 
-    async def unassign_task(self, task_id: str) -> SprintTask | None:
+    async def unassign_task(
+        self, task_id: str, actor_id: str | None = None
+    ) -> SprintTask | None:
         """Remove assignment from a task."""
         task = await self.get_task(task_id)
         if not task:
             return None
 
+        prior_assignee_id = task.assignee_id
         task.assignee_id = None
         task.assignment_reason = None
         task.assignment_confidence = None
 
         await self.db.flush()
+
+        if prior_assignee_id:
+            await self.log_activity(
+                task_id=task_id,
+                action="unassigned",
+                actor_id=actor_id,
+                field_name="assignee_id",
+                old_value=prior_assignee_id,
+                new_value=None,
+                metadata={
+                    "from_assignee_id": prior_assignee_id,
+                    "to_assignee_id": None,
+                },
+            )
+            if task.workspace_id:
+                await log_activity(
+                    self.db,
+                    workspace_id=str(task.workspace_id),
+                    entity_type="task",
+                    entity_id=str(task.id),
+                    activity_type="unassigned",
+                    actor_id=actor_id,
+                    title=f"Unassigned task '{task.title}'",
+                    changes={"assignee_id": {"old": prior_assignee_id, "new": None}},
+                    metadata={
+                        "from_assignee_id": prior_assignee_id,
+                        "to_assignee_id": None,
+                    },
+                )
 
         # Re-fetch with relationships loaded
         return await self.get_task(task_id)
@@ -513,20 +807,13 @@ class SprintTaskService:
         self,
         task_ids: list[str],
         new_status: str,
+        actor_id: str | None = None,
     ) -> list[SprintTask]:
-        """Bulk update status for multiple tasks.
-
-        Args:
-            task_ids: List of task IDs to update.
-            new_status: New status value for all tasks.
-
-        Returns:
-            List of updated SprintTasks.
-        """
+        """Bulk update status for multiple tasks."""
         updated_tasks = []
 
         for task_id in task_ids:
-            task = await self.update_task_status(task_id, new_status)
+            task = await self.update_task_status(task_id, new_status, actor_id=actor_id)
             if task:
                 updated_tasks.append(task)
 
@@ -536,12 +823,14 @@ class SprintTaskService:
         self,
         task_ids: list[str],
         target_sprint_id: str,
+        actor_id: str | None = None,
     ) -> list[SprintTask]:
         """Bulk move tasks to another sprint.
 
         Args:
             task_ids: List of task IDs to move.
             target_sprint_id: Target sprint ID.
+            actor_id: Developer performing the move (for History attribution).
 
         Returns:
             List of updated SprintTasks.
@@ -559,26 +848,457 @@ class SprintTaskService:
         for task_id in task_ids:
             task = await self.get_task(task_id)
             if task:
+                prior_sprint_id = str(task.sprint_id) if task.sprint_id else None
                 task.sprint_id = target_sprint_id
                 task.workspace_id = target_sprint.workspace_id
                 await self.db.flush()
+                # History tab event so sprint moves show up alongside other
+                # task activity. The renderer uses sprint_changed.
+                if prior_sprint_id != target_sprint_id:
+                    await self.log_activity(
+                        task_id=task_id,
+                        action="sprint_changed",
+                        actor_id=actor_id,
+                        field_name="sprint_id",
+                        old_value=prior_sprint_id,
+                        new_value=target_sprint_id,
+                    )
                 updated_task = await self.get_task(task_id)
                 if updated_task:
                     updated_tasks.append(updated_task)
 
         return updated_tasks
 
+    # ---- Cross-project move (fork + link) ----
+    #
+    # "Move" here is fork-and-link, not a row update. A new SprintTask is
+    # created in the target project, linked back to the source via a
+    # `task_dependencies` row with `dependency_type="duplicates"`, and the
+    # source is either archived or marked done — caller's choice. See
+    # `move_to_project` for the full contract.
+
+    async def _resolve_open_status_slug(
+        self,
+        workspace_id: str,
+        project_id: str,
+    ) -> str:
+        """First active status whose category has semantics='open' in this
+        project's scope (or workspace fallback). Falls back to canonical
+        "todo" if the workspace has no categories table yet."""
+        from aexy.models.sprint import WorkspaceStatusCategory
+
+        cat_stmt = (
+            select(WorkspaceStatusCategory.slug)
+            .where(WorkspaceStatusCategory.workspace_id == workspace_id)
+            .where(WorkspaceStatusCategory.semantics == "open")
+        )
+        cat_slugs = [row[0] for row in (await self.db.execute(cat_stmt)).all()]
+        if not cat_slugs:
+            return "todo"
+
+        scope = or_(
+            WorkspaceTaskStatus.project_id.is_(None),
+            WorkspaceTaskStatus.project_id == project_id,
+        )
+        stmt = (
+            select(WorkspaceTaskStatus.slug)
+            .where(WorkspaceTaskStatus.workspace_id == workspace_id)
+            .where(WorkspaceTaskStatus.is_active.is_(True))
+            .where(WorkspaceTaskStatus.category.in_(cat_slugs))
+            .where(scope)
+            .order_by(
+                # Prefer project-scoped rows over workspace defaults so the
+                # project's customized open column wins.
+                WorkspaceTaskStatus.project_id.is_(None),
+                WorkspaceTaskStatus.position,
+            )
+            .limit(1)
+        )
+        row = (await self.db.execute(stmt)).first()
+        return row[0] if row else "todo"
+
+    async def _resolve_done_status_slug(
+        self,
+        workspace_id: str,
+        project_id: str,
+    ) -> str:
+        """Mirror of `_resolve_open_status_slug` but for `semantics='done'`."""
+        from aexy.models.sprint import WorkspaceStatusCategory
+
+        cat_stmt = (
+            select(WorkspaceStatusCategory.slug)
+            .where(WorkspaceStatusCategory.workspace_id == workspace_id)
+            .where(WorkspaceStatusCategory.semantics == "done")
+        )
+        cat_slugs = [row[0] for row in (await self.db.execute(cat_stmt)).all()]
+        if not cat_slugs:
+            return "done"
+
+        scope = or_(
+            WorkspaceTaskStatus.project_id.is_(None),
+            WorkspaceTaskStatus.project_id == project_id,
+        )
+        stmt = (
+            select(WorkspaceTaskStatus.slug)
+            .where(WorkspaceTaskStatus.workspace_id == workspace_id)
+            .where(WorkspaceTaskStatus.is_active.is_(True))
+            .where(WorkspaceTaskStatus.category.in_(cat_slugs))
+            .where(scope)
+            .order_by(
+                WorkspaceTaskStatus.project_id.is_(None),
+                WorkspaceTaskStatus.position,
+            )
+            .limit(1)
+        )
+        row = (await self.db.execute(stmt)).first()
+        return row[0] if row else "done"
+
+    async def _is_project_member(
+        self, project_id: str, developer_id: str
+    ) -> bool:
+        from aexy.models.project import ProjectMember
+
+        stmt = (
+            select(ProjectMember.id)
+            .where(ProjectMember.project_id == project_id)
+            .where(ProjectMember.developer_id == developer_id)
+            .limit(1)
+        )
+        return (await self.db.execute(stmt)).first() is not None
+
+    async def _clone_task_to_project(
+        self,
+        *,
+        source: SprintTask,
+        target_project_id: str,
+        new_parent_id: str | None,
+        actor_id: str | None,
+        override_status_slug: str | None = None,
+    ) -> SprintTask:
+        """Create a new task in the target project copying the carry-over
+        fields from `source`. Used by `move_to_project` for the parent task
+        and (under `cascade`) recursively for each subtask.
+
+        Fields explicitly NOT copied — see plan for rationale:
+        - source_type/source_id/source_url (new task is fresh; the link is
+          via task_dependencies)
+        - started_at/completed_at, cycle_time_hours, lead_time_hours
+        - epic_id/story_id (project-scoped, won't resolve in target)
+        - sprint_id, carried_over_from_sprint_id (no target sprint)
+        - parent_task_id — caller passes `new_parent_id` explicitly so the
+          cascade case can wire the new subtree
+        - attachments, comments — left on the source for history
+        """
+        assignee_id: str | None = None
+        if source.assignee_id and await self._is_project_member(
+            target_project_id, str(source.assignee_id)
+        ):
+            assignee_id = str(source.assignee_id)
+
+        if override_status_slug:
+            open_slug = override_status_slug
+        else:
+            open_slug = await self._resolve_open_status_slug(
+                str(source.workspace_id), target_project_id
+            )
+
+        # Prepend a "Moved from <SOURCE-KEY>" breadcrumb so the new task
+        # records its origin inline. Visible in every surface that already
+        # renders the description — list previews, detail modal, mobile.
+        breadcrumb_text, breadcrumb_node = _move_breadcrumb(source, kind="from")
+        new_description = _prefix_description(source.description, breadcrumb_text)
+        new_description_json = _prepend_node_to_doc(
+            source.description_json, breadcrumb_node
+        )
+
+        new_task = SprintTask(
+            id=str(uuid4()),
+            workspace_id=source.workspace_id,
+            team_id=target_project_id,
+            sprint_id=None,
+            source_type="manual",
+            source_id=str(uuid4()),
+            title=source.title,
+            description=new_description,
+            description_json=new_description_json,
+            story_points=source.story_points,
+            priority=source.priority,
+            labels=list(source.labels or []),
+            assignee_id=assignee_id,
+            status=open_slug,
+            custom_fields=dict(source.custom_fields or {}),
+            task_type=source.task_type,
+            start_date=source.start_date,
+            end_date=source.end_date,
+            estimated_hours=source.estimated_hours,
+            parent_task_id=new_parent_id,
+        )
+        self.db.add(new_task)
+        await self.db.flush()
+
+        # Link back to source via task_dependencies. The convention used by
+        # the rest of the codebase: `blocking_task_id` is the upstream task
+        # (the original), `dependent_task_id` is the downstream (the new
+        # task). With `dependency_type="duplicates"` this reads as
+        # "new task duplicates source".
+        from aexy.models.dependency import TaskDependency
+
+        link = TaskDependency(
+            id=str(uuid4()),
+            workspace_id=source.workspace_id,
+            dependent_task_id=new_task.id,
+            blocking_task_id=source.id,
+            dependency_type="duplicates",
+            created_by_id=actor_id,
+        )
+        self.db.add(link)
+        await self.db.flush()
+
+        await self.log_activity(
+            task_id=new_task.id,
+            action="created_from_move",
+            actor_id=actor_id,
+            metadata={
+                "source_task_id": str(source.id),
+                "source_task_key": source.task_key,
+                "source_project_id": str(source.team_id) if source.team_id else None,
+            },
+        )
+        return new_task
+
+    async def move_to_project(
+        self,
+        *,
+        task_id: str,
+        target_project_id: str,
+        source_action: str,
+        subtask_strategy: str = "block",
+        actor_id: str | None = None,
+        target_status_slug: str | None = None,
+    ) -> SprintTask:
+        """Fork a task into another project in the same workspace.
+
+        Returns the newly created task. The source task is either archived
+        or marked done depending on `source_action`. See the plan file
+        `mutable-herding-flute.md` for full semantics.
+        """
+        if source_action not in ("archive", "mark_done"):
+            raise TaskValidationError("invalid_source_action")
+        if subtask_strategy not in ("block", "cascade", "orphan"):
+            raise TaskValidationError("invalid_subtask_strategy")
+
+        source = await self.get_task(task_id)
+        if not source:
+            raise TaskValidationError("source_task_not_found")
+        if source.is_archived:
+            raise TaskValidationError("task_already_archived")
+        if str(source.team_id) == str(target_project_id):
+            raise TaskValidationError("same_project_move")
+
+        from aexy.models.project import Project
+
+        target_stmt = select(Project).where(Project.id == target_project_id)
+        target = (await self.db.execute(target_stmt)).scalar_one_or_none()
+        if not target:
+            raise TaskValidationError("target_project_not_found")
+        if str(target.workspace_id) != str(source.workspace_id):
+            raise TaskValidationError("cross_workspace_move")
+
+        if target_status_slug is not None:
+            from aexy.services.task_config_service import TaskConfigService
+
+            target_statuses = await TaskConfigService(
+                self.db
+            ).get_statuses_for_project(
+                str(source.workspace_id), target_project_id
+            )
+            if not any(s.slug == target_status_slug for s in target_statuses):
+                raise TaskValidationError("invalid_target_status")
+
+        # Detect live subtasks (one level — recursion deeper is deferred).
+        sub_stmt = (
+            select(SprintTask)
+            .where(SprintTask.parent_task_id == source.id)
+            .where(SprintTask.is_archived.is_(False))
+        )
+        subtasks = list((await self.db.execute(sub_stmt)).scalars().all())
+
+        if subtasks and subtask_strategy == "block":
+            raise TaskValidationError("task_has_subtasks")
+
+        new_parent = await self._clone_task_to_project(
+            source=source,
+            target_project_id=target_project_id,
+            new_parent_id=None,
+            actor_id=actor_id,
+            override_status_slug=target_status_slug,
+        )
+
+        if subtasks and subtask_strategy == "cascade":
+            for sub in subtasks:
+                # Recurse one level. Subtasks themselves having subtasks is
+                # already an edge case in this codebase; we treat any
+                # grand-children as orphans on the source side.
+                new_sub = await self._clone_task_to_project(
+                    source=sub,
+                    target_project_id=target_project_id,
+                    new_parent_id=new_parent.id,
+                    actor_id=actor_id,
+                )
+                # Each source subtask gets its own "Moved to" pointer at
+                # the corresponding clone — the parent breadcrumb alone
+                # wouldn't reach them.
+                sub_text, sub_node = _move_breadcrumb(new_sub, kind="to")
+                sub.description = _prefix_description(sub.description, sub_text)
+                sub.description_json = _prepend_node_to_doc(
+                    sub.description_json, sub_node
+                )
+                sub.is_archived = True
+        # `orphan` strategy leaves subtasks alone — parent_task_id still
+        # points to the now-archived/done source. The UI surfaces this as
+        # "parent archived" but the data stays consistent.
+
+        # Prepend "Moved to <NEW-KEY>" on the source. Runs whether the
+        # action is archive or mark_done — both close the source, and the
+        # breadcrumb makes the close cause obvious to anyone who later
+        # opens it.
+        src_text, src_node = _move_breadcrumb(new_parent, kind="to")
+        source.description = _prefix_description(source.description, src_text)
+        source.description_json = _prepend_node_to_doc(
+            source.description_json, src_node
+        )
+
+        if source_action == "archive":
+            source.is_archived = True
+        else:  # mark_done
+            done_slug = await self._resolve_done_status_slug(
+                str(source.workspace_id), str(source.team_id)
+            )
+            source.status = done_slug
+            if source.completed_at is None:
+                source.completed_at = datetime.now(timezone.utc)
+
+        await self.log_activity(
+            task_id=source.id,
+            action="moved_to_project",
+            actor_id=actor_id,
+            field_name="project",
+            old_value=str(source.team_id) if source.team_id else None,
+            new_value=str(target_project_id),
+            metadata={
+                "new_task_id": str(new_parent.id),
+                "new_task_key": new_parent.task_key,
+                "source_action": source_action,
+                "subtask_strategy": subtask_strategy,
+                "subtask_count": len(subtasks),
+            },
+        )
+
+        await self.db.flush()
+        # Re-fetch so relationships are populated for the API response.
+        fresh = await self.get_task(new_parent.id)
+        return fresh or new_parent
+
+    async def bulk_move_to_project(
+        self,
+        *,
+        task_ids: list[str],
+        target_project_id: str,
+        source_action: str,
+        subtask_strategy: str = "block",
+        actor_id: str | None = None,
+        target_status_slug: str | None = None,
+    ) -> list[dict]:
+        """Per-task move; never aborts the whole batch on one failure.
+
+        Returns a list of result dicts shaped:
+            {"task_id": ..., "status": "moved" | "skipped",
+             "new_task_id": ..., "error_code": ...}
+        Mirrors the lenient pattern in `bulk_move_to_sprint` — a partial
+        batch is more useful to the operator than an all-or-nothing rollback
+        when half the tasks have subtasks and the rest don't.
+        """
+        results: list[dict] = []
+        for tid in task_ids:
+            try:
+                new_task = await self.move_to_project(
+                    task_id=tid,
+                    target_project_id=target_project_id,
+                    source_action=source_action,
+                    subtask_strategy=subtask_strategy,
+                    actor_id=actor_id,
+                    target_status_slug=target_status_slug,
+                )
+                results.append({
+                    "task_id": tid,
+                    "status": "moved",
+                    "new_task_id": str(new_task.id),
+                    "error_code": None,
+                })
+            except TaskValidationError as exc:
+                # Roll back any partial mutations from this task so the next
+                # iteration starts clean. `db.flush` has already pushed
+                # earlier successes; we only need a savepoint-style guard
+                # if a future failure mid-create leaves dangling rows. For
+                # now `move_to_project` validates up-front before any write,
+                # so a thrown error means nothing has been persisted for
+                # *this* task.
+                results.append({
+                    "task_id": tid,
+                    "status": "skipped",
+                    "new_task_id": None,
+                    "error_code": exc.code,
+                })
+        return results
+
+    async def validate_status_slug(self, task: SprintTask, slug: str) -> None:
+        """Reject a status update whose slug isn't defined for the task's scope.
+
+        Status slugs live in ``workspace_task_statuses`` and may be either
+        workspace-default (project_id IS NULL) or project-scoped. A task's
+        valid slug set is the union: project rows for its project, plus
+        workspace defaults as a fallback. Anything else is rejected with
+        ``unknown_status`` so the operator gets a stable error code.
+        """
+        # The canonical seed slugs are accepted unconditionally so we don't
+        # break workspaces that pre-date the status table (and whose tasks
+        # carry a slug but no matching row yet).
+        if slug in ("backlog", "todo", "in_progress", "review", "done"):
+            return
+        if not task.workspace_id:
+            return  # Pre-table data — nothing to validate against.
+
+        scope = (
+            or_(
+                WorkspaceTaskStatus.project_id.is_(None),
+                WorkspaceTaskStatus.project_id == task.team_id,
+            )
+            if task.team_id
+            else WorkspaceTaskStatus.project_id.is_(None)
+        )
+        stmt = (
+            select(WorkspaceTaskStatus.id)
+            .where(WorkspaceTaskStatus.workspace_id == task.workspace_id)
+            .where(WorkspaceTaskStatus.slug == slug)
+            .where(WorkspaceTaskStatus.is_active.is_(True))
+            .where(scope)
+        )
+        if (await self.db.execute(stmt)).first() is None:
+            raise TaskValidationError("unknown_status")
+
     # Status management
     async def update_task_status(
         self,
         task_id: str,
         new_status: str,
+        actor_id: str | None = None,
     ) -> SprintTask | None:
         """Update a task's status.
 
         Args:
             task_id: Task ID.
             new_status: New status value.
+            actor_id: ID of the user making the change (for activity logging).
 
         Returns:
             Updated SprintTask.
@@ -587,6 +1307,7 @@ class SprintTaskService:
         if not task:
             return None
 
+        await self.validate_status_slug(task, new_status)
         old_status = task.status
         task.status = new_status
 
@@ -609,6 +1330,18 @@ class SprintTaskService:
         # Re-fetch with relationships loaded
         updated_task = await self.get_task(task_id)
 
+        # Per-task activity row so the History tab attributes the status change
+        # to the user who dragged the card / clicked the status pill.
+        if old_status != new_status:
+            await self.log_activity(
+                task_id=task_id,
+                action="status_changed",
+                actor_id=actor_id,
+                field_name="status",
+                old_value=old_status,
+                new_value=new_status,
+            )
+
         # Log unified activity for status changes
         if updated_task and updated_task.workspace_id and old_status != new_status:
             act_type = "status_changed"
@@ -620,6 +1353,7 @@ class SprintTaskService:
                 entity_type="task",
                 entity_id=str(updated_task.id),
                 activity_type=act_type,
+                actor_id=actor_id,
                 title=f"Task '{updated_task.title}' status changed",
                 changes={"status": {"old": old_status, "new": new_status}},
             )
@@ -696,7 +1430,12 @@ class SprintTaskService:
             old_value=old_value,
             new_value=new_value,
             comment=comment,
-            metadata=metadata or {},
+            # Column is `activity_metadata` — `metadata` is reserved on
+            # SQLAlchemy declarative Base, so the kwarg gets silently
+            # swallowed and every row's payload becomes `{}`. That's why
+            # the History tab kept rendering "Unassigned to Unassigned"
+            # even though callers passed from/to assignee IDs.
+            activity_metadata=metadata or {},
         )
         self.db.add(activity)
         await self.db.flush()
@@ -821,6 +1560,280 @@ class SprintTaskService:
         return activity
 
     # Import from sources
+    async def add_project_task(
+        self,
+        team_id: str,
+        title: str,
+        source_type: str = "manual",
+        source_id: str | None = None,
+        source_url: str | None = None,
+        description: str | None = None,
+        story_points: int | None = None,
+        priority: str = "medium",
+        labels: list[str] | None = None,
+        status: str = "backlog",
+    ) -> SprintTask:
+        """Add a task at the team/project level (no sprint).
+
+        Used by the project-level import path so backlog tasks can be
+        seeded from GitHub without first creating a sprint.
+        """
+        from aexy.models.team import Team
+
+        if source_type == "manual" and not source_id:
+            source_id = str(uuid4())
+
+        team_stmt = select(Team).where(Team.id == team_id)
+        team_result = await self.db.execute(team_stmt)
+        team = team_result.scalar_one_or_none()
+        workspace_id = team.workspace_id if team else None
+
+        task = SprintTask(
+            id=str(uuid4()),
+            team_id=team_id,
+            workspace_id=workspace_id,
+            sprint_id=None,
+            source_type=source_type,
+            source_id=source_id,
+            source_url=source_url,
+            title=title,
+            description=description,
+            story_points=story_points,
+            priority=priority,
+            labels=labels or [],
+            status=status,
+        )
+        self.db.add(task)
+        await self.db.flush()
+        await GitHubTaskSyncService(self.db).auto_link_issue_references(task)
+        return task
+
+    async def add_workspace_task(
+        self,
+        workspace_id: str,
+        project_id: str,
+        title: str,
+        sprint_id: str | None = None,
+        description: str | None = None,
+        description_json: dict | None = None,
+        story_points: int | None = None,
+        priority: str = "medium",
+        labels: list[str] | None = None,
+        assignee_id: str | None = None,
+        status: str = "backlog",
+        status_id: str | None = None,
+        epic_id: str | None = None,
+        parent_task_id: str | None = None,
+        mentioned_user_ids: list[str] | None = None,
+        mentioned_file_paths: list[str] | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        estimated_hours: float | None = None,
+        actor_id: str | None = None,
+    ) -> SprintTask:
+        """Create a task from the workspace All-Tasks Kanban.
+
+        Resolves team_id from project_id (via project_teams), validates that
+        the sprint (if provided) belongs to that team, and validates that the
+        custom status (if provided) is either a workspace default or scoped to
+        this project. Mirrors `add_task`'s activity log + automation dispatch
+        so the History tab and automations behave identically.
+        """
+        from aexy.models.project import ProjectTeam
+        from aexy.models.sprint import WorkspaceTaskStatus
+
+        # 1. Resolve team_id from project. A project can have multiple teams;
+        # we pick the first one by created_at — the same fallback the import
+        # path uses. Callers that want a specific team should drive task
+        # creation from /sprints/{sprint_id}/tasks instead.
+        pt_stmt = (
+            select(ProjectTeam)
+            .where(ProjectTeam.project_id == project_id)
+            .order_by(ProjectTeam.created_at)
+            .limit(1)
+        )
+        team_link = (await self.db.execute(pt_stmt)).scalar_one_or_none()
+        if not team_link:
+            raise TaskValidationError(
+                "project_has_no_team",
+                "Attach a team to the project before creating tasks.",
+            )
+        team_id = team_link.team_id
+
+        # 2. If sprint_id is provided, ensure it belongs to that team.
+        if sprint_id:
+            s_stmt = select(Sprint).where(Sprint.id == sprint_id)
+            sprint_row = (await self.db.execute(s_stmt)).scalar_one_or_none()
+            if not sprint_row or str(sprint_row.team_id) != str(team_id):
+                raise TaskValidationError("sprint_not_in_project")
+
+        # 3. If a custom status_id is provided, ensure it's either a workspace
+        # default (project_id IS NULL) or scoped to *this* project — never one
+        # belonging to a sibling project.
+        if status_id:
+            st_stmt = select(WorkspaceTaskStatus).where(
+                WorkspaceTaskStatus.id == status_id,
+                WorkspaceTaskStatus.workspace_id == workspace_id,
+            )
+            status_row = (await self.db.execute(st_stmt)).scalar_one_or_none()
+            if not status_row:
+                raise TaskValidationError("status_not_found")
+            if status_row.project_id and str(status_row.project_id) != str(project_id):
+                raise TaskValidationError("status_belongs_to_other_project")
+
+        task = SprintTask(
+            id=str(uuid4()),
+            sprint_id=sprint_id,
+            team_id=team_id,
+            workspace_id=workspace_id,
+            source_type="manual",
+            source_id=str(uuid4()),
+            title=title,
+            description=description,
+            description_json=description_json,
+            story_points=story_points,
+            priority=priority,
+            labels=labels or [],
+            assignee_id=assignee_id,
+            status=status,
+            status_id=status_id,
+            epic_id=epic_id,
+            parent_task_id=parent_task_id,
+            mentioned_user_ids=mentioned_user_ids or [],
+            mentioned_file_paths=mentioned_file_paths or [],
+            start_date=start_date,
+            end_date=end_date,
+            estimated_hours=estimated_hours,
+        )
+        self.db.add(task)
+        await self.db.flush()
+        await GitHubTaskSyncService(self.db).auto_link_issue_references(task)
+
+        stmt = (
+            select(SprintTask)
+            .where(SprintTask.id == task.id)
+            .options(
+                selectinload(SprintTask.assignee),
+                selectinload(SprintTask.subtasks),
+            )
+        )
+        created_task = (await self.db.execute(stmt)).scalar_one()
+
+        await log_activity(
+            self.db,
+            workspace_id=workspace_id,
+            entity_type="task",
+            entity_id=str(created_task.id),
+            activity_type="created",
+            actor_id=actor_id,
+            title=f"Created task '{title}'",
+            metadata={
+                "sprint_id": sprint_id,
+                "project_id": project_id,
+                "source_type": "manual",
+            },
+        )
+        await self.log_activity(
+            task_id=str(created_task.id),
+            action="created",
+            actor_id=actor_id,
+        )
+        await dispatch_automation_event(
+            db=self.db,
+            workspace_id=workspace_id,
+            module="sprints",
+            trigger_type="task.created",
+            entity_id=created_task.id,
+            trigger_data={
+                "task_id": created_task.id,
+                "task_title": created_task.title,
+                "sprint_id": sprint_id,
+                "project_id": project_id,
+                "status": created_task.status,
+                "priority": created_task.priority,
+                "assignee_id": created_task.assignee_id,
+                "assignee_email": created_task.assignee.email if created_task.assignee else None,
+                "epic_id": created_task.epic_id,
+                "story_points": created_task.story_points,
+                "workspace_id": workspace_id,
+            },
+        )
+        return created_task
+
+    async def _import_project_task_items(
+        self,
+        team_id: str,
+        task_items: list[TaskItem],
+        source_type: str,
+    ) -> list[SprintTask]:
+        """Import TaskItem objects into a team's backlog (no sprint).
+
+        Mirrors `_import_task_items` but keys dedup on (team_id, source_type,
+        source_id) so the same issue can't be imported twice into a project.
+        """
+        created_tasks: list[SprintTask] = []
+        for item in task_items:
+            existing_stmt = select(SprintTask).where(
+                SprintTask.team_id == team_id,
+                SprintTask.source_type == source_type,
+                SprintTask.source_id == item.external_id,
+            )
+            existing = (await self.db.execute(existing_stmt)).scalar_one_or_none()
+            if existing:
+                continue
+
+            priority = "medium"
+            if item.priority:
+                priority_map = {
+                    "highest": "critical",
+                    "high": "high",
+                    "medium": "medium",
+                    "low": "low",
+                    "lowest": "low",
+                }
+                priority = priority_map.get(item.priority.value, "medium")
+
+            task = await self.add_project_task(
+                team_id=team_id,
+                title=item.title,
+                source_type=source_type,
+                source_id=item.external_id,
+                source_url=item.url,
+                description=item.description,
+                story_points=item.story_points,
+                priority=priority,
+                labels=item.labels,
+                status="backlog",
+            )
+            created_tasks.append(task)
+        return created_tasks
+
+    async def import_project_github_issues(
+        self,
+        team_id: str,
+        owner: str,
+        repo: str,
+        api_token: str | None = None,
+        labels: list[str] | None = None,
+        limit: int = 50,
+    ) -> list[SprintTask]:
+        """Import GitHub issues into a team's backlog (no sprint required).
+
+        The resulting `SprintTask` rows have `sprint_id IS NULL`,
+        `team_id=team_id`, and `source_type='github_issue'` — exactly the
+        rows the GitHub-issue dropdown surfaces, so importing here populates
+        the dropdown for every task in the team.
+        """
+        config = TaskSourceConfig(
+            source_type="github", owner=owner, repo=repo, api_token=api_token
+        )
+        source = GitHubIssuesSource(config)
+        try:
+            tasks = await source.fetch_tasks(limit=limit, labels=labels, status=TaskStatus.OPEN)
+            return await self._import_project_task_items(team_id, tasks, "github_issue")
+        finally:
+            await source.close()
+
     async def import_github_issues(
         self,
         sprint_id: str,
@@ -1096,3 +2109,73 @@ class SprintTaskService:
                 updated_tasks.append(task)
 
         return updated_tasks
+
+    # Attachments
+    async def add_attachment(
+        self,
+        task_id: str,
+        file_name: str,
+        file_url: str,
+        file_size: int | None = None,
+        content_type: str | None = None,
+        uploaded_by_id: str | None = None,
+    ) -> TaskAttachment:
+        """Persist a file attachment row for a task and write a History entry."""
+        attachment = TaskAttachment(
+            id=str(uuid4()),
+            task_id=task_id,
+            file_name=file_name,
+            file_url=file_url,
+            file_size=file_size,
+            content_type=content_type,
+            uploaded_by_id=uploaded_by_id,
+        )
+        self.db.add(attachment)
+        await self.db.flush()
+        # History tab event so attachment uploads show up alongside other
+        # task activity. uploaded_by_id is the actor (the user who uploaded).
+        await self.log_activity(
+            task_id=task_id,
+            action="attachment_added",
+            actor_id=uploaded_by_id,
+            field_name="attachment",
+            new_value=file_name,
+        )
+        return attachment
+
+    async def list_attachments(self, task_id: str) -> list[TaskAttachment]:
+        """List all attachments for a task, newest first."""
+        stmt = (
+            select(TaskAttachment)
+            .where(TaskAttachment.task_id == task_id)
+            .order_by(TaskAttachment.uploaded_at.desc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_attachment(self, attachment_id: str) -> TaskAttachment | None:
+        """Get a single attachment by ID."""
+        stmt = select(TaskAttachment).where(TaskAttachment.id == attachment_id)
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def delete_attachment(
+        self, attachment_id: str, actor_id: str | None = None
+    ) -> bool:
+        """Delete an attachment row. Returns True if removed."""
+        attachment = await self.get_attachment(attachment_id)
+        if not attachment:
+            return False
+        task_id = str(attachment.task_id)
+        file_name = attachment.file_name
+        await self.db.delete(attachment)
+        await self.db.flush()
+        # History tab event so deletes show up alongside other task activity.
+        await self.log_activity(
+            task_id=task_id,
+            action="attachment_removed",
+            actor_id=actor_id,
+            field_name="attachment",
+            old_value=file_name,
+        )
+        return True

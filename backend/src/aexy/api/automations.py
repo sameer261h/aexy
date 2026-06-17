@@ -4,13 +4,17 @@ Provides generic /workspaces/{workspace_id}/automations/* endpoints
 that support all Aexy modules (CRM, Tickets, Hiring, Email Marketing, etc.).
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.core.database import get_db
 from aexy.api.developers import get_current_developer
 from aexy.models.developer import Developer
 from aexy.services.automation_service import AutomationService
+from aexy.services.workflow_generator import generate_workflow_from_prompt
 from aexy.services.workspace_service import WorkspaceService
 from aexy.schemas.automation import (
     AutomationCreate,
@@ -27,6 +31,8 @@ from aexy.schemas.automation import (
     get_triggers_for_module,
     get_actions_for_module,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/automations")
 
@@ -353,3 +359,52 @@ async def get_automation_run(
         raise HTTPException(status_code=404, detail="Automation run not found")
 
     return run
+
+
+# =============================================================================
+# WORKFLOW GENERATION (UX-DEF-004)
+# =============================================================================
+
+class WorkflowFromPromptRequest(BaseModel):
+    """Generate a workflow draft from a one-line description."""
+
+    prompt: str = Field(..., min_length=8, max_length=2000)
+    module: str | None = None
+
+
+@router.post("/generate-workflow")
+async def generate_workflow(
+    workspace_id: str,
+    data: WorkflowFromPromptRequest,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Generate a ReactFlow {nodes, edges} draft from a prompt.
+
+    The frontend uses this as a third creation path alongside
+    TemplateGallery and "start blank". The LLM is a starting point —
+    the canvas validates the result and the user can rewire anything.
+    Errors here are user-facing (bad prompt / LLM rate-limit /
+    malformed response); the caller falls back to TemplateGallery.
+    """
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+
+    try:
+        payload = await generate_workflow_from_prompt(
+            prompt=data.prompt,
+            module=data.module,
+            workspace_id=workspace_id,
+            developer_id=str(current_developer.id),
+            db=db,
+        )
+        return payload
+    except ValueError as e:
+        # Validation / shape failures — surface to the user so they
+        # can retry with a clearer prompt.
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("workflow generation failed: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail="Workflow generation failed. Try again or start from a template.",
+        )

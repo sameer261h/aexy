@@ -20,6 +20,8 @@ import { useWorkspace } from "@/hooks/useWorkspace";
 import { PremiumGate } from "@/components/PremiumGate";
 import { useTeams } from "@/hooks/useTeams";
 import { insightsApi } from "@/lib/api";
+import { AISettingsSection } from "@/components/code-insights/AISettingsSection";
+import { LLMUsageCard, WorkspaceLLMUsageCard } from "@/components/code-insights";
 
 interface WorkingHoursConfig {
   start_hour: number;
@@ -498,6 +500,18 @@ export default function InsightsSettingsPage() {
             )}
           </div>
         </section>
+
+        {/* AI analysis — workspace-level mode + model tier toggle. */}
+        <AISettingsSection />
+
+        {/* Workspace-level monthly token counter — month-to-date totals
+            written inline by the AI sync activities. Visible to every
+            member, no admin gate. Use the deeper LLMUsageCard below for
+            per-day / per-model / per-operation drill-down. */}
+        <WorkspaceLLMUsageCard workspaceId={currentWorkspaceId} />
+
+        {/* LLM cost telemetry — tokens consumed by AI activities this workspace. */}
+        <LLMUsageCard />
 
         {/* Actions */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-4">

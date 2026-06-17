@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     # Integration with Aexy backend
     backend_url: str = "http://localhost:8000"
 
+    # HMAC shared secret with the Aexy backend. When set, every non-webhook
+    # route requires a valid `X-Mailagent-Signature` header (see WS-077).
+    # Leave empty in local development; in production both sides must be
+    # configured with the same value.
+    internal_secret: str = ""
+
+    # Allowed CORS origins for the rare in-browser tool that hits :8001
+    # directly. Default is empty — mailagent talks to the backend service
+    # only. Override via comma-separated env var if needed.
+    cors_allowed_origins: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

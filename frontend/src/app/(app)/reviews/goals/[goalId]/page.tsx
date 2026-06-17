@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -11,6 +12,7 @@ import {
   CheckCircle,
   AlertCircle,
   TrendingUp,
+  TrendingDown,
   Calendar,
   Tag,
   GitCommit,
@@ -25,6 +27,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { useGoalDetail } from "@/hooks/useReviews";
 import { GoalType, GoalPriority } from "@/lib/api";
 import { GOAL_TYPE_COLORS, GOAL_STATUS_COLORS, getStatusColor } from "@/lib/statusColors";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { formatDate } from "@/lib/datetime";
 
 // Goal status icons (extends centralized colors with icon field)
 const goalStatusIcons: Record<string, React.ReactNode> = {
@@ -53,10 +57,12 @@ export default function GoalDetailPage() {
   const params = useParams();
   const router = useRouter();
   const goalId = params.goalId as string;
+  const tg = useTranslations("reviews.goals.detail");
   const { user, isLoading: authLoading } = useAuth();
   const { goal, isLoading, error, updateProgress, autoLink, complete } = useGoalDetail(goalId);
   const [isUpdatingProgress, setIsUpdatingProgress] = useState(false);
   const [isAutoLinking, setIsAutoLinking] = useState(false);
+  const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
 
   const handleUpdateProgress = async (newProgress: number) => {
     setIsUpdatingProgress(true);
@@ -64,7 +70,7 @@ export default function GoalDetailPage() {
       await updateProgress(newProgress);
     } catch (err) {
       console.error("Failed to update progress:", err);
-      toast.error("Failed to update progress");
+      toast.error(tg("updateProgressFailed"));
     } finally {
       setIsUpdatingProgress(false);
     }
@@ -76,19 +82,19 @@ export default function GoalDetailPage() {
       await autoLink();
     } catch (err) {
       console.error("Failed to auto-link:", err);
-      toast.error("Failed to auto-link contributions");
+      toast.error(tg("autoLinkFailed"));
     } finally {
       setIsAutoLinking(false);
     }
   };
 
   const handleComplete = async () => {
-    if (!confirm("Are you sure you want to mark this goal as completed?")) return;
     try {
       await complete();
     } catch (err) {
       console.error("Failed to complete goal:", err);
-      toast.error("Failed to complete goal");
+      toast.error(tg("completeFailed"));
+      throw err;
     }
   };
 
@@ -163,7 +169,7 @@ export default function GoalDetailPage() {
             {goal.status !== "completed" && goal.status !== "cancelled" && (
               <div className="flex items-center gap-2">
                 <button
-                  onClick={handleComplete}
+                  onClick={() => setShowCompleteConfirm(true)}
                   className="px-3 py-1.5 text-sm bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition flex items-center gap-1.5"
                 >
                   <CheckCircle className="h-4 w-4" />
@@ -184,7 +190,14 @@ export default function GoalDetailPage() {
               <span className="text-muted-foreground">Progress</span>
               <span className="text-foreground font-medium">{progressPercent}%</span>
             </div>
-            <div className="h-3 bg-accent rounded-full overflow-hidden">
+            <div
+              role="progressbar"
+              aria-label="Goal progress"
+              aria-valuenow={Math.min(progressPercent, 100)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              className="h-3 bg-accent rounded-full overflow-hidden"
+            >
               <div
                 className={`h-full rounded-full transition-all ${
                   progressPercent >= 100 ? "bg-emerald-500" :
@@ -198,15 +211,54 @@ export default function GoalDetailPage() {
 
           {/* Quick Actions */}
           {goal.status !== "completed" && goal.status !== "cancelled" && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => handleUpdateProgress(Math.max(progressPercent - 10, 0))}
+                disabled={isUpdatingProgress || progressPercent <= 0}
+                aria-label="Decrease progress by 10%"
+                className="px-3 py-1.5 text-sm bg-accent hover:bg-muted text-foreground rounded-lg transition flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <TrendingDown className="h-4 w-4" />
+                -10%
+              </button>
               <button
                 onClick={() => handleUpdateProgress(Math.min(progressPercent + 10, 100))}
-                disabled={isUpdatingProgress}
+                disabled={isUpdatingProgress || progressPercent >= 100}
+                aria-label="Increase progress by 10%"
                 className="px-3 py-1.5 text-sm bg-accent hover:bg-muted text-foreground rounded-lg transition flex items-center gap-1.5 disabled:opacity-50"
               >
                 <TrendingUp className="h-4 w-4" />
                 +10%
               </button>
+              {/* Exact-set input so a user can jump from 0% straight
+                  to 73% without clicking the +10% button seven times,
+                  or walk back overshoots from any baseline. Backed by
+                  the same `updateProgress` mutation. */}
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                Set:
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  defaultValue={progressPercent}
+                  disabled={isUpdatingProgress}
+                  aria-label="Set progress percentage"
+                  onBlur={(e) => {
+                    const parsed = parseInt(e.target.value, 10);
+                    if (Number.isNaN(parsed)) {
+                      e.target.value = String(progressPercent);
+                      return;
+                    }
+                    const clamped = Math.max(0, Math.min(100, parsed));
+                    if (clamped !== progressPercent) {
+                      handleUpdateProgress(clamped);
+                    }
+                  }}
+                  className="w-16 bg-background border border-border rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+                />
+                %
+              </label>
               <button
                 onClick={handleAutoLink}
                 disabled={isAutoLinking}
@@ -223,20 +275,12 @@ export default function GoalDetailPage() {
             {goal.time_bound && (
               <div className="flex items-center gap-1.5">
                 <Calendar className="h-4 w-4" />
-                Due: {new Date(goal.time_bound).toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                  year: "numeric",
-                })}
+                Due: {formatDate(goal.time_bound)}
               </div>
             )}
             <div className="flex items-center gap-1.5">
               <Clock className="h-4 w-4" />
-              Created: {new Date(goal.created_at).toLocaleDateString("en-US", {
-                month: "short",
-                day: "numeric",
-                year: "numeric",
-              })}
+              Created: {formatDate(goal.created_at)}
             </div>
           </div>
         </div>
@@ -402,7 +446,7 @@ export default function GoalDetailPage() {
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Completed</span>
                     <span className="text-emerald-400">
-                      {new Date(goal.completed_at).toLocaleDateString()}
+                      {formatDate(goal.completed_at)}
                     </span>
                   </div>
                 )}
@@ -411,6 +455,19 @@ export default function GoalDetailPage() {
           </div>
         </div>
       </main>
+      <ConfirmDialog
+        open={showCompleteConfirm}
+        onOpenChange={setShowCompleteConfirm}
+        title={tg("confirmComplete.title")}
+        description={
+          goal.title
+            ? tg("confirmComplete.descriptionNamed", { name: goal.title })
+            : tg("confirmComplete.description")
+        }
+        confirmLabel={tg("confirmComplete.confirmLabel")}
+        tone="neutral"
+        onConfirm={handleComplete}
+      />
     </div>
   );
 }

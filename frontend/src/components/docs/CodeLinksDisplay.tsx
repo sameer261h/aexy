@@ -180,7 +180,7 @@ export function CodeLinksDisplay({
                   <button
                     onClick={() => handleDelete(link.id)}
                     disabled={deletingId === link.id}
-                    className="p-1.5 rounded-lg text-muted-foreground hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition disabled:opacity-50"
+                    className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition disabled:opacity-50"
                     title="Remove link"
                   >
                     {deletingId === link.id ? (

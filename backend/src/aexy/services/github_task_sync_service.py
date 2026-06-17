@@ -7,6 +7,7 @@ This service processes GitHub activity (commits and PRs) to:
 """
 
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.models.activity import Commit, PullRequest
 from aexy.models.sprint import SprintTask, TaskGitHubLink, Sprint
+from aexy.models.team import Team
 from aexy.services.task_reference_parser import (
     TaskReferenceParser,
     TaskReference,
@@ -23,6 +25,12 @@ from aexy.services.task_reference_parser import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+GITHUB_ISSUE_URL_RE = re.compile(
+    r"github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/(\d+)",
+    re.IGNORECASE,
+)
 
 
 # Task status progression (prevents regression)
@@ -90,41 +98,148 @@ class GitHubTaskSyncService:
     ) -> list[TaskGitHubLink]:
         """Process a PR and link it to any referenced tasks, updating status.
 
-        Args:
-            pull_request: The PullRequest record from the database
-            repository: Repository full name (owner/repo)
-            action: PR action (opened, closed, synchronize, etc.)
-
-        Returns:
-            List of created TaskGitHubLink records
+        On `edited`/`synchronize`, also prunes auto-links whose mention is
+        no longer in the PR body so removing a `[slug:key]` cleans up cleanly.
         """
-        # Parse PR title and description for task references
         text_to_parse = f"{pull_request.title or ''}\n{pull_request.description or ''}"
         references = self.parser.parse(text_to_parse)
 
-        if not references:
-            return []
+        links: list[TaskGitHubLink] = []
+        current_task_ids: set[str] = set()
 
-        logger.info(
-            f"Found {len(references)} task references in PR #{pull_request.number}"
-        )
-
-        links = []
         for ref in references:
             task = await self._find_task_for_reference(ref, repository)
             if not task:
                 continue
+            current_task_ids.add(str(task.id))
 
-            # Create link if it doesn't exist
             link = await self._create_pr_link(task, pull_request, ref)
             if link:
                 links.append(link)
 
-            # Update task status based on PR state
             await self._update_task_status(task, pull_request, ref, action)
 
+        if action in ("edited", "synchronize"):
+            await self._prune_stale_pr_auto_links(
+                str(pull_request.id), current_task_ids
+            )
+
+        # Always flush — `_update_task_status` may have mutated task rows
+        # even when no new links were created (existing link, status moved).
         await self.db.flush()
+        if links:
+            logger.info(
+                f"Linked {len(links)} task(s) from PR #{pull_request.number}"
+            )
         return links
+
+    async def process_issue(
+        self,
+        issue: dict[str, Any],
+        repository: str,
+        action: str | None = None,
+    ) -> list[TaskGitHubLink]:
+        """Process a GitHub issue webhook payload and auto-link mentioned tasks.
+
+        Parses title+body for `[workspace-slug:task_key]` mentions. Each
+        matched reference upserts a TaskGitHubLink with is_auto_linked=True.
+        On `edited`, prunes stale auto-links whose mention is gone.
+        """
+        if not issue:
+            return []
+
+        number = issue.get("number")
+        if not number:
+            return []
+
+        title = issue.get("title") or ""
+        body = issue.get("body") or ""
+        text_to_parse = f"{title}\n{body}"
+        references = self.parser.parse(text_to_parse)
+
+        aexy_refs = [
+            r for r in references if r.source == TaskReferenceSource.AEXY
+        ]
+
+        links: list[TaskGitHubLink] = []
+        current_task_ids: set[str] = set()
+
+        for ref in aexy_refs:
+            task = await self._find_aexy_task(
+                ref.project_key, ref.identifier, repository=repository
+            )
+            if not task:
+                continue
+            current_task_ids.add(str(task.id))
+            link = await self.link_issue_manually(
+                str(task.id),
+                repository,
+                int(number),
+                title=title or None,
+                state=issue.get("state"),
+                url=issue.get("html_url"),
+                reference_text=ref.matched_text,
+                reference_pattern=ref.reference_type.value,
+                is_auto_linked=True,
+            )
+            if link:
+                links.append(link)
+
+        if action == "edited":
+            await self._prune_stale_issue_auto_links(
+                repository, int(number), current_task_ids
+            )
+
+        await self.db.flush()
+        if links:
+            logger.info(
+                f"Linked {len(links)} task(s) from issue {repository}#{number}"
+            )
+        return links
+
+    async def _prune_stale_pr_auto_links(
+        self,
+        pull_request_id: str,
+        keep_task_ids: set[str],
+    ) -> int:
+        """Delete is_auto_linked rows for this PR whose task is no longer mentioned."""
+        stmt = select(TaskGitHubLink).where(
+            and_(
+                TaskGitHubLink.link_type == "pull_request",
+                TaskGitHubLink.pull_request_id == pull_request_id,
+                TaskGitHubLink.is_auto_linked.is_(True),
+            )
+        )
+        result = await self.db.execute(stmt)
+        removed = 0
+        for link in result.scalars().all():
+            if str(link.task_id) not in keep_task_ids:
+                await self.db.delete(link)
+                removed += 1
+        return removed
+
+    async def _prune_stale_issue_auto_links(
+        self,
+        repository: str,
+        issue_number: int,
+        keep_task_ids: set[str],
+    ) -> int:
+        """Delete is_auto_linked rows for this issue whose task is no longer mentioned."""
+        stmt = select(TaskGitHubLink).where(
+            and_(
+                TaskGitHubLink.link_type == "github_issue",
+                TaskGitHubLink.github_issue_repository == repository,
+                TaskGitHubLink.github_issue_number == issue_number,
+                TaskGitHubLink.is_auto_linked.is_(True),
+            )
+        )
+        result = await self.db.execute(stmt)
+        removed = 0
+        for link in result.scalars().all():
+            if str(link.task_id) not in keep_task_ids:
+                await self.db.delete(link)
+                removed += 1
+        return removed
 
     async def _find_task_for_reference(
         self,
@@ -140,6 +255,11 @@ class GitHubTaskSyncService:
         Returns:
             Matching SprintTask or None
         """
+        if ref.source == TaskReferenceSource.AEXY:
+            return await self._find_aexy_task(
+                ref.project_key, ref.identifier, repository=repository
+            )
+
         if ref.source == TaskReferenceSource.GITHUB_ISSUE:
             # Look for GitHub issue in active sprints
             return await self._find_github_issue_task(ref.identifier, repository)
@@ -156,6 +276,60 @@ class GitHubTaskSyncService:
             return await self._find_generic_task(ref.identifier)
 
         return None
+
+    async def _find_aexy_task(
+        self,
+        workspace_slug: str | None,
+        task_key_str: str,
+        repository: str | None = None,
+    ) -> SprintTask | None:
+        """Resolve a native Aexy reference [workspace-slug:task_key] to a task.
+
+        WS-083: when a `repository` is given (always true on webhook-driven
+        paths), require the resolved task's workspace to be one that has
+        adopted this repository. Without this, a malicious PR body in
+        repo X (owned by workspace A) containing `[victim-workspace:42]`
+        could create a TaskGitHubLink row pointing at workspace B's task,
+        causing cross-tenant information leakage in both directions.
+        """
+        if not workspace_slug:
+            return None
+        try:
+            task_key = int(task_key_str)
+        except ValueError:
+            return None
+
+        from aexy.models.workspace import Workspace
+        from aexy.models.repository import Repository, WorkspaceRepository
+
+        stmt = (
+            select(SprintTask)
+            .join(Workspace, Workspace.id == SprintTask.workspace_id)
+            .where(
+                and_(
+                    Workspace.slug == workspace_slug.lower(),
+                    SprintTask.task_key == task_key,
+                )
+            )
+            .limit(1)
+        )
+
+        if repository:
+            # Require resolved task's workspace to have adopted the repo
+            # whose PR/issue/commit mentioned the slug.
+            stmt = stmt.where(
+                SprintTask.workspace_id.in_(
+                    select(WorkspaceRepository.workspace_id)
+                    .join(Repository, Repository.id == WorkspaceRepository.repository_id)
+                    .where(
+                        Repository.full_name == repository,
+                        WorkspaceRepository.is_active.is_(True),
+                    )
+                )
+            )
+
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def _find_github_issue_task(
         self,
@@ -184,6 +358,262 @@ class GitHubTaskSyncService:
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
+
+    @staticmethod
+    def issue_url(repository: str, issue_number: int | str) -> str:
+        """Build a GitHub issue URL."""
+        return f"https://github.com/{repository}/issues/{issue_number}"
+
+    @staticmethod
+    def repository_from_issue_url(url: str | None) -> str | None:
+        """Extract owner/repo from a GitHub issue URL."""
+        if not url:
+            return None
+        match = GITHUB_ISSUE_URL_RE.search(url)
+        return match.group(1) if match else None
+
+    @staticmethod
+    def issue_number_from_issue_url(url: str | None) -> int | None:
+        """Extract issue number from a GitHub issue URL."""
+        if not url:
+            return None
+        match = GITHUB_ISSUE_URL_RE.search(url)
+        return int(match.group(2)) if match else None
+
+    async def get_project_issue_repositories(self, team_id: str) -> list[str]:
+        """Return repos selected for this project/team.
+
+        Reads from `team_repositories` → `workspace_repositories` →
+        `repositories.full_name`. The team's explicit selection is the
+        source of truth — falls back to the historic "distinct repos
+        seen in past imports" only if the team has no selection yet
+        (covers workspaces that haven't run the workspace-catalog
+        adoption flow yet).
+        """
+        from aexy.models.repository import (
+            Repository,
+            TeamRepository,
+            WorkspaceRepository,
+        )
+
+        stmt = (
+            select(Repository.full_name)
+            .join(
+                WorkspaceRepository,
+                WorkspaceRepository.repository_id == Repository.id,
+            )
+            .join(
+                TeamRepository,
+                TeamRepository.workspace_repository_id == WorkspaceRepository.id,
+            )
+            .join(Team, Team.id == TeamRepository.team_id)
+            .where(
+                TeamRepository.team_id == team_id,
+                WorkspaceRepository.workspace_id == Team.workspace_id,
+                WorkspaceRepository.is_active == True,  # noqa: E712
+            )
+            .distinct()
+        )
+        result = await self.db.execute(stmt)
+        repositories = sorted(result.scalars().all())
+        if repositories:
+            return repositories
+
+        # Fallback for workspaces that haven't adopted yet — preserve the
+        # legacy behavior so the issue dropdown isn't suddenly empty.
+        legacy_stmt = select(SprintTask.source_url).where(
+            and_(
+                SprintTask.team_id == team_id,
+                SprintTask.source_type == "github_issue",
+                SprintTask.source_url.is_not(None),
+            )
+        )
+        legacy_result = await self.db.execute(legacy_stmt)
+        return sorted(
+            {
+                repo
+                for url in legacy_result.scalars().all()
+                if (repo := self.repository_from_issue_url(url))
+            }
+        )
+
+    async def infer_repository_for_task(self, task: SprintTask) -> str | None:
+        """Infer a repository for bare #123 references when unambiguous."""
+        if task.source_type == "github_issue":
+            return self.repository_from_issue_url(task.source_url)
+
+        if task.team_id:
+            repositories = await self.get_project_issue_repositories(str(task.team_id))
+            if len(repositories) == 1:
+                return repositories[0]
+        return None
+
+    async def find_imported_issue_task(
+        self,
+        repository: str,
+        issue_number: int | str,
+        *,
+        team_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> SprintTask | None:
+        """Find an imported GitHub issue task for display metadata."""
+        issue_number_str = str(issue_number)
+        issue_url_pattern = f"github.com/{repository}/issues/{issue_number_str}"
+        stmt = select(SprintTask).where(
+            and_(
+                SprintTask.source_type == "github_issue",
+                or_(
+                    SprintTask.source_id == issue_number_str,
+                    SprintTask.source_url.contains(issue_url_pattern),
+                ),
+            )
+        )
+        if team_id:
+            stmt = stmt.where(SprintTask.team_id == team_id)
+        if workspace_id:
+            stmt = stmt.where(SprintTask.workspace_id == workspace_id)
+        stmt = stmt.order_by(SprintTask.updated_at.desc()).limit(1)
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def search_imported_issues(
+        self,
+        *,
+        team_id: str,
+        query: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[SprintTask]:
+        """Search imported GitHub issue tasks in a project/team."""
+        stmt = select(SprintTask).where(
+            and_(
+                SprintTask.team_id == team_id,
+                SprintTask.source_type == "github_issue",
+            )
+        )
+        if query:
+            stripped_query = query.strip()
+            search = f"%{stripped_query}%"
+            conditions = [
+                SprintTask.title.ilike(search),
+                SprintTask.source_url.ilike(search),
+            ]
+            if stripped_query.isdigit():
+                conditions.append(SprintTask.source_id == stripped_query)
+            stmt = stmt.where(or_(*conditions))
+        stmt = (
+            stmt.order_by(SprintTask.updated_at.desc())
+            .offset(max(offset, 0))
+            .limit(limit)
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def link_issue_manually(
+        self,
+        task_id: str,
+        repository: str,
+        issue_number: int,
+        *,
+        title: str | None = None,
+        state: str | None = None,
+        url: str | None = None,
+        reference_text: str | None = None,
+        reference_pattern: str | None = None,
+        is_auto_linked: bool = False,
+    ) -> TaskGitHubLink | None:
+        """Link a GitHub issue reference to a task."""
+        task = await self.db.get(SprintTask, task_id)
+        if not task:
+            return None
+
+        normalized_repository = repository.strip()
+        if not normalized_repository or "/" not in normalized_repository:
+            return None
+
+        issue_task = await self.find_imported_issue_task(
+            normalized_repository,
+            issue_number,
+            team_id=str(task.team_id) if task.team_id else None,
+            workspace_id=str(task.workspace_id) if task.workspace_id else None,
+        )
+        display_title = title or (issue_task.title if issue_task else None)
+        display_state = state or (issue_task.status if issue_task else None)
+        display_url = url or (issue_task.source_url if issue_task else None) or self.issue_url(normalized_repository, issue_number)
+
+        stmt = select(TaskGitHubLink).where(
+            and_(
+                TaskGitHubLink.task_id == task_id,
+                TaskGitHubLink.github_issue_repository == normalized_repository,
+                TaskGitHubLink.github_issue_number == issue_number,
+            )
+        )
+        result = await self.db.execute(stmt)
+        existing = result.scalar_one_or_none()
+        if existing:
+            # Upsert: refresh cached metadata when fresher values arrive
+            # (issue title/state changed on GitHub, mention keyword changed).
+            if display_title and existing.github_issue_title != display_title:
+                existing.github_issue_title = display_title
+            if display_state and existing.github_issue_state != display_state:
+                existing.github_issue_state = display_state
+            if display_url and existing.github_issue_url != display_url:
+                existing.github_issue_url = display_url
+            if reference_text and existing.reference_text != reference_text:
+                existing.reference_text = reference_text
+            if reference_pattern and existing.reference_pattern != reference_pattern:
+                existing.reference_pattern = reference_pattern
+            return existing
+
+        link = TaskGitHubLink(
+            task_id=task_id,
+            link_type="github_issue",
+            github_issue_repository=normalized_repository,
+            github_issue_number=issue_number,
+            github_issue_title=display_title,
+            github_issue_state=display_state,
+            github_issue_url=display_url,
+            reference_text=reference_text,
+            reference_pattern=reference_pattern,
+            is_auto_linked=is_auto_linked,
+        )
+        self.db.add(link)
+        await self.db.flush()
+        return link
+
+    async def auto_link_issue_references(self, task: SprintTask) -> list[TaskGitHubLink]:
+        """Auto-link GitHub issues referenced in an Aexy task title/description."""
+        text_to_parse = f"{task.title or ''}\n{task.description or ''}"
+        references = [
+            ref
+            for ref in self.parser.parse(text_to_parse)
+            if ref.source == TaskReferenceSource.GITHUB_ISSUE
+        ]
+        if not references:
+            return []
+
+        default_repository = await self.infer_repository_for_task(task)
+        links: list[TaskGitHubLink] = []
+        for ref in references:
+            repository = ref.repository or default_repository
+            if not repository:
+                logger.info(
+                    "Skipped bare GitHub issue reference %s for task %s because repository is ambiguous",
+                    ref.matched_text,
+                    task.id,
+                )
+                continue
+            link = await self.link_issue_manually(
+                str(task.id),
+                repository,
+                int(ref.identifier),
+                reference_text=ref.matched_text,
+                reference_pattern=ref.reference_type.value,
+                is_auto_linked=True,
+            )
+            if link:
+                links.append(link)
+        return links
 
     async def _find_external_task(
         self,

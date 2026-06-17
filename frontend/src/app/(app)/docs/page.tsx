@@ -400,16 +400,21 @@ export default function DocsPage() {
   return (
     <div className="flex items-center justify-center h-full">
       <div className="max-w-2xl mx-auto px-8 py-12 text-center">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="w-16 h-16 bg-gradient-to-br from-primary-500/20 to-purple-500/20 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <FileText className="h-8 w-8 text-primary-400" />
-          </div>
-          <h1 className="text-2xl font-bold text-foreground mb-2">
-            Documentation
+        {/* Header — typography-first; the audit's gradient-icon-in-
+            rounded-square pattern is gone. Eyebrow ("Docs"), a
+            question-shaped headline that invites action, then one
+            supporting line. Quick-actions grid below carries the
+            visual interest. */}
+        <div className="mb-10">
+          <p className="text-xs font-medium tracking-[0.18em] uppercase text-muted-foreground mb-3">
+            Docs
+          </p>
+          <h1 className="text-3xl md:text-4xl font-semibold text-foreground tracking-tight mb-3">
+            What do you want to write today?
           </h1>
-          <p className="text-muted-foreground">
-            Create, organize, and auto-generate documentation from your code.
+          <p className="text-muted-foreground text-sm max-w-md mx-auto">
+            Start blank, pick a template, or generate docs from a
+            piece of code or a repo path.
           </p>
         </div>
 

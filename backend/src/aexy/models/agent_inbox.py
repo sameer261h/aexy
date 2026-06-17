@@ -43,6 +43,12 @@ class AgentInboxMessage(Base):
     # Email metadata
     message_id: Mapped[str] = mapped_column(String(255), nullable=False)
     thread_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # Direct parent — RFC 5322 In-Reply-To header. Lets the UI render
+    # a "View parent" jump without walking the entire thread.
+    # Added in migrate_agent_message_streaming.sql.
+    in_reply_to_message_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
     from_email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     from_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     to_email: Mapped[str] = mapped_column(String(255), nullable=False)

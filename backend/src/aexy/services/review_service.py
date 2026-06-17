@@ -29,6 +29,7 @@ from aexy.services.notification_service import (
     notify_peer_review_requested,
     notify_peer_review_received,
     notify_manager_review_completed,
+    notify_review_cycle_activated,
     notify_review_cycle_phase_changed,
 )
 
@@ -227,6 +228,48 @@ class ReviewService:
         cycle.status = "active"
         cycle.updated_at = datetime.utcnow()
         await self.db.flush()
+
+        # Tell every enrolled developer their cycle just opened. Without
+        # this they only discover the cycle by stumbling onto /reviews.
+        # Best-effort: notification failure must not block activation.
+        try:
+            review_stmt = select(IndividualReview.developer_id).where(
+                IndividualReview.review_cycle_id == cycle.id
+            )
+            result = await self.db.execute(review_stmt)
+            recipient_ids = [str(row[0]) for row in result.fetchall()]
+            if recipient_ids:
+                await notify_review_cycle_activated(
+                    db=self.db,
+                    recipient_ids=recipient_ids,
+                    cycle_id=str(cycle.id),
+                    cycle_name=cycle.name,
+                )
+        except Exception as e:
+            logger.warning(
+                f"Failed to send cycle-activated notifications for {cycle.id}: {e}"
+            )
+
+        # Phase B — auto-fire AI review-summary fan-out so per-developer +
+        # team digests are ready as soon as managers open the review forms.
+        # Best-effort: dispatch failure doesn't block cycle activation.
+        try:
+            from aexy.temporal.activities.review_digests import (
+                EnqueueReviewCycleDigestsInput,
+            )
+            from aexy.temporal.dispatch import dispatch
+            from aexy.temporal.task_queues import TaskQueue
+
+            await dispatch(
+                "enqueue_review_cycle_digests",
+                EnqueueReviewCycleDigestsInput(cycle_id=str(cycle.id)),
+                task_queue=TaskQueue.ANALYSIS,
+                workflow_id=f"review-cycle-digests-{cycle.id}",
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to enqueue review-cycle digests for {cycle.id}: {e}"
+            )
 
         return cycle
 
@@ -514,7 +557,7 @@ class ReviewService:
         self,
         review_id: str,
         responses: dict,
-        overall_rating: float,
+        overall_rating: float | None,
         ratings_breakdown: dict | None = None,
         linked_goals: list[str] | None = None,
         linked_contributions: list[str] | None = None,
@@ -524,7 +567,8 @@ class ReviewService:
         Args:
             review_id: Individual review ID.
             responses: Review responses.
-            overall_rating: Overall rating (1-5).
+            overall_rating: Overall rating (1-5). Optional for draft saves —
+                if None, any previously written rating is preserved.
             ratings_breakdown: Detailed ratings by category.
             linked_goals: IDs of linked goals.
             linked_contributions: IDs of linked contributions.
@@ -554,8 +598,12 @@ class ReviewService:
         self.db.add(submission)
 
         review.status = "manager_review_in_progress"
-        review.overall_rating = overall_rating
-        review.ratings_breakdown = ratings_breakdown or {}
+        # Preserve any previously-saved rating when this is a draft
+        # save with no rating selected yet.
+        if overall_rating is not None:
+            review.overall_rating = overall_rating
+        if ratings_breakdown:
+            review.ratings_breakdown = ratings_breakdown
         review.updated_at = datetime.utcnow()
 
         await self.db.flush()
@@ -764,9 +812,23 @@ class ReviewService:
         self,
         reviewer_id: str,
     ) -> list[ReviewRequest]:
-        """Get pending peer review requests for a reviewer."""
+        """Get pending peer review requests for a reviewer.
+
+        Eager-loads `requester` + `reviewer` via selectinload — the
+        route handler reads `r.requester.name` to populate the
+        response's requester_name, and lazy-loading from an async
+        session under SQLAlchemy 2 throws MissingGreenlet ("Was IO
+        attempted in an unexpected place?"). Pinning the load
+        strategy at query time is the canonical fix.
+        """
+        from sqlalchemy.orm import selectinload
+
         stmt = (
             select(ReviewRequest)
+            .options(
+                selectinload(ReviewRequest.requester),
+                selectinload(ReviewRequest.reviewer),
+            )
             .where(
                 and_(
                     ReviewRequest.reviewer_id == reviewer_id,

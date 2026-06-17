@@ -14,6 +14,7 @@ import {
   EpicListItem,
 } from "@/lib/api";
 import { useProjects } from "@/hooks/useProjects";
+import { invalidateTaskCaches } from "@/hooks/invalidateTaskCaches";
 
 export interface WorkspaceBoardFilters {
   assignees: string[];
@@ -45,11 +46,20 @@ const EMPTY_FILTERS: WorkspaceBoardFilters = {
   search: "",
 };
 
+export type WorkspaceTasksView = "active" | "archived";
+
 /**
  * Workspace-level tasks hook — fetches every task across every project/sprint
  * in a workspace and layers client-side filtering on top.
+ *
+ * `view`:
+ *   - "active" (default) — only non-archived tasks.
+ *   - "archived" — only archived tasks. Used by the Archived tab.
  */
-export function useWorkspaceTasks(workspaceId: string | null) {
+export function useWorkspaceTasks(
+  workspaceId: string | null,
+  view: WorkspaceTasksView = "active",
+) {
   const queryClient = useQueryClient();
   const [filters, setFilters] = useState<WorkspaceBoardFilters>(EMPTY_FILTERS);
 
@@ -81,7 +91,7 @@ export function useWorkspaceTasks(workspaceId: string | null) {
   // (not UUIDs). Cheap endpoint that returns a flat list.
   const { data: allEpics } = useQuery({
     queryKey: ["epics", workspaceId, { include_archived: false }],
-    queryFn: () => epicApi.list(workspaceId!, { include_archived: false, limit: 500 }),
+    queryFn: () => epicApi.list(workspaceId!, { include_archived: false, limit: 100 }),
     enabled: !!workspaceId,
   });
 
@@ -89,8 +99,12 @@ export function useWorkspaceTasks(workspaceId: string | null) {
   // for the backend's max (1000) so the board doesn't silently truncate at the
   // default 500 in workspaces with a lot of tasks.
   const { data: tasksRaw, isLoading: tasksLoading } = useQuery({
-    queryKey: ["workspaceTasks", workspaceId],
-    queryFn: () => workspaceTasksApi.list(workspaceId!, { limit: 1000 }),
+    queryKey: ["workspaceTasks", workspaceId, view],
+    queryFn: () =>
+      workspaceTasksApi.list(workspaceId!, {
+        limit: 1000,
+        ...(view === "archived" ? { archived_only: true } : {}),
+      }),
     enabled: !!workspaceId,
   });
 
@@ -169,9 +183,11 @@ export function useWorkspaceTasks(workspaceId: string | null) {
     });
   }, [tasks, filters]);
 
-  // Group filtered tasks by status for Kanban columns.
+  // Group filtered tasks by status slug for Kanban columns. Key is generic
+  // string so project-scoped custom statuses (e.g. "design_review") are
+  // bucketed alongside the canonical five.
   const tasksByStatus = useMemo(() => {
-    const grouped: Record<TaskStatus, WorkspaceTaskWithMeta[]> = {
+    const grouped: Record<string, WorkspaceTaskWithMeta[]> = {
       backlog: [],
       todo: [],
       in_progress: [],
@@ -179,7 +195,8 @@ export function useWorkspaceTasks(workspaceId: string | null) {
       done: [],
     };
     filteredTasks.forEach((task) => {
-      if (grouped[task.status]) grouped[task.status].push(task);
+      const key = task.status as string;
+      (grouped[key] ??= []).push(task);
     });
     return grouped;
   }, [filteredTasks]);
@@ -220,6 +237,25 @@ export function useWorkspaceTasks(workspaceId: string | null) {
     };
   }, [tasks, allSprints, projects, epicMap]);
 
+  // Backs the column "+" modal and the inline quick-add row. Skips
+  // optimistic-insert in favour of an invalidate on settle — synthesising
+  // a SprintTask client-side made the team_id-filtered view drop the
+  // pending card and required keeping a ~40-field literal in lockstep
+  // with the server type.
+  const createTaskMutation = useMutation({
+    mutationFn: (payload: Parameters<typeof workspaceTasksApi.create>[1]) => {
+      if (!workspaceId) throw new Error("workspaceId required");
+      return workspaceTasksApi.create(workspaceId, payload);
+    },
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : "Failed to create task";
+      toast.error(message);
+    },
+    onSettled: () => {
+      invalidateTaskCaches(queryClient, workspaceId);
+    },
+  });
+
   // Status update mutation — used by drag-drop in the Kanban.
   const updateStatusMutation = useMutation({
     mutationFn: async ({ taskId, status }: { taskId: string; status: TaskStatus }) => {
@@ -228,11 +264,11 @@ export function useWorkspaceTasks(workspaceId: string | null) {
     },
     // Optimistic update so the card doesn't snap back before the PATCH resolves.
     onMutate: async ({ taskId, status }) => {
-      await queryClient.cancelQueries({ queryKey: ["workspaceTasks", workspaceId] });
-      const prev = queryClient.getQueryData<SprintTask[]>(["workspaceTasks", workspaceId]);
+      await queryClient.cancelQueries({ queryKey: ["workspaceTasks", workspaceId, view] });
+      const prev = queryClient.getQueryData<SprintTask[]>(["workspaceTasks", workspaceId, view]);
       if (prev) {
         queryClient.setQueryData<SprintTask[]>(
-          ["workspaceTasks", workspaceId],
+          ["workspaceTasks", workspaceId, view],
           prev.map((t) => (t.id === taskId ? { ...t, status } : t)),
         );
       }
@@ -240,14 +276,12 @@ export function useWorkspaceTasks(workspaceId: string | null) {
     },
     onError: (_err, _vars, ctx) => {
       if (ctx?.prev) {
-        queryClient.setQueryData(["workspaceTasks", workspaceId], ctx.prev);
+        queryClient.setQueryData(["workspaceTasks", workspaceId, view], ctx.prev);
       }
       toast.error("Failed to update task status");
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["workspaceTasks", workspaceId] });
-      queryClient.invalidateQueries({ queryKey: ["sprintTasks"] });
-      queryClient.invalidateQueries({ queryKey: ["projectTasks"] });
+      invalidateTaskCaches(queryClient, workspaceId);
     },
   });
 
@@ -286,6 +320,8 @@ export function useWorkspaceTasks(workspaceId: string | null) {
     isLoading: tasksLoading || projectsLoading || sprintsLoading,
     updateTaskStatus: updateStatusMutation.mutateAsync,
     isUpdatingStatus: updateStatusMutation.isPending,
+    createTask: createTaskMutation.mutateAsync,
+    isCreatingTask: createTaskMutation.isPending,
     truncated,
   };
 }

@@ -78,6 +78,28 @@ async def check_workspace_permission(
         )
 
 
+async def _assert_record_in_workspace(
+    db: AsyncSession, workspace_id: str, record_id: str
+) -> None:
+    """Verify a CRMRecord belongs to this workspace before exposing
+    sub-resources (notes, activities) through its id. Without this a
+    workspace-A member can POST notes/activities to workspace-B records
+    via /workspaces/A/crm/records/<B_id>/notes."""
+    from sqlalchemy import select
+    from aexy.models.crm import CRMRecord
+    result = await db.execute(
+        select(CRMRecord.id).where(
+            CRMRecord.id == record_id,
+            CRMRecord.workspace_id == workspace_id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Record not found",
+        )
+
+
 # =============================================================================
 # OBJECT ENDPOINTS
 # =============================================================================
@@ -1453,6 +1475,7 @@ async def list_notes(
 ):
     """List notes for a record."""
     await check_workspace_permission(workspace_id, current_user, db)
+    await _assert_record_in_workspace(db, workspace_id, record_id)
 
     service = CRMNoteService(db)
     notes = await service.list_notes(record_id)
@@ -1482,6 +1505,7 @@ async def create_note(
 ):
     """Create a note on a record."""
     await check_workspace_permission(workspace_id, current_user, db)
+    await _assert_record_in_workspace(db, workspace_id, record_id)
 
     service = CRMNoteService(db)
     note = await service.create_note(
@@ -1515,6 +1539,7 @@ async def update_note(
 ):
     """Update a note."""
     await check_workspace_permission(workspace_id, current_user, db)
+    await _assert_record_in_workspace(db, workspace_id, record_id)
 
     service = CRMNoteService(db)
     note = await service.update_note(
@@ -1552,6 +1577,7 @@ async def delete_note(
 ):
     """Delete a note."""
     await check_workspace_permission(workspace_id, current_user, db)
+    await _assert_record_in_workspace(db, workspace_id, record_id)
 
     service = CRMNoteService(db)
     if not await service.delete_note(note_id):
@@ -1623,6 +1649,7 @@ async def list_activities(
 ):
     """List activities for a record."""
     await check_workspace_permission(workspace_id, current_user, db)
+    await _assert_record_in_workspace(db, workspace_id, record_id)
 
     service = CRMActivityService(db)
     activities, total = await service.list_activities(

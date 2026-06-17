@@ -5,7 +5,18 @@ import { ChevronDown, Check, Sparkles, Cpu, Server, Globe } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/tooltip";
 
-type LLMProvider = "claude" | "gemini" | "ollama" | "openrouter";
+// Must stay in sync with backend schema:
+// `AgentCreate.llm_provider` in src/aexy/schemas/agent.py
+// — a divergence here surfaces as a runtime crash inside
+// LLMConfigDisplay because `PROVIDERS[provider]` is undefined when
+// the FE doesn't recognize a value the BE accepted.
+type LLMProvider =
+  | "claude"
+  | "gemini"
+  | "ollama"
+  | "openrouter"
+  | "deepseek"
+  | "lmstudio";
 
 interface LLMConfig {
   provider: LLMProvider;
@@ -116,6 +127,35 @@ const PROVIDERS: Record<
         id: "deepseek/deepseek-chat-v3",
         name: "DeepSeek V3",
         description: "Strong reasoning at low cost",
+      },
+    ],
+  },
+  deepseek: {
+    name: "DeepSeek",
+    icon: Cpu,
+    color: "#7C3AED",
+    models: [
+      {
+        id: "deepseek-chat",
+        name: "DeepSeek Chat",
+        description: "Strong reasoning at low cost",
+      },
+      {
+        id: "deepseek-reasoner",
+        name: "DeepSeek Reasoner",
+        description: "Chain-of-thought reasoning model",
+      },
+    ],
+  },
+  lmstudio: {
+    name: "LM Studio",
+    icon: Server,
+    color: "#0EA5E9",
+    models: [
+      {
+        id: "qwen/qwen3.5-9b",
+        name: "Qwen 3.5 9B",
+        description: "Local Qwen model loaded via LM Studio",
       },
     ],
   },
@@ -307,7 +347,17 @@ interface LLMConfigDisplayProps {
 }
 
 export function LLMConfigDisplay({ provider, model, className }: LLMConfigDisplayProps) {
-  const providerConfig = PROVIDERS[provider];
+  // Defensive: a future backend provider that the FE doesn't know
+  // about yet would previously crash here (`PROVIDERS[unknown]` is
+  // undefined → `.models.find` throws → agent detail error boundary).
+  // Falling back to a generic render keeps the page usable until the
+  // FE catches up.
+  const providerConfig = PROVIDERS[provider] ?? {
+    name: provider,
+    icon: Cpu,
+    color: "#6B7280",
+    models: [],
+  };
   const modelConfig = providerConfig.models.find((m) => m.id === model);
   const Icon = providerConfig.icon;
 

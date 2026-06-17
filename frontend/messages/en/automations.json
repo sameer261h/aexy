@@ -1,0 +1,118 @@
+{
+  "automations": {
+    "title": "Automations",
+    "subtitle": "Automate workflows across all Aexy modules",
+    "createAutomation": "Create Automation",
+    "untitled": "Untitled Automation",
+
+    "filter": {
+      "allModules": "All Modules"
+    },
+
+    "search": {
+      "placeholder": "Search automations...",
+      "clear": "Clear search"
+    },
+
+    "stats": {
+      "total": "Total",
+      "active": "Active",
+      "paused": "Paused",
+      "draft": "Draft",
+      "executions": "Total Executions"
+    },
+
+    "status": {
+      "active": "Active",
+      "paused": "Paused",
+      "draft": "Draft",
+      "archived": "Archived"
+    },
+
+    "actions": {
+      "duplicate": "Duplicate",
+      "delete": "Delete",
+      "pause": "Pause",
+      "activate": "Activate",
+      "edit": "Edit",
+      "run": "Test run"
+    },
+
+    "save": {
+      "saving": "Saving…",
+      "saved": "Saved",
+      "savedAt": "Saved {time}",
+      "error": "Save failed",
+      "retry": "Retry"
+    },
+
+    "card": {
+      "executions": "{count, plural, =0 {No runs} =1 {1 run} other {# runs}}",
+      "actions": "{count, plural, =0 {No actions} =1 {1 action} other {# actions}}",
+      "runs": "{count, plural, =0 {0 runs} =1 {1 run} other {# runs}}",
+      "lastRun": "Last run {when}",
+      "neverRun": "Never run",
+      "successRate": "{rate}% success"
+    },
+
+    "empty": {
+      "title": "No automations yet",
+      "description": "Connect a trigger to an action and let Aexy do the repetitive work. Start from a template or build your own.",
+      "primaryAction": "Browse templates",
+      "secondaryAction": "Start from scratch",
+      "moduleTitle": "No {module} automations yet",
+      "moduleDescription": "Create your first {module} automation to streamline your workflows",
+      "searchTitle": "No automations match \"{query}\"",
+      "searchDescription": "Try a different keyword or clear the search to see all automations."
+    },
+
+    "delete": {
+      "title": "Delete this automation?",
+      "description": "All scheduled runs and execution history will be lost. This cannot be undone.",
+      "descriptionNamed": "All scheduled runs and execution history for \"{name}\" will be lost. This cannot be undone.",
+      "confirm": "Delete automation"
+    },
+
+    "removeAgentTrigger": {
+      "title": "Remove this agent trigger?",
+      "description": "The agent will no longer be invoked when this automation runs.",
+      "confirm": "Remove trigger"
+    },
+
+    "builder": {
+      "namePlaceholder": "Name this automation",
+      "descriptionPlaceholder": "Add a description...",
+      "addTriggerHint": "Pick a trigger to get started",
+      "addActionHint": "Drop an action next to the trigger",
+      "testRun": "Test run",
+      "fromTemplate": "Pre-filled from",
+      "fromTemplateTail": "- customize the workflow below, then save.",
+      "pickAnotherTemplate": "Pick another template"
+    },
+
+    "gallery": {
+      "kicker": "Start a new automation",
+      "title": "Pick a starting point",
+      "subtitle": "Templates wire up the trigger and the first few actions for you. You can rewire anything on the canvas afterward.",
+      "back": "Back to automations",
+      "searchPlaceholder": "Search templates...",
+      "allModules": "All",
+      "startBlank": "Start blank",
+      "noResults": "No templates match that search.",
+      "noResultsHint": "Try a different keyword or pick a module from the filter.",
+      "blankCard": {
+        "title": "Start from scratch",
+        "subtitle": "Empty canvas",
+        "description": "Drop in your own trigger and actions. Best when no template matches what you're building.",
+        "cta": "Open a blank canvas"
+      },
+      "generate": {
+        "heading": "Describe it, we'll draft it",
+        "badge": "AI · beta",
+        "subtitle": "Describe the automation in one or two sentences. We'll draft a starting workflow you can edit on the canvas.",
+        "placeholder": "e.g. When a new deal closes in CRM, post to #sales-wins and create a follow-up task in 7 days",
+        "describeAriaLabel": "Describe the automation"
+      }
+    }
+  }
+}

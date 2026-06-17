@@ -23,6 +23,8 @@ import { useWorkspace } from "@/hooks/useWorkspace";
 import { useGoals } from "@/hooks/useReviews";
 import { SearchInput } from "@/components/ui/search-input";
 import { EmptyState } from "@/components/EmptyState";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { formatDate } from "@/lib/datetime";
 import { WorkGoal, GoalType } from "@/lib/api";
 import { GOAL_TYPE_COLORS, GOAL_STATUS_COLORS, getStatusColor } from "@/lib/statusColors";
 
@@ -56,9 +58,9 @@ function GoalCard({ goal, onDelete }: { goal: WorkGoal; onDelete: (id: string) =
           </div>
           {goal.priority && (
             <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${
-              goal.priority === "critical" ? "text-red-400 bg-red-500/10" :
-              goal.priority === "high" ? "text-orange-400 bg-orange-500/10" :
-              goal.priority === "medium" ? "text-yellow-400 bg-yellow-500/10" :
+              goal.priority === "critical" ? "text-red-500 dark:text-red-400 bg-red-500/10" :
+              goal.priority === "high" ? "text-orange-500 dark:text-orange-400 bg-orange-500/10" :
+              goal.priority === "medium" ? "text-yellow-600 dark:text-yellow-400 bg-yellow-500/10" :
               "text-muted-foreground bg-muted-foreground/10"
             }`}>
               {goal.priority}
@@ -76,7 +78,14 @@ function GoalCard({ goal, onDelete }: { goal: WorkGoal; onDelete: (id: string) =
             <span>Progress</span>
             <span>{progressPercent}%</span>
           </div>
-          <div className="h-2 bg-accent rounded-full overflow-hidden">
+          <div
+            role="progressbar"
+            aria-label={`${goal.title} progress`}
+            aria-valuenow={Math.min(progressPercent, 100)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            className="h-2 bg-accent rounded-full overflow-hidden"
+          >
             <div
               className={`h-full rounded-full transition-all ${
                 progressPercent >= 100 ? "bg-emerald-500" :
@@ -99,11 +108,7 @@ function GoalCard({ goal, onDelete }: { goal: WorkGoal; onDelete: (id: string) =
         {goal.time_bound && (
           <div className="mt-3 text-xs text-muted-foreground flex items-center gap-1">
             <Clock className="h-3 w-3" />
-            Due: {new Date(goal.time_bound).toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            })}
+            Due: {formatDate(goal.time_bound)}
           </div>
         )}
       </Link>
@@ -181,10 +186,10 @@ export default function GoalsPage() {
     try {
       await deleteGoal(goalId);
       toast.success(t("goalDeleted"));
-      setDeleteConfirmGoalId(null);
     } catch (err) {
       console.error("Failed to delete goal:", err);
       toast.error(t("goalDeleteFailed"));
+      throw err;
     }
   };
 
@@ -236,7 +241,7 @@ export default function GoalsPage() {
 
   return (
     <div className="min-h-screen bg-background">
-<main className="max-w-7xl mx-auto px-4 py-8">
+      <main className="max-w-7xl mx-auto px-4 py-8">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-sm mb-6">
           <Link href="/reviews" className="text-muted-foreground hover:text-foreground transition flex items-center gap-1">
@@ -331,33 +336,21 @@ export default function GoalsPage() {
         )}
         </div>
 
-        {/* Delete Confirmation Modal */}
-        {deleteConfirmGoalId && (
-          <div data-testid="delete-confirm-modal" className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-muted border border-border rounded-xl p-6 max-w-md mx-4 shadow-xl">
-              <h3 className="text-lg font-semibold text-foreground mb-2">{t("deleteConfirmTitle")}</h3>
-              <p className="text-muted-foreground text-sm mb-6">
-                {t("deleteConfirmMessage")}
-              </p>
-              <div className="flex items-center justify-end gap-3">
-                <button
-                  data-testid="delete-confirm-cancel"
-                  onClick={() => setDeleteConfirmGoalId(null)}
-                  className="px-4 py-2 text-muted-foreground hover:text-foreground transition text-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  data-testid="delete-confirm-submit"
-                  onClick={() => handleDeleteGoal(deleteConfirmGoalId)}
-                  className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg transition text-sm font-medium"
-                >
-                  {t("deleteGoal")}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <ConfirmDialog
+          open={!!deleteConfirmGoalId}
+          onOpenChange={(open) => {
+            if (!open) setDeleteConfirmGoalId(null);
+          }}
+          title={t("deleteConfirmTitle")}
+          description={t("deleteConfirmMessage")}
+          confirmLabel={t("deleteGoal")}
+          tone="danger"
+          onConfirm={async () => {
+            if (deleteConfirmGoalId) {
+              await handleDeleteGoal(deleteConfirmGoalId);
+            }
+          }}
+        />
       </main>
     </div>
   );

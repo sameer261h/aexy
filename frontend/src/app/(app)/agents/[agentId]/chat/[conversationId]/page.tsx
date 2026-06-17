@@ -2,6 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import {
   Bot,
   Settings,
@@ -16,19 +17,22 @@ import { useAgent } from "@/hooks/useAgents";
 import {
   useAgentConversations,
   useAgentConversation,
-  useSendMessage,
 } from "@/hooks/useAgentChat";
+import { useAgentChatStream } from "@/hooks/useAgentChatStream";
 import { getAgentTypeConfig } from "@/lib/api";
 import { ChatInterface, ConversationSidebar } from "@/components/agents/chat";
 import { AgentStatusBadge } from "@/components/agents/shared";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export default function ConversationPage() {
+  const t = useTranslations("agents");
   const params = useParams();
   const router = useRouter();
   const agentId = params.agentId as string;
   const conversationId = params.conversationId as string;
   const { currentWorkspaceId, currentWorkspaceLoading } = useWorkspace();
+  const [deleteTargetConvoId, setDeleteTargetConvoId] = useState<string | null>(null);
 
   const { agent, isLoading: agentLoading } = useAgent(currentWorkspaceId, agentId);
   const {
@@ -38,15 +42,27 @@ export default function ConversationPage() {
   } = useAgentConversations(currentWorkspaceId, agentId);
   const {
     conversation,
-    messages,
+    messages: canonicalMessages,
     isLoading: conversationLoading,
     updateConversation,
   } = useAgentConversation(currentWorkspaceId, agentId, conversationId);
-  const { sendMessage, isSending } = useSendMessage(
-    currentWorkspaceId,
-    agentId,
-    conversationId
+
+  // UX-CHAT-001/002/003/009: streaming chat with optimistic message,
+  // Stop button, and live token meter. The hook holds the pending
+  // optimistic pair; mergeMessages overlays them on the canonical
+  // server list so we render the union without dedupe races.
+  const {
+    mergeMessages,
+    isStreaming,
+    send: streamSend,
+    stop: streamStop,
+    currentTokens,
+    currentCostUsd,
+  } = useAgentChatStream(currentWorkspaceId, agentId, conversationId);
+  const messages = mergeMessages(
+    conversation ? { ...conversation, messages: canonicalMessages } : undefined,
   );
+  const isSending = isStreaming;
 
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -54,7 +70,7 @@ export default function ConversationPage() {
 
   const handleSendMessage = async (message: string) => {
     try {
-      await sendMessage(message);
+      await streamSend(message);
     } catch (error) {
       console.error("Failed to send message:", error);
     }
@@ -68,8 +84,13 @@ export default function ConversationPage() {
     router.push(`/agents/${agentId}/chat`);
   };
 
-  const handleDeleteConversation = async (id: string) => {
-    if (!confirm("Delete this conversation?")) return;
+  const handleDeleteConversation = (id: string) => {
+    setDeleteTargetConvoId(id);
+  };
+
+  const confirmDeleteConversation = async () => {
+    if (!deleteTargetConvoId) return;
+    const id = deleteTargetConvoId;
     try {
       await deleteConversation(id);
       if (id === conversationId) {
@@ -209,6 +230,8 @@ export default function ConversationPage() {
             <div className="flex items-center gap-2">
               <Link
                 href={`/agents/${agentId}/edit`}
+                aria-label="Agent settings"
+                title="Settings"
                 className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition"
               >
                 <Settings className="h-5 w-5" />
@@ -242,9 +265,22 @@ export default function ConversationPage() {
             onSend={handleSendMessage}
             isSending={isSending}
             isLoading={conversationLoading}
+            onStop={streamStop}
+            streamingTokens={currentTokens}
+            streamingCostUsd={currentCostUsd}
           />
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTargetConvoId}
+        onOpenChange={(open) => !open && setDeleteTargetConvoId(null)}
+        title={t("confirmations.deleteConversationTitle")}
+        description={t("confirmations.deleteConversationDescription")}
+        confirmLabel={t("confirmations.deleteConversationConfirm")}
+        onConfirm={confirmDeleteConversation}
+        tone="danger"
+      />
     </div>
   );
 }

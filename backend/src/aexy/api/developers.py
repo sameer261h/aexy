@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status
 from jose import JWTError, jwt
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +14,6 @@ from aexy.core.config import get_settings
 from aexy.core.database import get_db
 from aexy.models.developer import Developer, GoogleConnection
 from aexy.schemas.developer import DeveloperResponse, DeveloperUpdate
-from aexy.schemas.sprint import SprintTaskResponse
 from aexy.services.api_token_service import ApiTokenService
 from aexy.services.developer_service import DeveloperNotFoundError, DeveloperService
 from aexy.services.sprint_task_service import SprintTaskService
@@ -147,6 +146,189 @@ async def get_current_developer_profile(
         ) from e
 
     return DeveloperResponse.model_validate(developer)
+
+
+@router.get("/me/claim-commits/preview")
+async def preview_claim_my_commits(
+    developer_id: str = Depends(get_current_developer_id),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Preview how many commits/PRs/reviews would be merged if the caller
+    clicks the claim button. Read-only; safe to call repeatedly.
+
+    Returns `{ ghost_id, commits, prs, reviews, github_username }`.
+    `ghost_id` is null when there's nothing to claim.
+    """
+    from aexy.models.developer import GitHubConnection
+
+    service = DeveloperService(db)
+    conn = (
+        await db.execute(
+            select(GitHubConnection).where(
+                GitHubConnection.developer_id == developer_id
+            )
+        )
+    ).scalar_one_or_none()
+    if not conn or not conn.github_username:
+        return {
+            "ghost_id": None,
+            "commits": 0,
+            "prs": 0,
+            "reviews": 0,
+            "github_username": None,
+        }
+
+    preview = await service.preview_ghost_match(
+        canonical_developer_id=developer_id,
+        github_username=conn.github_username,
+    )
+    preview["github_username"] = conn.github_username
+    return preview
+
+
+@router.post("/me/claim-commits")
+async def claim_my_commits(
+    developer_id: str = Depends(get_current_developer_id),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Merge any orphaned 'ghost developer' rows that match my GitHub login.
+
+    Self-serve recovery for the case where a contributor's commits were
+    synced (e.g. by an admin's pre-existing connection) before they signed
+    in themselves. Their `Commit.developer_id` rows still point at a ghost
+    row whose `name == my_github_login AND email IS NULL`; this endpoint
+    physically reassigns them to the current logged-in developer.
+    """
+    from aexy.models.developer import GitHubConnection
+
+    service = DeveloperService(db)
+    # Look up the caller's GitHub username from their stored connection.
+    conn = (
+        await db.execute(
+            select(GitHubConnection).where(
+                GitHubConnection.developer_id == developer_id
+            )
+        )
+    ).scalar_one_or_none()
+    if not conn or not conn.github_username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No GitHub connection found — connect GitHub first.",
+        )
+
+    result = await service.merge_ghost_into_developer(
+        canonical_developer_id=developer_id,
+        github_username=conn.github_username,
+    )
+    await db.commit()
+    return result
+
+
+class EmailAliasResponse(BaseModel):
+    id: str
+    email: str
+    verified: bool
+    created_at: str
+
+
+class EmailAliasAddRequest(BaseModel):
+    email: str
+
+
+class EmailAliasPreviewResponse(BaseModel):
+    commits: int
+
+
+class EmailAliasAddResponse(BaseModel):
+    alias: EmailAliasResponse
+    backfill: dict[str, int]
+
+
+def _alias_to_response(alias) -> EmailAliasResponse:
+    return EmailAliasResponse(
+        id=str(alias.id),
+        email=alias.email,
+        verified=bool(alias.verified),
+        created_at=alias.created_at.isoformat() if alias.created_at else "",
+    )
+
+
+@router.get("/me/email-aliases", response_model=list[EmailAliasResponse])
+async def list_my_email_aliases(
+    developer_id: str = Depends(get_current_developer_id),
+    db: AsyncSession = Depends(get_db),
+) -> list[EmailAliasResponse]:
+    """List every alias attached to the caller's Developer row."""
+    service = DeveloperService(db)
+    aliases = await service.list_email_aliases(developer_id)
+    return [_alias_to_response(a) for a in aliases]
+
+
+@router.get(
+    "/me/email-aliases/preview",
+    response_model=EmailAliasPreviewResponse,
+)
+async def preview_my_email_alias(
+    email: str,
+    developer_id: str = Depends(get_current_developer_id),
+    db: AsyncSession = Depends(get_db),
+) -> EmailAliasPreviewResponse:
+    """Read-only count of commits that would move to the caller's row
+    if they added `email` as an alias. Surfaced in the UI to show
+    'this will claim N commits' before they click confirm.
+    """
+    service = DeveloperService(db)
+    result = await service.preview_alias_backfill(developer_id, email)
+    return EmailAliasPreviewResponse(commits=int(result.get("commits", 0)))
+
+
+@router.post("/me/email-aliases", response_model=EmailAliasAddResponse, status_code=201)
+async def add_my_email_alias(
+    payload: EmailAliasAddRequest,
+    developer_id: str = Depends(get_current_developer_id),
+    db: AsyncSession = Depends(get_db),
+) -> EmailAliasAddResponse:
+    """Attach `email` as a secondary email + reclaim every commit
+    currently sitting on a pseudo-ghost with that email."""
+    from aexy.services.developer_service import (
+        DeveloperAlreadyExistsError,
+        DeveloperServiceError,
+    )
+
+    service = DeveloperService(db)
+    try:
+        alias, backfill = await service.add_email_alias(
+            developer_id, payload.email
+        )
+    except DeveloperAlreadyExistsError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except DeveloperServiceError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    await db.commit()
+    return EmailAliasAddResponse(
+        alias=_alias_to_response(alias),
+        backfill={
+            "commits": int(backfill.get("commits", 0)),
+            "ghost_deleted": int(backfill.get("ghost_deleted", 0)),
+        },
+    )
+
+
+@router.delete("/me/email-aliases/{alias_id}", status_code=204)
+async def remove_my_email_alias(
+    alias_id: str,
+    developer_id: str = Depends(get_current_developer_id),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Detach an alias. Past commits stay on the canonical row;
+    only future commits with that email stop auto-routing here."""
+    service = DeveloperService(db)
+    ok = await service.remove_email_alias(developer_id, alias_id)
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Alias not found"
+        )
+    await db.commit()
 
 
 @router.get("/me/google-status", response_model=GoogleConnectionStatus)

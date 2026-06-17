@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.core.database import get_db
@@ -15,6 +16,7 @@ from aexy.schemas.workspace import (
     WorkspaceListResponse,
     WorkspaceMemberAdd,
     WorkspaceMemberInvite,
+    WorkspaceMemberStatusUpdate,
     WorkspaceMemberUpdate,
     WorkspaceMemberResponse,
     WorkspaceMemberAppPermissions,
@@ -169,6 +171,43 @@ async def get_workspace(
     return workspace_to_response(workspace, member_count, team_count)
 
 
+@router.get("/{workspace_id}/llm-usage")
+async def get_workspace_llm_usage(
+    workspace_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Month-to-date LLM token usage for this workspace.
+
+    Aggregated across every analyze_commit / analyze_pr / analyze_review
+    activity that ran for any of the workspace's adopted repos. Resets
+    lazily at the first call past the month boundary.
+
+    Visible to any workspace member ("viewer" or above) — usage is a
+    transparency feature, not a billing-action.
+    """
+    from aexy.services.limits_service import LimitsService
+
+    service = WorkspaceService(db)
+    if not await service.check_permission(
+        workspace_id, str(current_user.id), "viewer"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a member of this workspace",
+        )
+
+    limits = LimitsService(db)
+    usage = await limits.get_workspace_llm_usage(workspace_id)
+    if not usage:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workspace not found",
+        )
+    await db.commit()
+    return usage
+
+
 @router.patch("/{workspace_id}", response_model=WorkspaceResponse)
 async def update_workspace(
     workspace_id: str,
@@ -232,15 +271,172 @@ async def delete_workspace(
     await db.commit()
 
 
+# ─── Ghost developer reconciliation (admin) ──────────────────────────────
+
+
+@router.get("/{workspace_id}/ghost-developers")
+async def list_workspace_ghost_developers(
+    workspace_id: str,
+    limit: int = 50,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """List ghost developers whose activity touches this workspace's repos,
+    with commit/PR/review counts and suggested workspace-member matches.
+
+    Admin only. Used by the /settings/identity/admin page to reattribute
+    commits that the auto-merge couldn't resolve (e.g. login changed,
+    casing drift, no signed-in match yet).
+    """
+    service = WorkspaceService(db)
+    if not await service.check_permission(workspace_id, str(current_user.id), "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin permission required",
+        )
+
+    dev_service = DeveloperService(db)
+    ghosts = await dev_service.list_workspace_ghosts(
+        workspace_id=workspace_id,
+        limit=max(1, min(limit, 200)),
+    )
+    return {"ghosts": ghosts}
+
+
+@router.post("/{workspace_id}/ghost-developers/merge")
+async def merge_ghost_into_target(
+    workspace_id: str,
+    payload: dict,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Admin-driven merge of a ghost developer into a specific target.
+
+    Body: { "ghost_developer_id": "...", "target_developer_id": "..." }.
+    The target must be a member of `workspace_id` so admins can't
+    cross-workspace-leak attribution.
+    """
+    from aexy.models.developer import Developer as DeveloperModel
+    from aexy.models.workspace import WorkspaceMember
+
+    service = WorkspaceService(db)
+    if not await service.check_permission(workspace_id, str(current_user.id), "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin permission required",
+        )
+
+    ghost_id = payload.get("ghost_developer_id")
+    target_id = payload.get("target_developer_id")
+    if not ghost_id or not target_id:
+        raise HTTPException(
+            status_code=400,
+            detail="ghost_developer_id and target_developer_id required",
+        )
+
+    # Target must be a member of this workspace.
+    member_check = (
+        await db.execute(
+            select(WorkspaceMember.id).where(
+                WorkspaceMember.workspace_id == workspace_id,
+                WorkspaceMember.developer_id == target_id,
+            )
+        )
+    ).first()
+    if member_check is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Target developer is not a member of this workspace",
+        )
+
+    # Sanity: target must actually exist (the FK check would also catch this).
+    target = await db.get(DeveloperModel, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Target developer not found")
+
+    dev_service = DeveloperService(db)
+    try:
+        result = await dev_service.merge_ghost_by_id(
+            ghost_developer_id=ghost_id,
+            target_developer_id=target_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    await db.commit()
+    return result
+
+
+# ─── AI analysis settings ────────────────────────────────────────────────
+@router.get("/{workspace_id}/settings/ai-analysis")
+async def get_ai_analysis_settings(
+    workspace_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Read this workspace's AI analysis settings (mode + model tier)."""
+    from aexy.services.ai_settings import settings_for_workspace
+
+    service = WorkspaceService(db)
+    if not await service.check_permission(workspace_id, str(current_user.id), "viewer"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a member of this workspace",
+        )
+    workspace = await service.get_workspace(workspace_id)
+    if not workspace:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workspace not found",
+        )
+    return settings_for_workspace(workspace).to_dict()
+
+
+@router.put("/{workspace_id}/settings/ai-analysis")
+async def update_ai_analysis_settings(
+    workspace_id: str,
+    payload: dict,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Update this workspace's AI analysis settings. Admin only."""
+    from aexy.services.ai_settings import _coerce, merge_settings
+
+    service = WorkspaceService(db)
+    if not await service.check_permission(workspace_id, str(current_user.id), "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin permission required",
+        )
+
+    new_settings = _coerce(payload)
+    workspace = await service.get_workspace(workspace_id)
+    if not workspace:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workspace not found",
+        )
+
+    workspace.settings = merge_settings(workspace.settings, new_settings)
+    await db.commit()
+    return new_settings.to_dict()
+
+
 # Member management
 @router.get("/{workspace_id}/members", response_model=list[WorkspaceMemberResponse])
 async def list_members(
     workspace_id: str,
     include_pending: bool = False,
+    include_removed: bool = False,
     current_user: Developer = Depends(get_current_developer),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all members of a workspace."""
+    """List all members of a workspace.
+
+    Set `include_removed=true` to also surface members whose status was
+    flipped to "removed" — used by the admin members page so the
+    "Mark as left" toggle has something to render against.
+    """
     service = WorkspaceService(db)
 
     if not await service.check_permission(workspace_id, str(current_user.id), "viewer"):
@@ -249,7 +445,11 @@ async def list_members(
             detail="Not a member of this workspace",
         )
 
-    members = await service.get_members(workspace_id, include_pending=include_pending)
+    members = await service.get_members(
+        workspace_id,
+        include_pending=include_pending,
+        include_removed=include_removed,
+    )
     return [member_to_response(m) for m in members]
 
 
@@ -503,6 +703,54 @@ async def update_member_role(
             workspace_id=workspace_id,
             developer_id=developer_id,
             new_role=data.role,
+        )
+        if not member:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Member not found",
+            )
+        await db.commit()
+        await db.refresh(member)
+        return member_to_response(member)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.patch(
+    "/{workspace_id}/members/{developer_id}/status",
+    response_model=WorkspaceMemberResponse,
+)
+async def update_member_status(
+    workspace_id: str,
+    developer_id: str,
+    data: WorkspaceMemberStatusUpdate,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Toggle a member between "active" and "removed".
+
+    Powers the admin "Mark as left" / "Restore" actions on the
+    workspace members page. Distinct from `DELETE …/members/{id}`
+    because it preserves the WorkspaceMember row (and therefore the
+    member's history) and supports flipping the state back to
+    "active" without a fresh invite.
+    """
+    service = WorkspaceService(db)
+
+    if not await service.check_permission(workspace_id, str(current_user.id), "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin permission required",
+        )
+
+    try:
+        member = await service.set_member_status(
+            workspace_id=workspace_id,
+            developer_id=developer_id,
+            new_status=data.status,
         )
         if not member:
             raise HTTPException(

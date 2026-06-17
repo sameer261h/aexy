@@ -24,6 +24,18 @@
       "cancel": "Cancel"
     },
 
+    "taskTable": {
+      "key": "Key",
+      "title": "Title",
+      "status": "Status",
+      "priority": "Priority",
+      "assignee": "Assignee",
+      "sprint": "Sprint",
+      "points": "Pts",
+      "updated": "Updated",
+      "empty": "No tasks match the current filters."
+    },
+
     "projectCard": {
       "public": "Public",
       "private": "Private",
@@ -173,16 +185,30 @@
       "sprint": "Sprint",
       "noOptions": "No options",
       "clearAll": "Clear all",
+      "addTask": "Add task",
+      "newTaskPlaceholder": "+ New task",
       "taskCount": "{count} task",
       "taskCountPlural": "{count} tasks",
-      "dropTasksHere": "Drop tasks here",
+      "dropTasksHere": "Drop a task here or click + to add",
       "noWorkspace": "No workspace selected.",
       "noTasksFound": "No tasks found",
       "noTasksHintFiltered": "Try clearing filters to see more tasks.",
       "noTasksHintEmpty": "Create a project and add tasks to see them here.",
       "clearFilters": "Clear filters",
       "goToProjects": "Go to Projects",
-      "truncatedNotice": "Showing the first {limit} tasks. Use filters to narrow the view."
+      "truncatedNotice": "Showing the first {limit} tasks. Use filters to narrow the view.",
+      "viewBoard": "Board",
+      "viewTable": "Table",
+      "viewActive": "Active",
+      "viewArchived": "Archived",
+      "unarchive": "Unarchive",
+      "unarchiveBulk": "Restore selected",
+      "noArchivedTasks": "No archived tasks."
+    },
+
+    "move": {
+      "statusLabel": "Status on destination board",
+      "statusHint": "Status columns differ per project — pick where this task lands."
     }
   }
 }

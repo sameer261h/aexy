@@ -106,6 +106,10 @@ class EffectivePlan:
     llm_requests_per_day: int
     llm_requests_per_minute: int
     llm_tokens_per_minute: int
+
+    # Storage quota in GB; -1 = unlimited.
+    max_storage_gb: int = 5
+
     llm_provider_access: list[str] = field(default_factory=list)
     free_llm_tokens_per_month: int = 100000
     llm_input_cost_per_1k_cents: int = 30
@@ -309,6 +313,7 @@ class LimitsService:
             max_commits_per_repo=_ov("max_commits_per_repo", plan.max_commits_per_repo),
             max_prs_per_repo=_ov("max_prs_per_repo", plan.max_prs_per_repo),
             sync_history_days=_ov("sync_history_days", plan.sync_history_days),
+            max_storage_gb=_ov("max_storage_gb", plan.max_storage_gb),
             # LLM limits
             llm_requests_per_day=_ov("llm_requests_per_day", plan.llm_requests_per_day),
             llm_requests_per_minute=_ov("llm_requests_per_minute", plan.llm_requests_per_minute),
@@ -371,32 +376,45 @@ class LimitsService:
         )
 
     async def can_sync_repo(self, developer_id: str) -> tuple[bool, str | None]:
-        """Check if a developer can sync another repository.
+        """Deprecated: per-developer repo cap is gone in 0.7.72.
 
-        Returns (can_sync, error_message).
+        Repos are workspace-scoped now. Use `can_adopt_repository(
+        workspace_id, developer_id)` for the new gate. This stub stays
+        so old callers don't break — it always allows.
         """
-        developer = await self.get_developer_with_plan(developer_id)
-        if not developer:
-            return False, "Developer not found"
+        return True, None
 
-        plan = await self.get_plan(developer_id)
+    async def can_adopt_repository(
+        self, workspace_id: str, developer_id: str
+    ) -> tuple[bool, str | None]:
+        """Check if `workspace_id` can adopt one more repository.
 
-        # Unlimited repos
-        if plan.max_repos == -1:
+        Counts active rows in `workspace_repositories` against the
+        workspace's effective plan's `max_repos`. Returns
+        (can_adopt, error_message).
+        """
+        from aexy.models.repository import WorkspaceRepository
+
+        effective = await self.get_effective_plan(developer_id, workspace_id)
+        if effective.max_repos == -1:
             return True, None
 
-        # Count enabled repos
-        stmt = (
-            select(func.count(DeveloperRepository.id))
-            .where(DeveloperRepository.developer_id == developer_id)
-            .where(DeveloperRepository.is_enabled == True)
+        stmt = select(func.count(WorkspaceRepository.id)).where(
+            WorkspaceRepository.workspace_id == workspace_id,
+            WorkspaceRepository.is_active == True,  # noqa: E712
         )
         result = await self.db.execute(stmt)
-        count = result.scalar() or 0
+        count = int(result.scalar() or 0)
 
-        if count >= plan.max_repos:
-            return False, f"Repository limit reached ({plan.max_repos} repos for {plan.name} plan)"
-
+        if count >= effective.max_repos:
+            return (
+                False,
+                (
+                    f"Workspace repository limit reached "
+                    f"({effective.max_repos} repos for {effective.plan_name} plan). "
+                    "Upgrade the workspace plan to add more."
+                ),
+            )
         return True, None
 
     async def can_use_llm(
@@ -674,6 +692,194 @@ class LimitsService:
             "total_overage_cost_cents": developer.llm_overage_cost_cents or 0,
         }
 
+    # ------------------------------------------------------------
+    # Workspace-level LLM usage
+    # ------------------------------------------------------------
+
+    async def _maybe_reset_workspace_tokens(self, workspace) -> None:
+        """Reset workspace LLM usage if we're past the reset timestamp."""
+        now = datetime.now(timezone.utc)
+        next_month = (now.replace(day=1) + timedelta(days=32)).replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        if workspace.llm_tokens_reset_at is None:
+            workspace.llm_tokens_used_this_month = 0
+            workspace.llm_input_tokens_this_month = 0
+            workspace.llm_output_tokens_this_month = 0
+            workspace.llm_requests_this_month = 0
+            workspace.llm_provider_breakdown = {}
+            workspace.llm_overage_cost_cents = 0
+            workspace.llm_tokens_reset_at = next_month
+        elif now >= workspace.llm_tokens_reset_at:
+            workspace.llm_tokens_used_this_month = 0
+            workspace.llm_input_tokens_this_month = 0
+            workspace.llm_output_tokens_this_month = 0
+            workspace.llm_requests_this_month = 0
+            workspace.llm_provider_breakdown = {}
+            workspace.llm_overage_cost_cents = 0
+            workspace.llm_tokens_reset_at = next_month
+
+    async def _get_workspace_plan(self, workspace):
+        """Resolve the plan the workspace is currently billed against.
+
+        Prefers `workspace.plan_id` when set; falls back to the workspace
+        owner's developer plan so a brand-new workspace without an
+        explicit `plan_id` still gets sensible defaults. Returns None
+        when nothing is resolvable (the caller treats this as "no
+        overage" — usage tracks, costs don't).
+        """
+        from aexy.models.plan import Plan
+
+        if workspace.plan_id:
+            plan = await self.db.get(Plan, workspace.plan_id)
+            if plan is not None:
+                return plan
+        # Fallback: derive from the owner's plan.
+        return await self.get_plan(workspace.owner_id)
+
+    async def record_workspace_token_usage(
+        self,
+        workspace_id: str,
+        provider: str,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> dict[str, Any]:
+        """Increment workspace-level LLM counters for one call.
+
+        Designed to be cheap (one row update) and never raise — callers
+        are sync activities where a billing-write failure must not break
+        the analysis. The provider breakdown stores per-provider sub-totals
+        so the UI can show "10k deepseek + 4k ollama" without joining the
+        per-call analysis cache.
+
+        Returns the post-update totals or `{"skipped": ...}` if the
+        workspace doesn't exist.
+        """
+        from aexy.models.workspace import Workspace
+
+        workspace = await self.db.get(Workspace, workspace_id)
+        if workspace is None:
+            return {"skipped": "workspace_not_found"}
+
+        await self._maybe_reset_workspace_tokens(workspace)
+
+        # Capture pre-update total so we can compute the portion of THIS
+        # call that lands in overage (some calls straddle the threshold).
+        old_total = int(workspace.llm_tokens_used_this_month or 0)
+        input_tokens = int(input_tokens or 0)
+        output_tokens = int(output_tokens or 0)
+        total = input_tokens + output_tokens
+
+        workspace.llm_tokens_used_this_month = old_total + total
+        workspace.llm_input_tokens_this_month = (
+            (workspace.llm_input_tokens_this_month or 0) + input_tokens
+        )
+        workspace.llm_output_tokens_this_month = (
+            (workspace.llm_output_tokens_this_month or 0) + output_tokens
+        )
+        workspace.llm_requests_this_month = (
+            (workspace.llm_requests_this_month or 0) + 1
+        )
+
+        # Update per-provider breakdown JSONB. SQLAlchemy needs the dict
+        # reassigned (not mutated in-place) for the change to be tracked.
+        breakdown = dict(workspace.llm_provider_breakdown or {})
+        prov_key = (provider or "unknown").lower()
+        entry = dict(breakdown.get(prov_key) or {})
+        entry["in"] = int(entry.get("in", 0) or 0) + input_tokens
+        entry["out"] = int(entry.get("out", 0) or 0) + output_tokens
+        entry["req"] = int(entry.get("req", 0) or 0) + 1
+        breakdown[prov_key] = entry
+        workspace.llm_provider_breakdown = breakdown
+
+        # Overage accumulation — only meaningful when the plan has a
+        # finite free-tier ceiling AND enables overage billing. Mirrors
+        # the per-developer logic in `record_token_usage`.
+        overage_cost = 0
+        new_total = workspace.llm_tokens_used_this_month
+        try:
+            plan = await self._get_workspace_plan(workspace)
+        except Exception:
+            plan = None
+        free_tokens = int(getattr(plan, "free_llm_tokens_per_month", 0) or 0)
+        enable_overage = bool(getattr(plan, "enable_overage_billing", False))
+
+        if (
+            plan is not None
+            and free_tokens > 0
+            and enable_overage
+            and new_total > free_tokens
+        ):
+            # How much of THIS request crossed into the overage zone.
+            if old_total >= free_tokens:
+                overage_input = input_tokens
+                overage_output = output_tokens
+            else:
+                tokens_into_overage = new_total - free_tokens
+                ratio = (
+                    tokens_into_overage / total if total > 0 else 0
+                )
+                overage_input = int(input_tokens * ratio)
+                overage_output = int(output_tokens * ratio)
+
+            input_cost_per_1k = int(
+                getattr(plan, "llm_input_cost_per_1k_cents", 30) or 0
+            )
+            output_cost_per_1k = int(
+                getattr(plan, "llm_output_cost_per_1k_cents", 60) or 0
+            )
+            overage_cost = (
+                (overage_input * input_cost_per_1k) // 1000
+                + (overage_output * output_cost_per_1k) // 1000
+            )
+            if overage_cost > 0:
+                workspace.llm_overage_cost_cents = (
+                    int(workspace.llm_overage_cost_cents or 0) + overage_cost
+                )
+
+        await self.db.flush()
+        return {
+            "tokens_used_this_month": workspace.llm_tokens_used_this_month,
+            "requests_this_month": workspace.llm_requests_this_month,
+            "provider_breakdown": breakdown,
+            "overage_cost_cents": int(workspace.llm_overage_cost_cents or 0),
+            "added_overage_cost_cents": overage_cost,
+        }
+
+    async def get_workspace_llm_usage(
+        self, workspace_id: str
+    ) -> dict[str, Any]:
+        """Read-only workspace LLM usage snapshot."""
+        from aexy.models.workspace import Workspace
+
+        workspace = await self.db.get(Workspace, workspace_id)
+        if workspace is None:
+            return {}
+        await self._maybe_reset_workspace_tokens(workspace)
+        await self.db.flush()
+        return {
+            "workspace_id": workspace.id,
+            "tokens_used_this_month": int(
+                workspace.llm_tokens_used_this_month or 0
+            ),
+            "input_tokens_this_month": int(
+                workspace.llm_input_tokens_this_month or 0
+            ),
+            "output_tokens_this_month": int(
+                workspace.llm_output_tokens_this_month or 0
+            ),
+            "requests_this_month": int(
+                workspace.llm_requests_this_month or 0
+            ),
+            "overage_cost_cents": int(workspace.llm_overage_cost_cents or 0),
+            "reset_at": (
+                workspace.llm_tokens_reset_at.isoformat()
+                if workspace.llm_tokens_reset_at
+                else None
+            ),
+            "provider_breakdown": dict(workspace.llm_provider_breakdown or {}),
+        }
+
     async def check_token_limit(
         self,
         developer_id: str,
@@ -724,14 +930,31 @@ class LimitsService:
         }
 
     async def get_enabled_repos_count(self, developer_id: str) -> int:
-        """Get the count of enabled repositories for a developer."""
+        """Total active workspace_repositories across this developer's workspaces.
+
+        Per-developer counter that drives the limits widget on the
+        billing/usage pages. Repos are workspace-scoped now (since
+        0.7.72), so this is a sum across every workspace the developer
+        belongs to actively.
+        """
+        from aexy.models.repository import WorkspaceRepository
+        from aexy.models.workspace import WorkspaceMember
+
         stmt = (
-            select(func.count(DeveloperRepository.id))
-            .where(DeveloperRepository.developer_id == developer_id)
-            .where(DeveloperRepository.is_enabled == True)
+            select(func.count(WorkspaceRepository.id.distinct()))
+            .select_from(WorkspaceRepository)
+            .join(
+                WorkspaceMember,
+                WorkspaceMember.workspace_id == WorkspaceRepository.workspace_id,
+            )
+            .where(
+                WorkspaceMember.developer_id == developer_id,
+                WorkspaceMember.status == "active",
+                WorkspaceRepository.is_active == True,  # noqa: E712
+            )
         )
         result = await self.db.execute(stmt)
-        return result.scalar() or 0
+        return int(result.scalar() or 0)
 
     async def get_usage_summary(self, developer_id: str) -> dict[str, Any]:
         """Get a usage summary for a developer."""

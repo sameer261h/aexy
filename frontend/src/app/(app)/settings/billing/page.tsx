@@ -19,12 +19,15 @@ import { useAuth } from "@/hooks/useAuth";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useSubscription } from "@/hooks/useSubscription";
 import { billingApi } from "@/lib/api";
+import { STRIPE_ENABLED, buildSalesMailto } from "@/lib/billingMode";
 
 // New billing components
 import { UsageAlerts } from "@/components/billing/UsageAlert";
 import { UsageStatsCards } from "@/components/billing/UsageStatsCards";
+import { StorageUsageCard } from "@/components/billing/StorageUsageCard";
 import { UsageTrendChart } from "@/components/billing/UsageTrendChart";
 import { InvoiceList } from "@/components/billing/InvoiceList";
+import { WorkspaceLLMUsageCard } from "@/components/code-insights";
 
 function BillingContent() {
   const searchParams = useSearchParams();
@@ -48,6 +51,15 @@ function BillingContent() {
   }, [searchParams, refetch]);
 
   const handleManageBilling = async () => {
+    if (!STRIPE_ENABLED) {
+      window.location.href = buildSalesMailto({
+        planTier: tier,
+        workspaceId: currentWorkspaceId,
+        intent: "manage",
+      });
+      return;
+    }
+
     setPortalLoading(true);
     try {
       const { portal_url } = await billingApi.createPortalSession({
@@ -349,6 +361,14 @@ function BillingContent() {
         <div>
           <h3 className="text-lg font-semibold text-foreground mb-4">Current Usage</h3>
           <UsageStatsCards />
+          <div className="mt-4">
+            <StorageUsageCard />
+          </div>
+          {/* Workspace-level AI token consumption — month-to-date counters
+              written inline by the GitHub-sync AI activities. */}
+          <div className="mt-4">
+            <WorkspaceLLMUsageCard workspaceId={currentWorkspaceId} />
+          </div>
         </div>
 
         {/* Usage Trend Chart */}

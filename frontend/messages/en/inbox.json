@@ -1,0 +1,88 @@
+{
+  "inbox": {
+    "title": "Agent Inbox",
+    "subtitle": "Conversations and replies handled by this agent",
+
+    "filter": {
+      "all": "All",
+      "open": "Open",
+      "awaitingReview": "Awaiting review",
+      "snoozed": "Snoozed",
+      "resolved": "Resolved",
+      "spam": "Spam"
+    },
+
+    "status": {
+      "open": "Open",
+      "awaitingReview": "Awaiting review",
+      "snoozed": "Snoozed",
+      "resolved": "Resolved",
+      "spam": "Spam"
+    },
+
+    "priority": {
+      "urgent": "Urgent",
+      "high": "High",
+      "normal": "Normal",
+      "low": "Low"
+    },
+
+    "list": {
+      "empty": "No messages here.",
+      "loading": "Loading messages…",
+      "unread": "{count, plural, =0 {No unread} =1 {1 unread} other {# unread}}"
+    },
+
+    "bulk": {
+      "selectAll": "Select all visible",
+      "selectedCount": "{count, plural, =1 {1 selected} other {# selected}}",
+      "process": "Process",
+      "archive": "Archive",
+      "clear": "Clear selection"
+    },
+
+    "shortcuts": {
+      "title": "Keyboard shortcuts",
+      "openLabel": "Show keyboard shortcuts",
+      "nextMessage": "Next message",
+      "prevMessage": "Previous message",
+      "toggleSelect": "Toggle selection",
+      "archive": "Archive",
+      "reply": "Focus reply",
+      "clearOrClose": "Clear selection / close",
+      "toggleOverlay": "Toggle this overlay"
+    },
+
+    "detail": {
+      "selectAMessage": "Select a message to read",
+      "suggestedReply": "Suggested reply",
+      "sendReply": "Send reply",
+      "edit": "Edit",
+      "discard": "Discard",
+      "approve": "Approve & send",
+      "regenerate": "Regenerate",
+      "from": "From",
+      "to": "To",
+      "subject": "Subject",
+      "noSubject": "(no subject)"
+    },
+
+    "emailNotEnabled": {
+      "title": "Email isn't wired up yet",
+      "description": "Configure the agent's email channel to start receiving and replying to messages.",
+      "cta": "Configure email"
+    },
+
+    "escalate": {
+      "title": "Escalate this message",
+      "description": "Hand this off to a teammate or a shared mailbox. They'll get a notification with your note.",
+      "assigneeLabel": "Send to",
+      "assigneePlaceholder": "teammate@company.com",
+      "assigneeHint": "Pick someone from your workspace or type any email - oncall@, manager@, etc.",
+      "noteLabel": "Note (optional)",
+      "notePlaceholder": "Why are you escalating this? Add context for the assignee.",
+      "cancel": "Cancel",
+      "submit": "Escalate"
+    }
+  }
+}

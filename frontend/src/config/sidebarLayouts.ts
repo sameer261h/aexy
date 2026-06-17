@@ -11,6 +11,7 @@ import {
     Ticket,
     FormInput,
     FileText,
+    HardDrive,
     ClipboardCheck,
     GraduationCap,
     Users,
@@ -64,6 +65,7 @@ import {
     HeartPulse,
     UserCheck,
     MessageCircle,
+    Workflow,
 } from "lucide-react";
 
 export type SidebarLayoutType = "grouped" | "flat";
@@ -156,6 +158,15 @@ const automationsItems: SidebarItemConfig[] = [
     { href: "/automations/new", label: "Create Automation", icon: UserPlus },
 ];
 
+// Unified "Operations" view — primary entry for both agents and
+// automations. The focused list pages remain as sub-items so power users
+// who want to filter to a single type still have a direct link.
+const operationsItems: SidebarItemConfig[] = [
+    { href: "/operations", label: "All Operations", icon: Workflow },
+    { href: "/agents", label: "Agents", icon: Bot },
+    { href: "/automations", label: "Workflows", icon: Zap },
+];
+
 const insightsItems: SidebarItemConfig[] = [
     { href: "/insights", label: "Team Overview", icon: LayoutDashboard },
     { href: "/insights/leaderboard", label: "Leaderboard", icon: BarChart },
@@ -224,16 +235,10 @@ export const GROUPED_LAYOUT: SidebarLayoutConfig = {
             label: "AI",
             items: [
                 {
-                    href: "/agents",
-                    label: "AI Agents",
-                    icon: Bot,
-                    items: aiAgentsItems,
-                },
-                {
-                    href: "/automations",
-                    label: "Automations",
-                    icon: Zap,
-                    items: automationsItems,
+                    href: "/operations",
+                    label: "Operations",
+                    icon: Workflow,
+                    items: operationsItems,
                 },
                 { href: "/templates", label: "Templates", icon: LayoutTemplate },
             ],
@@ -354,6 +359,7 @@ export const GROUPED_LAYOUT: SidebarLayoutConfig = {
             label: "Knowledge",
             items: [
                 { href: "/docs", label: "Docs", icon: FileText },
+                { href: "/docs/drive", label: "Drive", icon: HardDrive },
                 { href: "/tables", label: "Tables", icon: Table2 },
                 { href: "/forms", label: "Forms", icon: FormInput },
                 {
@@ -445,16 +451,10 @@ export const FLAT_LAYOUT: SidebarLayoutConfig = {
                     personas: ["sales", "support", "admin"],
                 },
                 {
-                    href: "/agents",
-                    label: "AI Agents",
-                    icon: Bot,
-                    items: aiAgentsItems,
-                },
-                {
-                    href: "/automations",
-                    label: "Automations",
-                    icon: Zap,
-                    items: automationsItems,
+                    href: "/operations",
+                    label: "Operations",
+                    icon: Workflow,
+                    items: operationsItems,
                 },
                 { href: "/templates", label: "Templates", icon: LayoutTemplate },
                 {
@@ -472,6 +472,7 @@ export const FLAT_LAYOUT: SidebarLayoutConfig = {
                     items: leaveItems,
                 },
                 { href: "/docs", label: "Docs", icon: FileText },
+                { href: "/docs/drive", label: "Drive", icon: HardDrive },
                 { href: "/tables", label: "Tables", icon: Table2 },
                 { href: "/forms", label: "Forms", icon: FormInput },
                 {

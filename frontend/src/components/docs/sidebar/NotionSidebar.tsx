@@ -1,18 +1,28 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Star, Lock, Users, Loader2, Plus } from "lucide-react";
+import { Star, Lock, Users, Plus, Clock } from "lucide-react";
 
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { SidebarNavigation } from "./SidebarNavigation";
 import { SidebarSection } from "./SidebarSection";
+import { SidebarAppGroup } from "./SidebarAppGroup";
 import { DocumentItem } from "./DocumentItem";
 import { SpaceFolderWithData } from "./SpaceFolderWithData";
 import { CreateSpaceModal } from "../CreateSpaceModal";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useNotionDocs, useDocumentNotifications } from "@/hooks/useNotionDocs";
 import { useDocumentSpaces } from "@/hooks/useDocumentSpaces";
 import { useWorkspace } from "@/hooks/useWorkspace";
+import { useAuth } from "@/hooks/useAuth";
+import { useAppAccess } from "@/hooks/useAppAccess";
+import { useSidebarLayout } from "@/hooks/useSidebarLayout";
+import { useSidebarPersona } from "@/hooks/useSidebarPersona";
+import { useRecentApps } from "@/hooks/useRecentApps";
+import { SidebarItemConfig, SIDEBAR_LAYOUTS } from "@/config/sidebarLayouts";
+import { SIDEBAR_TO_APP_MAP } from "@/config/appDefinitions";
 
 interface NotionSidebarProps {
   selectedDocumentId?: string;
@@ -28,6 +38,66 @@ export function NotionSidebar({
   const router = useRouter();
   const { workspaces, currentWorkspace, switchWorkspace } = useWorkspace();
   const workspaceId = currentWorkspace?.id || null;
+  const { user } = useAuth();
+
+  // The main app sidebar is hidden on /docs routes, so the docs sidebar is
+  // the user's only escape hatch to other modules. Mirror the main
+  // sidebar's grouping so the user sees the same Engineering / People /
+  // Business / etc. structure, plus a "Recent" strip at the top.
+  const { layoutConfig: userLayoutConfig } = useSidebarLayout();
+  const { filterByPersona } = useSidebarPersona();
+  const { hasAppAccess } = useAppAccess(workspaceId, user?.id ?? null);
+
+  // Always use the grouped layout in the docs sidebar — the flat layout
+  // would be ~25 ungrouped rows here, which defeats the point.
+  const baseLayout = userLayoutConfig.id === "grouped"
+    ? userLayoutConfig
+    : SIDEBAR_LAYOUTS.grouped;
+
+  const personaConfig = useMemo(
+    () => filterByPersona(baseLayout),
+    [filterByPersona, baseLayout]
+  );
+
+  const filterItemsByAccess = useMemo(() => {
+    const filter = (items: SidebarItemConfig[]): SidebarItemConfig[] =>
+      items
+        .map((item) => ({
+          ...item,
+          items: item.items ? filter(item.items) : undefined,
+        }))
+        .filter((item) => {
+          const appId = SIDEBAR_TO_APP_MAP[item.href];
+          return appId ? hasAppAccess(appId) : true;
+        });
+    return filter;
+  }, [hasAppAccess]);
+
+  // The docs sidebar IS the Knowledge surface — re-listing it here would
+  // be tautological. Hide that section entirely.
+  const appSections = useMemo(() => {
+    return personaConfig.sections
+      .filter((s) => s.id !== "knowledge")
+      .map((section) => ({
+        ...section,
+        // Empty-label sections (core/main) get a friendly title.
+        label: section.label || "Workspace",
+        items: filterItemsByAccess(section.items),
+      }))
+      .filter((s) => s.items.length > 0);
+  }, [personaConfig, filterItemsByAccess]);
+
+  // Recording happens once at the app layout (so visits from any
+  // surface count). Here we just read — and hide docs/drive since the
+  // user is already inside the docs surface.
+  const { recentApps: allRecent } = useRecentApps({
+    record: false,
+    isAppAccessible: hasAppAccess,
+  });
+  const recentApps = useMemo(
+    () => allRecent.filter((a) => a.id !== "docs" && a.id !== "drive").slice(0, 5),
+    [allRecent]
+  );
 
   // Document spaces
   const {
@@ -37,6 +107,7 @@ export function NotionSidebar({
   } = useDocumentSpaces(workspaceId);
 
   const [showCreateSpaceModal, setShowCreateSpaceModal] = useState(false);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
   // Private and shared documents (not tied to spaces)
   const {
@@ -99,21 +170,28 @@ export function NotionSidebar({
     }
   };
 
-  // Handle delete
+  // Open the styled confirm dialog. window.confirm() is deliberately
+  // gone — it broke visual consistency with the dark theme and
+  // couldn't be styled. Recursive child rows reach this same handler,
+  // so we resolve the title lazily from id rather than capturing it
+  // in a parent closure.
   const handleDelete = (documentId: string) => {
-    if (confirm("Are you sure you want to delete this document?")) {
-      deleteDocument(documentId);
-      if (selectedDocumentId === documentId) {
-        router.push("/docs");
-      }
-    }
+    setPendingDeleteId(documentId);
   };
 
-  // Handle duplicate
-  const handleDuplicate = async (documentId: string) => {
-    // TODO: Implement duplicate
-    console.log("Duplicate:", documentId);
+  const confirmDelete = () => {
+    if (!pendingDeleteId) return;
+    deleteDocument(pendingDeleteId);
+    if (selectedDocumentId === pendingDeleteId) {
+      router.push("/docs");
+    }
+    setPendingDeleteId(null);
   };
+
+  // `handleDuplicate` used to be wired here as a `console.log` TODO.
+  // Inert affordances are worse than missing ones — DocumentItem's
+  // dropdown hides the Duplicate row when `onDuplicate` is undefined,
+  // so we just don't pass a handler until duplication is implemented.
 
   // Handle create space
   const handleCreateSpace = async (data: {
@@ -125,11 +203,9 @@ export function NotionSidebar({
     await createSpace(data);
   };
 
-  // Handle manage space
-  const handleManageSpace = (spaceId: string) => {
-    // TODO: Navigate to space settings or open modal
-    console.log("Manage space:", spaceId);
-  };
+  // `handleManageSpace` used to be wired here as a TODO. SpaceFolder's
+  // onManageSpace prop is optional and the dropdown row hides when it's
+  // absent — so we just don't pass one until space-settings ships.
 
   // Render empty state
   const EmptyState = ({ message }: { message: string }) => (
@@ -159,8 +235,13 @@ export function NotionSidebar({
       {/* Divider */}
       <div className="h-px bg-muted/50 mx-3 my-1" />
 
-      {/* Scrollable Content */}
-      <div className="flex-1 overflow-y-auto">
+      {/* Scrollable Content — role=tree so assistive tech recognises
+          the hierarchical doc list and surfaces aria-selected on rows. */}
+      <div
+        className="flex-1 overflow-y-auto"
+        role="tree"
+        aria-label="Documents"
+      >
         {isLoading ? (
           <div className="space-y-1 px-2 py-2 animate-pulse">
             {[1, 2, 3, 4, 5].map((i) => (
@@ -206,7 +287,6 @@ export function NotionSidebar({
                     isSelected={selectedDocumentId === doc.id}
                     onToggleFavorite={toggleFavorite}
                     onDelete={handleDelete}
-                    onDuplicate={handleDuplicate}
                     onAddChild={(parentId) =>
                       handleCreatePrivateDocument(parentId)
                     }
@@ -233,7 +313,6 @@ export function NotionSidebar({
                     isSelected={selectedDocumentId === doc.id}
                     onToggleFavorite={toggleFavorite}
                     onDelete={handleDelete}
-                    onDuplicate={handleDuplicate}
                     onAddChild={(parentId) =>
                       handleCreateSharedDocument(parentId)
                     }
@@ -257,9 +336,7 @@ export function NotionSidebar({
                 defaultExpanded={spaces.length === 1}
                 onToggleFavorite={toggleFavorite}
                 onDelete={handleDelete}
-                onDuplicate={handleDuplicate}
                 onAddDocument={handleCreateSpaceDocument}
-                onManageSpace={handleManageSpace}
               />
             ))}
 
@@ -275,6 +352,67 @@ export function NotionSidebar({
                 <span className="text-xs">Add space</span>
               </button>
             </div>
+
+            {/* Divider before apps */}
+            <div className="h-px bg-muted/50 mx-3 my-2" />
+
+            {/* Recent apps — opens expanded so the most-recent jumps are
+                one click away. Hidden entirely on first run when the
+                visit log is empty. */}
+            {recentApps.length > 0 && (
+              <SidebarSection
+                title="Recent"
+                icon={<Clock className="h-3.5 w-3.5" />}
+                count={recentApps.length}
+                defaultExpanded={true}
+              >
+                {recentApps.map((app) => {
+                  const Icon = app.icon;
+                  return (
+                    <Link
+                      key={app.id}
+                      href={app.baseRoute}
+                      className="flex items-center gap-2 px-2 py-1.5 mx-1 hover:bg-accent/50 rounded-md transition-colors text-foreground/80 hover:text-foreground text-sm"
+                    >
+                      <Icon className="h-4 w-4 text-muted-foreground" />
+                      <span className="truncate">{app.name}</span>
+                    </Link>
+                  );
+                })}
+              </SidebarSection>
+            )}
+
+            {/* App sections — same structure as the main sidebar,
+                collapsed by default so the docs surface stays focused. */}
+            {appSections.map((section) => (
+              <SidebarSection
+                key={section.id}
+                title={section.label}
+                count={section.items.length}
+                defaultExpanded={false}
+              >
+                {section.items.map((item) =>
+                  item.items && item.items.length > 0 ? (
+                    <SidebarAppGroup
+                      key={item.href}
+                      href={item.href}
+                      label={item.label}
+                      icon={item.icon}
+                      subItems={item.items}
+                    />
+                  ) : (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className="flex items-center gap-2 px-2 py-1.5 mx-1 hover:bg-accent/50 rounded-md transition-colors text-foreground/80 hover:text-foreground text-sm"
+                    >
+                      <item.icon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                    </Link>
+                  )
+                )}
+              </SidebarSection>
+            ))}
           </>
         )}
       </div>
@@ -285,6 +423,19 @@ export function NotionSidebar({
         onClose={() => setShowCreateSpaceModal(false)}
         onCreate={handleCreateSpace}
         isCreating={isCreatingSpace}
+      />
+
+      {/* Styled delete confirmation — replaces window.confirm() */}
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteId(null);
+        }}
+        title="Delete document?"
+        description="This document and any child pages will be moved to trash. This can't be undone from the sidebar."
+        confirmLabel="Delete"
+        tone="danger"
+        onConfirm={confirmDelete}
       />
     </div>
   );

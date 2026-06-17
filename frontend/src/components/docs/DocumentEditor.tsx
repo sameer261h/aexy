@@ -22,7 +22,11 @@ import { InlineDatabase } from "./extensions/InlineDatabase";
 import { SlashCommands } from "./extensions/SlashCommands";
 import { EditorToolbar } from "./EditorToolbar";
 import { debounce } from "@/lib/utils";
-import { Check, Cloud, Smile } from "lucide-react";
+import {
+  Check,
+  Cloud,
+  Smile,
+} from "lucide-react";
 
 const lowlight = createLowlight(common);
 
@@ -82,6 +86,18 @@ export function DocumentEditor({
   useEffect(() => {
     setLocalIcon(icon || "📄");
   }, [icon]);
+
+  // Escape closes the emoji picker. Audit caught the picker staying
+  // open through multiple intermediate actions because only the
+  // backdrop click and the toggle button were wired.
+  useEffect(() => {
+    if (!showEmojiPicker) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowEmojiPicker(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [showEmojiPicker]);
 
   // Create stable debounced save function
   const debouncedSave = useMemo(
@@ -177,8 +193,16 @@ export function DocumentEditor({
     immediatelyRender: false,
     editorProps: {
       attributes: {
+        // `max-w-none` was the audit's reading-measure finding —
+        // paragraphs ran ~140cpl on a 1440 viewport. Cap at max-w-3xl
+        // (~672px, ~65cpl) and centre inside the editor canvas. The
+        // arbitrary-variant `[&_ul]:list-disc` etc. is used instead of
+        // the typography-plugin `prose-ul:` modifier because the
+        // outer ProseMirror class also has a long inline className
+        // (DocumentEditor.tsx:411) where Tailwind's preflight reset
+        // would otherwise win the cascade and strip bullets.
         class:
-          "prose dark:prose-invert max-w-none focus:outline-none min-h-[500px] px-4 py-2 prose-p:text-foreground prose-headings:text-foreground prose-strong:text-foreground prose-li:text-foreground",
+          "prose dark:prose-invert max-w-3xl mx-auto focus:outline-none min-h-[500px] px-4 py-2 prose-p:text-foreground prose-headings:text-foreground prose-strong:text-foreground prose-li:text-foreground [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_li]:my-1",
       },
     },
     onUpdate: ({ editor }) => {
@@ -220,15 +244,10 @@ export function DocumentEditor({
     [autoSave, debouncedSave]
   );
 
-  // Manual save
-  const handleManualSave = useCallback(() => {
-    if (!editor) return;
-    onSaveRef.current({
-      title: localTitle,
-      content: editor.getJSON() as Record<string, unknown>,
-      icon: localIcon,
-    });
-  }, [editor, localTitle, localIcon]);
+  // `handleManualSave` removed — autoSave covers every change path
+  // (rich/markdown), the dual-affordance was an audit finding. If a
+  // future force-save UX is needed, prefer keyboard (Mod+S) over a
+  // toolbar button.
 
   // Toggle editor mode
   const handleModeToggle = useCallback(() => {
@@ -375,7 +394,7 @@ export function DocumentEditor({
                       </div>
                     )}
                     {showSaved && !isSaving && (
-                      <div className="flex items-center gap-1.5 text-emerald-400 text-xs animate-fade-in">
+                      <div className="flex items-center gap-1.5 text-success text-xs animate-fade-in">
                         <Check className="h-3.5 w-3.5" />
                         <span>Saved</span>
                       </div>
@@ -389,17 +408,36 @@ export function DocumentEditor({
           </div>
         </div>
 
-        {/* Editor Toolbar */}
+        {/* Editor Toolbar — no manual Save button: autosave handles it.
+            Audit found the dual affordance created "is autosave actually
+            working?" doubt; aligning with Notion/Linear/Craft we drop
+            the Save and surface only the autosave status. */}
         {editor && !readOnly && (
           <div className="bg-background/95 backdrop-blur-xl border-b border-border/50 shadow-lg shadow-black/10">
             <EditorToolbar
               editor={editor}
-              onSave={handleManualSave}
               editorMode={editorMode}
               onModeToggle={handleModeToggle}
             />
           </div>
         )}
+
+        {/* BubbleMenu intentionally removed.
+            `@tiptap/react`'s BubbleMenu wraps Tippy.js, which appends its
+            DOM into `document.body` — outside the React tree. On every
+            selectionchange Tippy moves nodes around; React's reconciler
+            then tries to remove a node from a parent that no longer
+            owns it and throws
+              `removeChild: The node to be removed is not a child of
+               this node`
+            in the commit phase. Adding `editorMode === "rich"` to the
+            mount condition only fixed the mode-switch race; the
+            steady-state selection path still crashed because each
+            selection causes BubbleMenu to mount/unmount its Tippy
+            instance. Top `EditorToolbar` already exposes Bold / Italic /
+            Underline / Code, so the affordance is intact. A custom
+            in-tree floating menu (via @floating-ui/react, not Tippy)
+            can be revisited later if the UX is missed. */}
       </div>
 
       {/* Editor Content */}

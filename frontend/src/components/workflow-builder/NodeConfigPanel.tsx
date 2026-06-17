@@ -635,14 +635,15 @@ export function NodeConfigPanel({
                     />
                     <button
                       onClick={() => copyToClipboard(webhookUrl)}
+                      aria-label={copied ? "Webhook URL copied" : "Copy webhook URL"}
                       className={`p-2 rounded-lg transition-colors ${
                         copied
-                          ? "bg-green-500/20 text-green-400"
+                          ? "bg-green-500/20 text-green-700 dark:text-green-400"
                           : "bg-accent text-muted-foreground hover:text-foreground hover:bg-muted"
                       }`}
                       title={copied ? "Copied!" : "Copy URL"}
                     >
-                      {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                      {copied ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
                     </button>
                   </div>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -676,10 +677,11 @@ export function NodeConfigPanel({
                   </pre>
                   <button
                     onClick={() => copyToClipboard(samplePayload)}
+                    aria-label="Copy sample payload"
                     className="absolute top-2 right-2 p-1.5 bg-muted rounded text-muted-foreground hover:text-foreground transition-colors"
                     title="Copy payload"
                   >
-                    <Copy className="h-3.5 w-3.5" />
+                    <Copy className="h-3.5 w-3.5" aria-hidden />
                   </button>
                 </div>
               )}
@@ -1817,9 +1819,11 @@ export function NodeConfigPanel({
                 </div>
                 <button
                   onClick={() => removeCondition(index)}
-                  className="p-1.5 text-muted-foreground hover:text-red-400 mt-1"
+                  aria-label={`Remove condition ${index + 1}`}
+                  title="Remove condition"
+                  className="p-1.5 text-muted-foreground hover:text-red-600 dark:hover:text-red-400 mt-1"
                 >
-                  <X className="h-4 w-4" />
+                  <X className="h-4 w-4" aria-hidden />
                 </button>
               </div>
               <select
@@ -2682,9 +2686,11 @@ export function NodeConfigPanel({
             {branches.length > 2 && (
               <button
                 onClick={() => removeBranch(index)}
-                className="p-2 text-muted-foreground hover:text-red-400"
+                aria-label={`Remove branch ${index + 1}`}
+                title="Remove branch"
+                className="p-2 text-muted-foreground hover:text-red-600 dark:hover:text-red-400"
               >
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4" aria-hidden />
               </button>
             )}
           </div>
@@ -2702,20 +2708,35 @@ export function NodeConfigPanel({
 
   return (
     <>
-      {/* Mobile backdrop */}
+      {/* UX-AUT-003: NodeConfigPanel used to swap between fixed-overlay
+          (mobile) and flex-sibling (desktop) at the md breakpoint, so
+          a window resize mid-edit triggered a layout "jump". Now
+          consistently a fixed right-drawer at every viewport — matches
+          the other right-drawers (TestResultsPanel, ExecutionHistory,
+          VersionHistory, AgentTriggerConfig) so the workflow surface
+          reads as one cohesive pattern. Desktop kept slightly wider
+          (`md:w-[420px]`) for the dense config fields. */}
+      {/* Backdrop — clickable to dismiss; full opacity on mobile,
+          translucent on desktop so the canvas still shows through. */}
       <div
-        className="fixed inset-0 bg-black/50 z-40 md:hidden"
+        className="fixed inset-0 bg-black/50 md:bg-black/20 z-40"
         onClick={onClose}
       />
-      {/* Config panel - responsive */}
-      <div className="fixed inset-y-0 right-0 w-full sm:w-96 md:w-80 md:relative md:inset-auto bg-muted md:bg-muted/50 border-l border-border overflow-y-auto z-50 md:z-auto">
+      <div
+        className="fixed inset-y-0 right-0 w-full sm:w-96 md:w-[420px] bg-muted border-l border-border overflow-y-auto z-50"
+        data-testid="node-config-panel"
+        role="dialog"
+        aria-label="Configure Node"
+      >
         <div className="p-4 border-b border-border flex items-center justify-between">
           <h3 className="text-foreground font-semibold">Configure Node</h3>
           <button
             onClick={onClose}
+            aria-label="Close node configuration"
+            title="Close"
             className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg"
           >
-            <X className="h-5 w-5" />
+            <X className="h-5 w-5" aria-hidden />
           </button>
         </div>
 

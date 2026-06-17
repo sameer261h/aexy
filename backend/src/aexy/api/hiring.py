@@ -17,9 +17,13 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aexy.api.developers import get_current_developer
 from aexy.core.database import get_db
 from aexy.llm.gateway import get_llm_gateway
 from aexy.models.developer import Developer
+from aexy.models.team import Team
+from aexy.models.workspace import WorkspaceMember
+from aexy.services.workspace_service import WorkspaceService
 from aexy.schemas.career import (
     BusFactorRisk,
     CandidateScorecard,
@@ -39,6 +43,89 @@ from aexy.services.automation_service import dispatch_automation_event
 from aexy.services.hiring_intelligence import HiringIntelligenceService
 
 router = APIRouter(prefix="/hiring")
+
+
+async def _resolve_team_workspace_or_403(
+    db: AsyncSession, team_id: str, caller_id: str
+) -> str:
+    """Load the team's workspace and require caller to be an active member."""
+    team = (
+        await db.execute(select(Team).where(Team.id == team_id))
+    ).scalar_one_or_none()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    if not await WorkspaceService(db).check_permission(
+        str(team.workspace_id), caller_id, "viewer"
+    ):
+        raise HTTPException(status_code=403, detail="Not a member of team's workspace")
+    return str(team.workspace_id)
+
+
+async def _require_workspace_member(
+    db: AsyncSession, workspace_id: str, caller_id: str, role: str = "viewer"
+) -> None:
+    if not await WorkspaceService(db).check_permission(workspace_id, caller_id, role):
+        raise HTTPException(status_code=403, detail="Workspace permission required")
+
+
+async def _require_developers_visible(
+    db: AsyncSession, caller_id: str, developer_ids: list[str]
+) -> None:
+    """Every dev id must share an active workspace with the caller. See
+    analytics._require_developers_visible — same semantics."""
+    if not developer_ids:
+        return
+    caller_workspaces = (
+        await db.execute(
+            select(WorkspaceMember.workspace_id).where(
+                WorkspaceMember.developer_id == caller_id,
+                WorkspaceMember.status == "active",
+            )
+        )
+    ).scalars().all()
+    if not caller_workspaces:
+        raise HTTPException(status_code=403, detail="No active workspace membership")
+    visible = set(
+        (
+            await db.execute(
+                select(WorkspaceMember.developer_id).where(
+                    WorkspaceMember.workspace_id.in_(caller_workspaces),
+                    WorkspaceMember.developer_id.in_(developer_ids),
+                    WorkspaceMember.status == "active",
+                )
+            )
+        ).scalars().all()
+    )
+    missing = {str(d) for d in developer_ids} - {str(v) for v in visible}
+    missing.discard(str(caller_id))
+    if missing:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot read developers outside your workspaces",
+        )
+
+
+async def _require_requirement_workspace_member(
+    db: AsyncSession, requirement_id: str, caller_id: str, role: str = "viewer"
+):
+    """Load HiringRequirement, return it, and require caller to be a member."""
+    from aexy.models.career import HiringRequirement
+    requirement = (
+        await db.execute(
+            select(HiringRequirement).where(HiringRequirement.id == requirement_id)
+        )
+    ).scalar_one_or_none()
+    if not requirement:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Hiring requirement not found",
+        )
+    # organization_id on HiringRequirement is treated as workspace_id in this
+    # codebase (see create_hiring_requirement at the WorkspaceMember filter).
+    await _require_workspace_member(
+        db, str(requirement.organization_id), caller_id, role
+    )
+    return requirement
 
 
 class TeamGapRequest(BaseModel):
@@ -84,27 +171,27 @@ class CandidateScorecardRequest(BaseModel):
 async def analyze_team_gaps(
     request: TeamGapRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
     """Analyze team skill gaps.
 
-    Args:
-        request: Team gap request with developer IDs or team_id.
-        db: Database session.
-
-    Returns:
-        Team gap analysis result.
+    Caller must be a member of the workspace owning the team (when `team_id`
+    is provided) or of a workspace shared with every listed developer.
     """
     from aexy.models.team import TeamMember
 
     developer_ids = request.developer_ids or []
     team_id_provided = request.team_id and is_valid_uuid(request.team_id)
 
-    # If team_id provided, fetch team members
+    # If team_id provided, verify caller has access then fetch members
     if team_id_provided:
+        await _resolve_team_workspace_or_403(db, request.team_id, str(current_user.id))
         team_members_result = await db.execute(
             select(TeamMember.developer_id).where(TeamMember.team_id == request.team_id)
         )
         developer_ids = [str(m) for m in team_members_result.scalars().all()]
+    else:
+        await _require_developers_visible(db, str(current_user.id), developer_ids)
 
     if not developer_ids:
         if team_id_provided:
@@ -168,27 +255,22 @@ async def analyze_team_gaps(
 async def get_bus_factor_risks(
     request: TeamGapRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get bus factor risks for a team.
-
-    Args:
-        request: Team gap request with developer IDs or team_id.
-        db: Database session.
-
-    Returns:
-        List of bus factor risks.
-    """
+    """Get bus factor risks for a team. Same authz as `analyze_team_gaps`."""
     from aexy.models.team import TeamMember
 
     developer_ids = request.developer_ids or []
     team_id_provided = request.team_id and is_valid_uuid(request.team_id)
 
-    # If team_id provided, fetch team members
     if team_id_provided:
+        await _resolve_team_workspace_or_403(db, request.team_id, str(current_user.id))
         team_members_result = await db.execute(
             select(TeamMember.developer_id).where(TeamMember.team_id == request.team_id)
         )
         developer_ids = [str(m) for m in team_members_result.scalars().all()]
+    else:
+        await _require_developers_visible(db, str(current_user.id), developer_ids)
 
     if not developer_ids:
         if team_id_provided:
@@ -233,6 +315,7 @@ async def get_bus_factor_risks(
 async def extract_roadmap_skills(
     request: RoadmapSkillRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
     """Extract skill requirements from roadmap items.
 
@@ -271,21 +354,18 @@ async def list_hiring_requirements(
     status_filter: str | None = None,
     team_id: str | None = None,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """List hiring requirements for an organization.
-
-    Args:
-        organization_id: Organization UUID.
-        status_filter: Optional status filter.
-        team_id: Optional team filter.
-        db: Database session.
-
-    Returns:
-        List of hiring requirements.
-    """
+    """List hiring requirements for an organization (== workspace)."""
     # Return empty list for invalid UUIDs (e.g., "demo-org")
     if not is_valid_uuid(organization_id):
         return []
+
+    await _require_workspace_member(db, organization_id, str(current_user.id), "viewer")
+    if team_id and is_valid_uuid(team_id):
+        team_ws = await _resolve_team_workspace_or_403(db, team_id, str(current_user.id))
+        if team_ws != organization_id:
+            raise HTTPException(status_code=400, detail="Team does not belong to this organization")
 
     llm_gateway = get_llm_gateway()
     service = HiringIntelligenceService(db, llm_gateway)
@@ -325,21 +405,21 @@ async def list_hiring_requirements(
 async def create_hiring_requirement(
     data: HiringRequirementCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Create a hiring requirement.
+    """Create a hiring requirement. Workspace admin role required."""
+    if not is_valid_uuid(data.organization_id):
+        raise HTTPException(status_code=400, detail="Invalid organization_id")
+    await _require_workspace_member(db, data.organization_id, str(current_user.id), "admin")
+    if data.team_id and is_valid_uuid(data.team_id):
+        team_ws = await _resolve_team_workspace_or_403(db, data.team_id, str(current_user.id))
+        if team_ws != data.organization_id:
+            raise HTTPException(status_code=400, detail="Team does not belong to this organization")
 
-    Args:
-        data: Hiring requirement data.
-        db: Database session.
-
-    Returns:
-        Created hiring requirement.
-    """
     llm_gateway = get_llm_gateway()
     service = HiringIntelligenceService(db, llm_gateway)
 
     # Fetch developers for gap analysis
-    from aexy.models.workspace import WorkspaceMember
     from aexy.models.team import TeamMember
     team_developers = []
 
@@ -403,25 +483,12 @@ async def create_hiring_requirement(
 async def get_hiring_requirement(
     requirement_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get a hiring requirement by ID.
-
-    Args:
-        requirement_id: Requirement UUID.
-        db: Database session.
-
-    Returns:
-        Hiring requirement.
-    """
-    llm_gateway = get_llm_gateway()
-    service = HiringIntelligenceService(db, llm_gateway)
-    requirement = await service.get_hiring_requirement(requirement_id)
-
-    if not requirement:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Hiring requirement not found",
-        )
+    """Get a hiring requirement by ID. Workspace member required."""
+    requirement = await _require_requirement_workspace_member(
+        db, requirement_id, str(current_user.id), "viewer"
+    )
 
     return HiringRequirementResponse(
         id=str(requirement.id),
@@ -449,25 +516,14 @@ async def get_hiring_requirement(
 async def generate_job_description(
     requirement_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Generate a job description for a hiring requirement.
-
-    Args:
-        requirement_id: Requirement UUID.
-        db: Database session.
-
-    Returns:
-        Generated job description.
-    """
+    """Generate a job description for a hiring requirement. Workspace admin."""
+    requirement = await _require_requirement_workspace_member(
+        db, requirement_id, str(current_user.id), "admin"
+    )
     llm_gateway = get_llm_gateway()
     service = HiringIntelligenceService(db, llm_gateway)
-    requirement = await service.get_hiring_requirement(requirement_id)
-
-    if not requirement:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Hiring requirement not found",
-        )
 
     # Create a gap analysis from the stored data
     from aexy.services.hiring_intelligence import TeamGapAnalysisResult
@@ -525,25 +581,14 @@ async def generate_job_description(
 async def generate_interview_rubric(
     requirement_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Generate an interview rubric for a hiring requirement.
-
-    Args:
-        requirement_id: Requirement UUID.
-        db: Database session.
-
-    Returns:
-        Interview rubric.
-    """
+    """Generate an interview rubric for a hiring requirement. Workspace admin."""
+    requirement = await _require_requirement_workspace_member(
+        db, requirement_id, str(current_user.id), "admin"
+    )
     llm_gateway = get_llm_gateway()
     service = HiringIntelligenceService(db, llm_gateway)
-    requirement = await service.get_hiring_requirement(requirement_id)
-
-    if not requirement:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Hiring requirement not found",
-        )
 
     # Create a JD result from requirement
     from aexy.services.hiring_intelligence import GeneratedJDResult
@@ -626,26 +671,14 @@ async def create_candidate_scorecard(
     requirement_id: str,
     request: CandidateScorecardRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Create a candidate scorecard.
-
-    Args:
-        requirement_id: Requirement UUID.
-        request: Candidate skills data.
-        db: Database session.
-
-    Returns:
-        Candidate scorecard.
-    """
+    """Create a candidate scorecard. Workspace member required."""
+    requirement = await _require_requirement_workspace_member(
+        db, requirement_id, str(current_user.id), "viewer"
+    )
     llm_gateway = get_llm_gateway()
     service = HiringIntelligenceService(db, llm_gateway)
-    requirement = await service.get_hiring_requirement(requirement_id)
-
-    if not requirement:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Hiring requirement not found",
-        )
 
     scorecard = service.create_candidate_scorecard(
         requirement=requirement,
@@ -683,22 +716,18 @@ async def update_requirement_status(
     requirement_id: str,
     new_status: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Update hiring requirement status.
-
-    Args:
-        requirement_id: Requirement UUID.
-        new_status: New status value.
-        db: Database session.
-
-    Returns:
-        Success status.
-    """
+    """Update hiring requirement status. Workspace admin required."""
     if new_status not in ("draft", "active", "filled", "cancelled"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid status. Must be: draft, active, filled, cancelled",
         )
+
+    await _require_requirement_workspace_member(
+        db, requirement_id, str(current_user.id), "admin"
+    )
 
     llm_gateway = get_llm_gateway()
     service = HiringIntelligenceService(db, llm_gateway)

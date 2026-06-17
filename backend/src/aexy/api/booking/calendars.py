@@ -149,8 +149,11 @@ async def get_calendar_oauth_url(
             detail=f"Unsupported calendar provider: {provider}",
         )
 
-    # Get frontend URL for final redirect after OAuth completes
-    frontend_url = str(request.headers.get("origin", "http://localhost:3000"))
+    # WS-063: do NOT trust the Origin header for the final redirect target
+    # — signing it later doesn't change that the attacker chose the value.
+    # We always redirect to `settings.frontend_url`; pre-OAuth state inside
+    # `_create_oauth_state` no longer carries an attacker-controlled URL.
+    frontend_url = settings.frontend_url
 
     # Build the callback URL - use the backend URL for OAuth redirect
     # The backend will then redirect to frontend after processing
@@ -202,7 +205,8 @@ async def get_calendar_oauth_url(
             "scope": " ".join(MICROSOFT_CALENDAR_SCOPES) + " offline_access",
             "state": state,
         }
-        auth_url = f"https://login.microsoftonline.com/common/oauth2/v2.0/authorize?{urlencode(params)}"
+        tenant = getattr(settings, "microsoft_tenant_id", None) or "common"
+        auth_url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?{urlencode(params)}"
 
     return {"auth_url": auth_url}
 
@@ -249,7 +253,20 @@ async def calendar_oauth_callback(
         state_data = _verify_oauth_state(state)
         user_id = state_data["user_id"]
         workspace_id = state_data["workspace_id"]
-        frontend_url = state_data.get("frontend_url", default_frontend)
+        # WS-063: prefer settings.frontend_url; fall back to the signed
+        # state's value only if it matches (legacy state shape).
+        signed_frontend = state_data.get("frontend_url")
+        frontend_url = settings.frontend_url
+        if signed_frontend and signed_frontend != frontend_url:
+            # State was signed before the allowlist hardening — log and
+            # use settings.frontend_url anyway. An attacker who replays
+            # an old signed state still lands on our domain.
+            import logging as _logging
+            _logging.getLogger(__name__).info(
+                "Calendar OAuth state had legacy frontend_url=%s; using settings.frontend_url=%s",
+                signed_frontend,
+                frontend_url,
+            )
     except ValueError as e:
         return RedirectResponse(
             url=f"{default_frontend}/booking/calendars?error=Invalid+OAuth+state",
@@ -354,7 +371,8 @@ async def calendar_oauth_callback(
                 )
 
             # Exchange authorization code for tokens
-            token_url = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+            tenant = getattr(settings, "microsoft_tenant_id", None) or "common"
+            token_url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
             token_data = {
                 "client_id": microsoft_client_id,
                 "client_secret": microsoft_client_secret,

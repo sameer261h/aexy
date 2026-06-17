@@ -334,7 +334,9 @@ async def list_fields(
 
     service = DataTableService(db)
     table = await service.get_table(table_id)
-    if not table:
+    if not table or str(table.workspace_id) != workspace_id:
+        # 404 either way — cross-workspace probes get the same response as
+        # a genuinely missing table.
         raise HTTPException(status_code=404, detail="Table not found")
 
     return [

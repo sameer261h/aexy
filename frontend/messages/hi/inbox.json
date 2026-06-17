@@ -1,0 +1,88 @@
+{
+  "inbox": {
+    "title": "Agent Inbox",
+    "subtitle": "इस agent द्वारा संभाली गई बातचीत और प्रतिक्रियाएं",
+
+    "filter": {
+      "all": "सभी",
+      "open": "खुले",
+      "awaitingReview": "समीक्षा के लिए प्रतीक्षारत",
+      "snoozed": "स्नूज़",
+      "resolved": "हल",
+      "spam": "स्पैम"
+    },
+
+    "status": {
+      "open": "खुला",
+      "awaitingReview": "समीक्षा के लिए प्रतीक्षारत",
+      "snoozed": "स्नूज़",
+      "resolved": "हल",
+      "spam": "स्पैम"
+    },
+
+    "priority": {
+      "urgent": "अत्यावश्यक",
+      "high": "उच्च",
+      "normal": "सामान्य",
+      "low": "कम"
+    },
+
+    "list": {
+      "empty": "यहाँ कोई संदेश नहीं है।",
+      "loading": "संदेश लोड हो रहे हैं…",
+      "unread": "{count, plural, =0 {कोई अपठित नहीं} =1 {1 अपठित} other {# अपठित}}"
+    },
+
+    "bulk": {
+      "selectAll": "सभी दिख रहे चुनें",
+      "selectedCount": "{count, plural, =1 {1 चयनित} other {# चयनित}}",
+      "process": "प्रक्रिया करें",
+      "archive": "संग्रहित करें",
+      "clear": "चयन साफ़ करें"
+    },
+
+    "shortcuts": {
+      "title": "कीबोर्ड शॉर्टकट",
+      "openLabel": "कीबोर्ड शॉर्टकट दिखाएं",
+      "nextMessage": "अगला संदेश",
+      "prevMessage": "पिछला संदेश",
+      "toggleSelect": "चयन टॉगल करें",
+      "archive": "संग्रह करें",
+      "reply": "जवाब पर फ़ोकस",
+      "clearOrClose": "चयन साफ़ करें / बंद करें",
+      "toggleOverlay": "इस ओवरले को टॉगल करें"
+    },
+
+    "detail": {
+      "selectAMessage": "पढ़ने के लिए एक संदेश चुनें",
+      "suggestedReply": "सुझाई गई प्रतिक्रिया",
+      "sendReply": "प्रतिक्रिया भेजें",
+      "edit": "संपादित करें",
+      "discard": "छोड़ें",
+      "approve": "स्वीकृत करें और भेजें",
+      "regenerate": "पुनः उत्पन्न करें",
+      "from": "से",
+      "to": "को",
+      "subject": "विषय",
+      "noSubject": "(कोई विषय नहीं)"
+    },
+
+    "emailNotEnabled": {
+      "title": "Email अभी कनेक्ट नहीं है",
+      "description": "संदेश प्राप्त करने और जवाब देने के लिए agent के email चैनल को कॉन्फ़िगर करें।",
+      "cta": "Email कॉन्फ़िगर करें"
+    },
+
+    "escalate": {
+      "title": "इस संदेश को एस्केलेट करें",
+      "description": "इसे एक साथी या साझा मेलबॉक्स को सौंपें। उन्हें आपके note के साथ एक सूचना मिलेगी।",
+      "assigneeLabel": "किसे भेजें",
+      "assigneePlaceholder": "teammate@company.com",
+      "assigneeHint": "अपने workspace से किसी को चुनें या कोई भी email टाइप करें - oncall@, manager@, आदि।",
+      "noteLabel": "Note (वैकल्पिक)",
+      "notePlaceholder": "आप इसे क्यों एस्केलेट कर रहे हैं? असाइनी के लिए संदर्भ जोड़ें।",
+      "cancel": "रद्द करें",
+      "submit": "एस्केलेट करें"
+    }
+  }
+}

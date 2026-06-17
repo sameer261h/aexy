@@ -9,7 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field
 # NODE TYPE LITERALS
 # =============================================================================
 
-WorkflowNodeType = Literal["trigger", "action", "condition", "wait", "agent", "branch"]
+WorkflowNodeType = Literal[
+    "trigger", "action", "condition", "wait", "agent", "branch", "join"
+]
 
 TriggerSubtype = Literal[
     "record_created", "record_updated", "record_deleted", "field_changed",

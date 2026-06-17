@@ -49,6 +49,39 @@ cd backend && ruff check src/
 cd backend && mypy src/
 ```
 
+#### AI test suite (`tests/ai/`)
+
+End-to-end coverage of every AI feature (provider, gateway, ~30
+services, prebuilt LangGraph agents, AI APIs) against a real LLM.
+Defaults to a local LM Studio server so it doesn't burn cloud-LLM
+budget.
+
+```bash
+# Prereq: LM Studio running with qwen/qwen3.5-9b loaded
+#         (download via LM Studio app, then "Start Server" on :1234)
+
+# Fast unit tier (no LLM required) — skips everything marked local_llm
+cd backend && pytest -m "not local_llm"
+
+# Full AI suite against the local LM Studio
+cd backend && pytest tests/ai -m local_llm -v
+
+# Single AI test file
+cd backend && pytest tests/ai/services/test_code_analyzer.py -v
+
+# Refresh golden JSON outputs in tests/ai/goldens/
+cd backend && UPDATE_GOLDENS=1 pytest tests/ai -m local_llm
+
+# Print per-test recorder summary
+cd backend && pytest tests/ai -m local_llm --ai-verbose
+```
+
+Per-test LLM transcripts land in `backend/tests/ai/.logs/<nodeid>.jsonl`
+— useful when a test fails and you need to see the exact prompt and
+completion. Override defaults with `LMSTUDIO_BASE_URL`,
+`LMSTUDIO_MODEL`, or `LMSTUDIO_API_KEY` (only if fronting LM Studio
+with an auth proxy).
+
 ### Frontend
 
 ```bash
@@ -61,6 +94,51 @@ cd frontend && npm run test:coverage  # Vitest with coverage
 cd frontend && npm run test:e2e   # Playwright E2E tests
 cd frontend && npm run test:e2e:ui  # Playwright with UI
 ```
+
+#### AI E2E tests (`frontend/e2e/ai-*.spec.ts`)
+
+Browser-side counterpart to `backend/tests/ai/`. Each spec drives a
+single AI surface (agent chat, workflow generation, code analysis,
+file sidecar, …) against the **live** stack — real frontend, real
+backend, real LM Studio. Mocked AI responses defeat the point of
+this tier; if the surface needs UI-only checks, the existing
+`*.spec.ts` files cover that.
+
+Auto-skips the whole file when LM Studio is unreachable, exactly
+like the backend AI suite.
+
+```bash
+# Prereqs:
+#   - LM Studio running at :1234 with qwen/qwen3.5-9b loaded
+#   - Backend running at :8000, frontend at :3000 (docker-compose up -d)
+#   - Generate a JWT for a developer in the target workspace:
+docker exec aexy-backend python scripts/generate_test_token.py --first
+
+# Run all AI E2E specs:
+E2E_REAL_BACKEND=1 \
+  AEXY_TEST_TOKEN=<jwt> \
+  AEXY_TEST_WORKSPACE_ID=<workspace-uuid> \
+  PLAYWRIGHT_BASE_URL=http://localhost:3000 \
+  npx playwright test e2e/ai-*.spec.ts
+
+# Run a single AI spec:
+E2E_REAL_BACKEND=1 AEXY_TEST_TOKEN=... AEXY_TEST_WORKSPACE_ID=... \
+  npx playwright test e2e/ai-agent-chat.spec.ts
+
+# Override LM Studio target (e.g. running on another machine):
+LMSTUDIO_BASE_URL=http://10.0.0.5:1234/v1 LMSTUDIO_MODEL=qwen/qwen3.5-9b \
+  E2E_REAL_BACKEND=1 ... npx playwright test e2e/ai-*.spec.ts
+```
+
+Shared helpers live in:
+- `e2e/fixtures/ai-env.ts` — env + LM Studio probe + auth bootstrap
+- `e2e/fixtures/ai-helpers.ts` — seed agents/contacts/docs via API,
+  long-timeout response waiters tolerant of LLM latency,
+  fatal-error collectors.
+
+Default LLM wait per request is `AI_E2E_LLM_WAIT_MS=180000` (3 min).
+A spec that times out is signalling that the model is genuinely
+slow, not flaky — don't lower it.
 
 ### Mailagent (Email Infrastructure Microservice)
 

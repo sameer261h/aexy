@@ -58,15 +58,42 @@ ACTIVITY_CONFIG: dict[str, dict[str, Any]] = {
     # Analysis (LLM)
     "analyze_commit": {"retry": LLM_RETRY, "timeout": timedelta(minutes=10)},
     "analyze_pr": {"retry": LLM_RETRY, "timeout": timedelta(minutes=10)},
+    "analyze_review": {"retry": LLM_RETRY, "timeout": timedelta(minutes=10)},
     "analyze_developer": {"retry": LLM_RETRY, "timeout": timedelta(minutes=30)},
+    # Phase 3 — weekly digests / embeddings
+    "compose_developer_digest": {"retry": LLM_RETRY, "timeout": timedelta(minutes=15)},
+    "compose_repo_health": {"retry": LLM_RETRY, "timeout": timedelta(minutes=15)},
+    "embed_pr_summary": {"retry": LLM_RETRY, "timeout": timedelta(minutes=5)},
+    "enqueue_workspace_weekly_digests": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=30)},
+    # Phase 4C — task-PR alignment
+    "analyze_task_pr_alignment": {"retry": LLM_RETRY, "timeout": timedelta(minutes=10)},
+    # Phase B — performance-review digests
+    "compose_developer_review_period": {"retry": LLM_RETRY, "timeout": timedelta(minutes=20)},
+    "compose_team_review_period": {"retry": LLM_RETRY, "timeout": timedelta(minutes=20)},
+    "enqueue_review_cycle_digests": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_review_deadlines": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
     "batch_profile_sync": {"retry": STANDARD_RETRY, "timeout": timedelta(hours=2), "heartbeat": timedelta(minutes=5)},
     "extract_knowledge_from_document": {"retry": LLM_RETRY, "timeout": timedelta(minutes=30)},
     "rebuild_workspace_graph": {"retry": LLM_RETRY, "timeout": timedelta(hours=2), "heartbeat": timedelta(minutes=5)},
+
+    # File AI metadata pipeline (polymorphic across drive_file / task_attachment / compliance_document)
+    "extract_file_ai_metadata": {"retry": LLM_RETRY, "timeout": timedelta(minutes=30), "heartbeat": timedelta(minutes=5)},
+    # Workspace-wide backfill scans uncovered files and dispatches per-file jobs at ~10/min/workspace.
+    "backfill_workspace_file_metadata": {"retry": STANDARD_RETRY, "timeout": timedelta(hours=6), "heartbeat": timedelta(minutes=5)},
+    # Deprecated drive-only names — kept for one release so already-queued workflows complete.
+    "extract_drive_file_metadata": {"retry": LLM_RETRY, "timeout": timedelta(minutes=30), "heartbeat": timedelta(minutes=5)},
+    "annotate_drive_video": {"retry": LLM_RETRY, "timeout": timedelta(minutes=45), "heartbeat": timedelta(minutes=5)},
 
     # Sync (external APIs)
     "sync_repository": {"retry": "github_sync", "timeout": timedelta(hours=2), "heartbeat": timedelta(minutes=5)},
     "sync_commits": {"retry": "github_sync", "timeout": timedelta(hours=1)},
     "check_repo_auto_sync": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    # Fan-out for the GitHub AI pipeline. Dispatches per-artifact analysis;
+    # heavy lifting is in the LLM activities (own retry policy).
+    "enqueue_ai_analysis": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=15)},
+    # Active-PR fast-track poll (C2). Single GitHub call per PR; cheap.
+    "enqueue_active_pr_refresh": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "refresh_single_pr": {"retry": "github_sync", "timeout": timedelta(minutes=3)},
     "sync_gmail": {"retry": "google_sync", "timeout": timedelta(minutes=30), "heartbeat": timedelta(minutes=5)},
     "sync_calendar": {"retry": "google_sync", "timeout": timedelta(minutes=30)},
 
@@ -157,6 +184,21 @@ ACTIVITY_CONFIG: dict[str, dict[str, Any]] = {
 
     # Platform signup
     "handle_new_signup": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=5)},
+
+    # Tracking automation (scheduled detection activities that loop over workspaces)
+    "check_missed_standups": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_time_entry_thresholds": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_stale_blockers": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "detect_blocker_patterns": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_time_anomalies": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_standup_participation": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+
+    # Compliance automation (scheduled detection activities)
+    "check_approaching_due_assignments": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_overdue_assignments": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_expiring_certifications": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_expired_certifications": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "check_bulk_compliance_rates": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
 
     # Aexy Tracker — AI enrich/attribute loop (LLM)
     "enrich_attribute_tracker_events": {"retry": LLM_RETRY, "timeout": timedelta(minutes=15), "heartbeat": timedelta(minutes=2)},

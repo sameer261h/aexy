@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import {
-  X,
   CheckCircle2,
   XCircle,
   Clock,
@@ -14,6 +13,13 @@ import {
   SkipForward,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "@/components/ui/sheet";
 
 interface NodeResult {
   node_id: string;
@@ -127,32 +133,35 @@ export function TestResultsPanel({
     );
   };
 
-  if (!isOpen) return null;
-
   const statusCounts = getStatusCounts();
 
+  const statusLabel = isRunning
+    ? "Running..."
+    : testResult?.status === "completed"
+      ? "Completed"
+      : testResult?.status || "Ready";
+
   return (
-    <div className="fixed inset-y-0 right-0 w-96 bg-muted/95 backdrop-blur-sm border-l border-border shadow-2xl z-[100] flex flex-col">
-      {/* Header */}
-      <div className="p-4 border-b border-border flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-blue-500/20">
-            <Play className="h-5 w-5 text-blue-400" />
+    <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <SheetContent
+        side="right"
+        // No fixed width override needed — Sheet's default
+        // `w-3/4 sm:max-w-sm` already lands at ~24rem (w-96) on
+        // desktop. p-0 because we render our own structured Header /
+        // Body sections.
+        className="p-0 flex flex-col"
+      >
+        <SheetHeader className="px-4 py-3 flex-row items-center gap-3 space-y-0">
+          <div className="p-2 rounded-lg bg-blue-500/20 shrink-0">
+            <Play className="h-5 w-5 text-blue-500 dark:text-blue-400" />
           </div>
-          <div>
-            <h3 className="text-foreground font-semibold">Test Results</h3>
-            <p className="text-xs text-muted-foreground">
-              {isRunning ? "Running..." : testResult?.status === "completed" ? "Completed" : testResult?.status || "Ready"}
-            </p>
+          <div className="min-w-0 flex-1">
+            <SheetTitle className="text-base">Test Results</SheetTitle>
+            <SheetDescription className="text-xs">
+              {statusLabel}
+            </SheetDescription>
           </div>
-        </div>
-        <button
-          onClick={onClose}
-          className="p-1.5 text-muted-foreground hover:text-foreground rounded-lg hover:bg-accent"
-        >
-          <X className="h-5 w-5" />
-        </button>
-      </div>
+        </SheetHeader>
 
       {/* Status summary */}
       {testResult && (
@@ -361,6 +370,7 @@ export function TestResultsPanel({
           </div>
         </div>
       )}
-    </div>
+      </SheetContent>
+    </Sheet>
   );
 }

@@ -19,6 +19,7 @@ import {
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useGoals } from "@/hooks/useReviews";
 import { GoalType, GoalPriority } from "@/lib/api";
+import { formatDate } from "@/lib/datetime";
 
 const goalTypes = [
   { value: "performance", label: "Performance", description: "Delivery & quality targets", color: "cyan" },
@@ -112,15 +113,31 @@ export default function NewGoalPage() {
       return;
     }
 
+    // Validate key results before submit: any non-blank key result
+    // must have a parseable numeric target. The old code coerced
+    // "next quarter" → 0 and shipped a meaningless KR to the backend.
+    const filledKeyResults = keyResults.filter(kr => kr.description.trim());
+    const invalidKr = filledKeyResults.find(kr => {
+      if (!kr.target.trim()) return true;
+      const parsed = parseFloat(kr.target);
+      return Number.isNaN(parsed);
+    });
+    if (invalidKr) {
+      setError(
+        `Key result "${invalidKr.description.slice(0, 40)}" needs a numeric target (got "${invalidKr.target}")`,
+      );
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
       // Filter out empty key results and format them properly
-      const validKeyResults = keyResults
-        .filter(kr => kr.description.trim() && kr.target)
+      const validKeyResults = filledKeyResults
+        .filter(kr => kr.target.trim())
         .map(kr => ({
           description: kr.description,
-          target: parseFloat(kr.target) || 0,
+          target: parseFloat(kr.target),
           unit: kr.unit || "units",
         }));
 
@@ -172,7 +189,7 @@ export default function NewGoalPage() {
 
   return (
     <div className="min-h-screen bg-background">
-<main className="max-w-6xl mx-auto px-4 py-8">
+      <main className="max-w-6xl mx-auto px-4 py-8">
         {/* Breadcrumb */}
         <Breadcrumb
           items={[
@@ -247,7 +264,7 @@ export default function NewGoalPage() {
                   >
                     {goalTypes.map((type) => (
                       <option key={type.value} value={type.value}>
-                        {type.label} - {type.description}
+                        {t(`typeLabel.${type.value}` as never)} - {t(`typeDescription.${type.value}` as never)}
                       </option>
                     ))}
                   </select>
@@ -264,7 +281,7 @@ export default function NewGoalPage() {
                   >
                     {priorities.map((p) => (
                       <option key={p.value} value={p.value}>
-                        {p.label}
+                        {t(`priority.${p.value}` as never)}
                       </option>
                     ))}
                   </select>
@@ -512,7 +529,7 @@ export default function NewGoalPage() {
                     </span>
                   </div>
                   <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-400 text-xs rounded-full capitalize">
-                    {goalTypes.find(g => g.value === goalType)?.label || goalType}
+                    {t(`typeLabel.${goalType}` as never)}
                   </span>
                 </div>
                 {description && (
@@ -526,7 +543,7 @@ export default function NewGoalPage() {
                     <span>{keyResults.filter(kr => kr.description.trim()).length} key result{keyResults.filter(kr => kr.description.trim()).length !== 1 ? "s" : ""}</span>
                   )}
                   {timeBound && (
-                    <span>Due {new Date(timeBound).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+                    <span>Due {formatDate(timeBound)}</span>
                   )}
                   <span className={`capitalize ${
                     priority === "critical" ? "text-red-400" :

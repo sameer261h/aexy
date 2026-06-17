@@ -28,8 +28,21 @@ class AnalyzePRInput:
 
 
 @dataclass
+class AnalyzeReviewInput:
+    developer_id: str
+    review_id: str
+
+
+@dataclass
 class AnalyzeDeveloperInput:
     developer_id: str
+
+
+# Prompt template version. Bump when the analyzer's prompt/schema changes so
+# old cached results don't get reused with a new shape.
+COMMIT_PROMPT_VERSION = "commit-v1"
+PR_PROMPT_VERSION = "pr-v1"
+REVIEW_PROMPT_VERSION = "review-v1"
 
 
 @dataclass
@@ -44,6 +57,11 @@ class ReportUsageInput:
 
 @dataclass
 class BatchReportUsageInput:
+    pass
+
+
+@dataclass
+class AggregateBillingUsageInput:
     pass
 
 
@@ -65,90 +83,519 @@ class RegenerateDocumentInput:
 
 @activity.defn
 async def analyze_commit(input: AnalyzeCommitInput) -> dict[str, Any]:
-    """Analyze a commit with LLM."""
-    logger.info(f"Analyzing commit {input.commit_id} for developer {input.developer_id}")
+    """Run LLM analysis on a single commit and persist to commits.semantic_analysis.
+
+    Skips if already analyzed (ai_analyzed_at set) or if Layer-0 enrichment
+    flagged the commit as bot / merge / docs-only / formatter-only. Looks up the
+    LLM analysis cache by content hash to dedup re-runs.
+    """
+    from datetime import datetime, timezone
 
     from sqlalchemy import select
+
     from aexy.llm.gateway import get_llm_gateway
     from aexy.models.activity import Commit
     from aexy.services.code_analyzer import CodeAnalyzer
+    from aexy.services.llm_analysis_cache_service import LlmAnalysisCacheService, hash_payload
+    from aexy.services.security_scanner import scan_patch_sample, summary_metrics
+
+    logger.info(f"Analyzing commit {input.commit_id} for developer {input.developer_id}")
 
     gateway = get_llm_gateway()
-    if not gateway:
-        return {"error": "LLM not configured", "commit_id": input.commit_id}
-
-    analyzer = CodeAnalyzer(llm_gateway=gateway)
 
     async with async_session_maker() as db:
-        result = await db.execute(
-            select(Commit).where(Commit.id == input.commit_id)
-        )
-        commit = result.scalar_one_or_none()
-
+        commit = (
+            await db.execute(select(Commit).where(Commit.id == input.commit_id))
+        ).scalar_one_or_none()
         if not commit:
-            return {"error": "Commit not found", "commit_id": input.commit_id}
+            return {"error": "Commit not found", "commit_id": input.commit_id, "status": "skipped"}
 
-        analysis = await analyzer.analyze_commit_message(
+        if commit.ai_analyzed_at is not None:
+            return {"commit_id": input.commit_id, "status": "already_analyzed"}
+
+        # Layer-0 gates — these classes carry zero LLM signal.
+        if commit.author_class == "bot":
+            return {"commit_id": input.commit_id, "status": "skipped_bot"}
+        if commit.is_merge:
+            return {"commit_id": input.commit_id, "status": "skipped_merge"}
+        if commit.change_class in {"docs_only", "formatter_only", "generated"}:
+            return {
+                "commit_id": input.commit_id,
+                "status": "skipped_change_class",
+                "change_class": commit.change_class,
+            }
+
+        # Phase 4B — deterministic security scan. Runs regardless of LLM availability.
+        security_findings = scan_patch_sample(commit.patch_sample)
+        security_block = {
+            "findings": [f.to_dict() for f in security_findings],
+            "summary": summary_metrics(security_findings),
+        }
+
+        # If LLM isn't configured, still write the deterministic security block
+        # so reviewers see the findings.
+        if not gateway:
+            commit.semantic_analysis = {"security": security_block}
+            commit.ai_analyzed_at = datetime.now(timezone.utc)
+            await db.commit()
+            return {
+                "commit_id": input.commit_id,
+                "status": "security_only",
+                "findings": security_block["summary"]["total"],
+            }
+
+        cache = LlmAnalysisCacheService(db)
+        payload = {
+            "sha": commit.sha,
+            "message": commit.message or "",
+            "additions": commit.additions or 0,
+            "deletions": commit.deletions or 0,
+            "files_changed": commit.files_changed or 0,
+            "patch_sample": commit.patch_sample or "",
+        }
+        prompt_hash = hash_payload(COMMIT_PROMPT_VERSION, payload)
+
+        cached = await cache.get(prompt_hash)
+        if cached is not None:
+            merged = dict(cached)
+            merged["security"] = security_block
+            commit.semantic_analysis = merged
+            commit.ai_analyzed_at = datetime.now(timezone.utc)
+            await db.commit()
+            return {"commit_id": input.commit_id, "status": "cache_hit"}
+
+        analyzer = CodeAnalyzer(llm_gateway=gateway)
+        result = await _call_llm_with_rate_limit_wait(
+            analyzer.analyze_commit_message,
             message=commit.message or "",
             files_changed=commit.files_changed or 0,
             additions=commit.additions or 0,
             deletions=commit.deletions or 0,
         )
+        analysis_json = result.model_dump(mode="json")
+        token_usage = {
+            "input": result.input_tokens,
+            "output": result.output_tokens,
+            "total": result.tokens_used,
+        }
 
-        commit.analysis = analysis
-        commit.analyzed = True
+        await cache.put(
+            prompt_hash=prompt_hash,
+            analysis=analysis_json,
+            model=result.model or "",
+            prompt_version=COMMIT_PROMPT_VERSION,
+            token_usage=token_usage,
+        )
+
+        await _record_workspace_llm_usage(
+            db,
+            repository_full_name=commit.repository,
+            provider=_provider_name_from_gateway(gateway),
+            input_tokens=int(result.input_tokens or 0),
+            output_tokens=int(result.output_tokens or 0),
+        )
+
+        # Merge the deterministic security block on top of the LLM output before
+        # persisting so a single read of `semantic_analysis` gives reviewers both.
+        analysis_json["security"] = security_block
+        commit.semantic_analysis = analysis_json
+        commit.ai_analyzed_at = datetime.now(timezone.utc)
         await db.commit()
 
         return {
             "commit_id": input.commit_id,
             "developer_id": input.developer_id,
             "status": "analyzed",
-            "analysis": analysis,
+            "token_usage": token_usage,
         }
 
 
 @activity.defn
 async def analyze_pr(input: AnalyzePRInput) -> dict[str, Any]:
-    """Analyze a pull request with LLM."""
-    logger.info(f"Analyzing PR {input.pr_id} for developer {input.developer_id}")
+    """Run LLM analysis on a PR and persist to pull_requests.ai_analysis.
+
+    Also runs the deterministic security scanner against the PR's stored
+    patch_sample and writes findings into ai_analysis.security_findings.
+    The scanner is pure Python — no extra tokens — so it runs even when
+    the LLM provider is unavailable.
+    """
+    from datetime import datetime, timezone
 
     from sqlalchemy import select
+
     from aexy.llm.gateway import get_llm_gateway
     from aexy.models.activity import PullRequest
     from aexy.services.code_analyzer import CodeAnalyzer
+    from aexy.services.llm_analysis_cache_service import LlmAnalysisCacheService, hash_payload
+    from aexy.services.security_scanner import scan_patch_sample, summary_metrics
+
+    logger.info(f"Analyzing PR {input.pr_id} for developer {input.developer_id}")
 
     gateway = get_llm_gateway()
-    if not gateway:
-        return {"error": "LLM not configured", "pr_id": input.pr_id}
-
-    analyzer = CodeAnalyzer(llm_gateway=gateway)
 
     async with async_session_maker() as db:
-        result = await db.execute(
-            select(PullRequest).where(PullRequest.id == input.pr_id)
-        )
-        pr = result.scalar_one_or_none()
-
+        pr = (
+            await db.execute(select(PullRequest).where(PullRequest.id == input.pr_id))
+        ).scalar_one_or_none()
         if not pr:
-            return {"error": "PR not found", "pr_id": input.pr_id}
+            return {"error": "PR not found", "pr_id": input.pr_id, "status": "skipped"}
 
-        analysis = await analyzer.analyze_pr(
+        if pr.ai_analyzed_at is not None:
+            return {"pr_id": input.pr_id, "status": "already_analyzed"}
+
+        # Phase 4B — scan PR description body for accidentally-pasted secrets.
+        # The PR has no patch_sample of its own; per-commit findings live on
+        # `commits.semantic_analysis.security`.
+        body_text = "\n".join(p for p in [pr.title or "", pr.description or ""] if p)
+        # Wrap the body as a synthetic single-file patch so the scanner's
+        # `+` line filter applies — every line is an "addition".
+        synthetic_patch = (
+            "--- pr-description ---\n"
+            + "\n".join("+" + ln for ln in body_text.splitlines())
+        ) if body_text else None
+        body_findings = scan_patch_sample(synthetic_patch) if synthetic_patch else []
+        security_block = {
+            "findings": [f.to_dict() for f in body_findings],
+            "summary": summary_metrics(body_findings),
+        }
+
+        # Layer-0 gate — xs PRs are typically version bumps / typo fixes.
+        # Still persist the security scan even when we skip the LLM call.
+        if pr.size_bucket == "xs":
+            pr.ai_analysis = {"security": security_block}
+            pr.ai_analyzed_at = datetime.now(timezone.utc)
+            await db.commit()
+            await _dispatch_alignment_for_pr(db, pr_id=str(pr.id), trigger="xs")
+            return {"pr_id": input.pr_id, "status": "skipped_size_xs"}
+
+        if not gateway:
+            pr.ai_analysis = {"security": security_block}
+            pr.ai_analyzed_at = datetime.now(timezone.utc)
+            await db.commit()
+            await _dispatch_alignment_for_pr(db, pr_id=str(pr.id), trigger="no_llm")
+            return {"pr_id": input.pr_id, "status": "security_only"}
+
+        cache = LlmAnalysisCacheService(db)
+        payload = {
+            "github_id": pr.github_id,
+            "title": pr.title or "",
+            "description": pr.description or "",
+            "additions": pr.additions or 0,
+            "deletions": pr.deletions or 0,
+            "files_changed": pr.files_changed or 0,
+        }
+        prompt_hash = hash_payload(PR_PROMPT_VERSION, payload)
+
+        cached = await cache.get(prompt_hash)
+        if cached is not None:
+            merged = dict(cached)
+            merged["security"] = security_block
+            pr.ai_analysis = merged
+            pr.ai_analyzed_at = datetime.now(timezone.utc)
+            await db.commit()
+            await _dispatch_alignment_for_pr(db, pr_id=str(pr.id), trigger="cache_hit")
+            return {"pr_id": input.pr_id, "status": "cache_hit"}
+
+        analyzer = CodeAnalyzer(llm_gateway=gateway)
+        result = await _call_llm_with_rate_limit_wait(
+            analyzer.analyze_pr_description,
             title=pr.title or "",
-            body=pr.body or "",
-            files_changed=pr.changed_files or 0,
+            description=pr.description or "",
+            files_changed=pr.files_changed or 0,
             additions=pr.additions or 0,
             deletions=pr.deletions or 0,
         )
+        analysis_json = result.model_dump(mode="json")
+        token_usage = {
+            "input": result.input_tokens,
+            "output": result.output_tokens,
+            "total": result.tokens_used,
+        }
 
-        pr.analysis = analysis
-        pr.analyzed = True
+        await cache.put(
+            prompt_hash=prompt_hash,
+            analysis=analysis_json,
+            model=result.model or "",
+            prompt_version=PR_PROMPT_VERSION,
+            token_usage=token_usage,
+        )
+
+        await _record_workspace_llm_usage(
+            db,
+            repository_full_name=pr.repository,
+            provider=_provider_name_from_gateway(gateway),
+            input_tokens=int(result.input_tokens or 0),
+            output_tokens=int(result.output_tokens or 0),
+        )
+
+        analysis_json["security"] = security_block
+        pr.ai_analysis = analysis_json
+        pr.ai_analyzed_at = datetime.now(timezone.utc)
         await db.commit()
+
+        # Fan out alignment AFTER the PR analysis is durably persisted, so
+        # `analyze_task_pr_alignment` reads the fresh `ai_analysis` summary
+        # rather than a stale (or empty) one. Best-effort: dispatch
+        # failures are logged but don't fail the analysis itself.
+        await _dispatch_alignment_for_pr(db, pr_id=str(pr.id), trigger="analyze_pr")
 
         return {
             "pr_id": input.pr_id,
             "developer_id": input.developer_id,
             "status": "analyzed",
-            "analysis": analysis,
+            "token_usage": token_usage,
+        }
+
+
+async def _record_workspace_llm_usage(
+    db,
+    repository_full_name: str | None,
+    provider: str,
+    input_tokens: int,
+    output_tokens: int,
+) -> None:
+    """Roll one LLM call into every workspace's monthly counters.
+
+    Resolves `repo → all WorkspaceRepository rows that adopted it` and
+    records the tokens against each. A repo can sit in multiple workspaces
+    (rare but supported) — each one paid for the analysis indirectly, so
+    each one gets credited.
+
+    NEVER raises. Billing telemetry must never break an analysis. On any
+    error we log + swallow so the calling activity returns successfully.
+    """
+    if not repository_full_name:
+        return
+    try:
+        from sqlalchemy import select as _select
+
+        from aexy.models.repository import Repository, WorkspaceRepository
+        from aexy.services.limits_service import LimitsService
+
+        workspace_ids = (
+            await db.execute(
+                _select(WorkspaceRepository.workspace_id)
+                .join(
+                    Repository,
+                    Repository.id == WorkspaceRepository.repository_id,
+                )
+                .where(
+                    Repository.full_name == repository_full_name,
+                    WorkspaceRepository.is_active == True,  # noqa: E712
+                )
+            )
+        ).scalars().all()
+        if not workspace_ids:
+            return
+        limits = LimitsService(db)
+        for ws_id in workspace_ids:
+            await limits.record_workspace_token_usage(
+                workspace_id=str(ws_id),
+                provider=provider,
+                input_tokens=int(input_tokens or 0),
+                output_tokens=int(output_tokens or 0),
+            )
+    except Exception:
+        logger.exception(
+            "Failed to record workspace LLM usage for "
+            f"repo={repository_full_name!r}; swallowing so analysis succeeds"
+        )
+
+
+def _provider_name_from_gateway(gateway) -> str:
+    """Best-effort resolution of a stable provider key for telemetry.
+
+    Tries `gateway.provider.provider_name` first (every concrete
+    LLMProvider exposes it). Falls back to the configured llm provider
+    string. Unknown → "unknown" — the column tolerates anything.
+    """
+    try:
+        provider = getattr(gateway, "provider", None)
+        name = getattr(provider, "provider_name", None)
+        if name:
+            return str(name).lower()
+    except Exception:
+        pass
+    try:
+        from aexy.core.config import get_settings
+
+        return (get_settings().llm.provider or "unknown").lower()
+    except Exception:
+        return "unknown"
+
+
+async def _call_llm_with_rate_limit_wait(callable_, *args, **kwargs):
+    """Call an LLM-bound function, waiting in-place when the rate limiter trips.
+
+    The LLM_RETRY policy on these activities uses exponential backoff
+    (30s → 60s → 120s → …), which burns retries when a rate-limit error
+    fires concurrently across many activities — every retry slams into
+    the same sliding window. This helper instead sleeps for the rate
+    limiter's reported wait window, then retries inline. Activity
+    timeouts are 10 minutes; a 60–120s wait is comfortably inside that.
+    """
+    import asyncio as _asyncio
+
+    from aexy.llm.base import LLMRateLimitError
+
+    max_inline_waits = 4
+    waited = 0
+    while True:
+        try:
+            return await callable_(*args, **kwargs)
+        except LLMRateLimitError as e:
+            wait = max(1.0, float(getattr(e, "wait_seconds", 0) or 5))
+            wait = min(wait, 90.0)  # cap inline sleep at 90s
+            if waited >= max_inline_waits:
+                # Give up and let Temporal handle it.
+                raise
+            logger.info(
+                f"LLM rate-limited; sleeping {wait:.1f}s before retry "
+                f"(inline attempt {waited + 1}/{max_inline_waits})"
+            )
+            await _asyncio.sleep(wait)
+            waited += 1
+
+
+async def _dispatch_alignment_for_pr(db, pr_id: str, trigger: str) -> int:
+    """Fan out `analyze_task_pr_alignment` for every TaskGitHubLink that
+    references this PR. Called from `analyze_pr` so alignment always sees
+    the freshly-written `pr.ai_analysis`. Returns the count dispatched.
+
+    The workflow_id keys on (link_id, content_hash) only — same content,
+    same workflow id, Temporal deduplicates. `trigger` is logged but not
+    in the id so repeat triggers on unchanged content (webhook + poll +
+    cache hit) don't fire redundant alignment runs.
+    """
+    import hashlib
+
+    from sqlalchemy import select as _select
+
+    from aexy.models.activity import PullRequest
+    from aexy.models.sprint import TaskGitHubLink
+    from aexy.temporal.activities.ai_digests import AnalyzeTaskPRAlignmentInput
+    from aexy.temporal.dispatch import dispatch
+    from aexy.temporal.task_queues import TaskQueue
+
+    pr = await db.get(PullRequest, pr_id)
+    if pr is None:
+        return 0
+
+    content = f"{pr.title or ''}\n{pr.description or ''}"
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
+
+    link_ids = (
+        await db.execute(
+            _select(TaskGitHubLink.id).where(
+                TaskGitHubLink.pull_request_id == pr_id,
+            )
+        )
+    ).scalars().all()
+    dispatched = 0
+    for link_id in link_ids:
+        try:
+            await dispatch(
+                "analyze_task_pr_alignment",
+                AnalyzeTaskPRAlignmentInput(task_github_link_id=str(link_id)),
+                task_queue=TaskQueue.ANALYSIS,
+                workflow_id=f"task-pr-alignment-{link_id}-{content_hash}",
+            )
+            dispatched += 1
+        except Exception:
+            logger.exception(
+                f"Failed to dispatch alignment for link {link_id} "
+                f"(pr {pr_id}, trigger={trigger})"
+            )
+    return dispatched
+
+
+@activity.defn
+async def analyze_review(input: AnalyzeReviewInput) -> dict[str, Any]:
+    """Run LLM analysis on a code review and persist to code_reviews.quality_metrics."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from aexy.llm.gateway import get_llm_gateway
+    from aexy.models.activity import CodeReview
+    from aexy.services.code_analyzer import CodeAnalyzer
+    from aexy.services.llm_analysis_cache_service import LlmAnalysisCacheService, hash_payload
+
+    logger.info(f"Analyzing review {input.review_id} for developer {input.developer_id}")
+
+    gateway = get_llm_gateway()
+    if not gateway:
+        return {"error": "LLM not configured", "review_id": input.review_id, "status": "skipped"}
+
+    async with async_session_maker() as db:
+        review = (
+            await db.execute(select(CodeReview).where(CodeReview.id == input.review_id))
+        ).scalar_one_or_none()
+        if not review:
+            return {"error": "Review not found", "review_id": input.review_id, "status": "skipped"}
+
+        if review.ai_analyzed_at is not None:
+            return {"review_id": input.review_id, "status": "already_analyzed"}
+
+        # Reviews with no body and no inline comments carry no LLM signal —
+        # the deterministic state ("approved" / "changes_requested") is already known.
+        if not (review.body or "").strip() and (review.comments_count or 0) == 0:
+            return {"review_id": input.review_id, "status": "skipped_empty"}
+
+        cache = LlmAnalysisCacheService(db)
+        payload = {
+            "github_id": review.github_id,
+            "state": review.state,
+            "body": review.body or "",
+            "comments_count": review.comments_count or 0,
+        }
+        prompt_hash = hash_payload(REVIEW_PROMPT_VERSION, payload)
+
+        cached = await cache.get(prompt_hash)
+        if cached is not None:
+            review.quality_metrics = cached
+            review.ai_analyzed_at = datetime.now(timezone.utc)
+            await db.commit()
+            return {"review_id": input.review_id, "status": "cache_hit"}
+
+        analyzer = CodeAnalyzer(llm_gateway=gateway)
+        result = await _call_llm_with_rate_limit_wait(
+            analyzer.analyze_review_comment,
+            comment=review.body or "",
+            state=review.state or "commented",
+        )
+        analysis_json = result.model_dump(mode="json")
+        token_usage = {
+            "input": result.input_tokens,
+            "output": result.output_tokens,
+            "total": result.tokens_used,
+        }
+
+        await cache.put(
+            prompt_hash=prompt_hash,
+            analysis=analysis_json,
+            model=result.model or "",
+            prompt_version=REVIEW_PROMPT_VERSION,
+            token_usage=token_usage,
+        )
+
+        await _record_workspace_llm_usage(
+            db,
+            repository_full_name=review.repository,
+            provider=_provider_name_from_gateway(gateway),
+            input_tokens=int(result.input_tokens or 0),
+            output_tokens=int(result.output_tokens or 0),
+        )
+
+        review.quality_metrics = analysis_json
+        review.ai_analyzed_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        return {
+            "review_id": input.review_id,
+            "developer_id": input.developer_id,
+            "status": "analyzed",
+            "token_usage": token_usage,
         }
 
 
@@ -192,6 +639,25 @@ async def batch_report_usage(input: BatchReportUsageInput) -> dict[str, Any]:
     async with async_session_maker() as db:
         service = UsageReportingService(db)
         result = await service.batch_report_usage()
+        await db.commit()
+        return result
+
+
+@activity.defn
+async def aggregate_billing_usage(input: AggregateBillingUsageInput) -> dict[str, Any]:
+    """Refresh `usage_aggregates` for every active workspace's current period.
+
+    Drives the historical billing-breakdown view. Without this the prior-month
+    panels are empty because nothing else writes to `usage_aggregates`.
+    """
+    logger.info("Refreshing usage aggregates for billing breakdown")
+
+    from aexy.services.billing_breakdown_service import (
+        aggregate_all_workspaces_usage,
+    )
+
+    async with async_session_maker() as db:
+        result = await aggregate_all_workspaces_usage(db)
         await db.commit()
         return result
 

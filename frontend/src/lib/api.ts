@@ -1,6 +1,13 @@
 import axios from "axios";
+import { toast } from "sonner";
+import { clearAuthPresenceCookie } from "./authCookie";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+
+// Module-level latch so a burst of concurrent 401s (e.g. five queries
+// firing in parallel after a token expires) only renders one toast +
+// one redirect, not five stacked.
+let sessionExpiredHandled = false;
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -18,15 +25,50 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Top-level paths that live inside the (app) / (admin) route groups and require auth.
+// On 401, only those paths get a hard redirect to "/"; public marketing pages (/, /pricing,
+// /about, /blog, /products/*, etc.) just clear the stale token and keep rendering, since
+// they don't require auth and the (app)/(admin) layouts have their own auth guards.
+const PROTECTED_PATH_PREFIXES = [
+  "/dashboard", "/activity", "/agents", "/analytics", "/automations", "/booking",
+  "/chat", "/compliance", "/crm", "/docs", "/email-marketing", "/epics", "/exports",
+  "/forms", "/gtm", "/hiring", "/insights", "/learning", "/leave", "/mcp",
+  "/notifications", "/onboarding", "/profile", "/reminders", "/reports", "/reviews",
+  "/settings", "/sprints", "/tables", "/templates", "/tickets", "/tracking",
+  "/uptime", "/admin", "/t",
+];
+
 // Handle auth errors
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Clear token and redirect to home (login page)
       if (typeof window !== "undefined") {
         localStorage.removeItem("token");
-        window.location.href = "/";
+        // Keep the middleware-visible presence cookie in sync. Without
+        // this, the landing page would see no token but the middleware
+        // would still consider the user authed for some other tab's
+        // request, and we'd race against the next render.
+        clearAuthPresenceCookie();
+        const path = window.location.pathname;
+        const isProtected = PROTECTED_PATH_PREFIXES.some(
+          (prefix) => path === prefix || path.startsWith(`${prefix}/`)
+        );
+        if (isProtected && !sessionExpiredHandled) {
+          sessionExpiredHandled = true;
+          // Tell the user before we yank them away. The toast renders
+          // synchronously; the redirect is delayed by a beat so the
+          // message has a chance to land.
+          toast.error("Your session expired. Please sign in again.", {
+            duration: 4000,
+          });
+          // Preserve where they were so post-login can drop them back
+          // into the same workspace surface.
+          const next = encodeURIComponent(path + window.location.search);
+          setTimeout(() => {
+            window.location.href = `/?next=${next}`;
+          }, 600);
+        }
       }
     }
     return Promise.reject(error);
@@ -1831,20 +1873,8 @@ export const repositoriesApi = {
     return response.data;
   },
 
-  enableRepository: async (repoId: string): Promise<{
-    id: string;
-    repository_id: string;
-    is_enabled: boolean;
-    sync_status: string;
-  }> => {
-    const response = await api.post(`/repositories/${repoId}/enable`);
-    return response.data;
-  },
-
-  disableRepository: async (repoId: string): Promise<{ message: string }> => {
-    const response = await api.post(`/repositories/${repoId}/disable`);
-    return response.data;
-  },
+  // Per-developer enable/disable removed in 0.7.72 — use
+  // workspaceRepositoriesApi.adopt / unadopt instead.
 
   getRepositoryStatus: async (repoId: string): Promise<RepositoryStatus> => {
     const response = await api.get(`/repositories/${repoId}/status`);
@@ -1938,6 +1968,99 @@ export const repositoriesApi = {
 };
 
 // ============================================================================
+// Workspace + Team repository adoption (0.7.72)
+// ============================================================================
+
+export interface WorkspaceRepositoryRepoSummary {
+  id: string;
+  full_name: string;
+  name: string;
+  owner_login: string;
+  owner_type: string;
+  description: string | null;
+  is_private: boolean;
+  is_archived: boolean;
+  language: string | null;
+}
+
+export interface WorkspaceRepositoryItem {
+  id: string;
+  workspace_id: string;
+  repository: WorkspaceRepositoryRepoSummary;
+  adopted_by_developer_id: string | null;
+  adopted_by_name: string | null;
+  adopter_active: boolean;
+  is_active: boolean;
+  sync_status: string;
+  last_sync_at: string | null;
+  sync_error: string | null;
+  commits_synced: number;
+  prs_synced: number;
+  reviews_synced: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export const workspaceRepositoriesApi = {
+  list: async (
+    workspaceId: string,
+    opts?: { include_inactive?: boolean }
+  ): Promise<WorkspaceRepositoryItem[]> => {
+    const response = await api.get(`/workspaces/${workspaceId}/repositories`, {
+      params: opts,
+    });
+    return response.data;
+  },
+
+  adopt: async (
+    workspaceId: string,
+    repositoryId: string
+  ): Promise<WorkspaceRepositoryItem> => {
+    const response = await api.post(`/workspaces/${workspaceId}/repositories`, {
+      repository_id: repositoryId,
+    });
+    return response.data;
+  },
+
+  unadopt: async (workspaceId: string, repositoryId: string): Promise<void> => {
+    await api.delete(`/workspaces/${workspaceId}/repositories/${repositoryId}`);
+  },
+
+  reclaim: async (
+    workspaceId: string,
+    workspaceRepositoryId: string,
+    newAdopterId?: string
+  ): Promise<WorkspaceRepositoryItem> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/repositories/${workspaceRepositoryId}/reclaim`,
+      { new_adopter_id: newAdopterId ?? null },
+    );
+    return response.data;
+  },
+};
+
+export const teamRepositoriesApi = {
+  list: async (teamId: string): Promise<WorkspaceRepositoryItem[]> => {
+    const response = await api.get(`/teams/${teamId}/repositories`);
+    return response.data;
+  },
+
+  link: async (
+    teamId: string,
+    workspaceRepositoryId: string
+  ): Promise<{ id: string; team_id: string }> => {
+    const response = await api.post(`/teams/${teamId}/repositories`, {
+      workspace_repository_id: workspaceRepositoryId,
+    });
+    return response.data;
+  },
+
+  unlink: async (teamId: string, workspaceRepositoryId: string): Promise<void> => {
+    await api.delete(`/teams/${teamId}/repositories/${workspaceRepositoryId}`);
+  },
+};
+
+// ============================================================================
 // Organization & Team Management Types & API
 // ============================================================================
 
@@ -1955,6 +2078,10 @@ export interface Workspace {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  // Some workspace endpoints return an embedded member list (e.g. for
+  // settings/email-delivery permission checks). Optional because most
+  // list endpoints omit it.
+  members?: WorkspaceMember[];
 }
 
 export interface WorkspaceListItem {
@@ -2070,6 +2197,9 @@ export interface PlanFeatures {
   max_commits_per_repo: number;
   max_prs_per_repo: number;
   sync_history_days: number;
+  // Optional because older plan fixtures and pre-quota plan rows in the
+  // DB don't populate it; UI tolerates absence.
+  max_storage_gb?: number;
   llm_requests_per_day: number;
   llm_provider_access: string[];
   free_llm_tokens_per_month: number;
@@ -2304,7 +2434,13 @@ export interface TeamSkillCoverage {
 
 // Sprint Types
 export type SprintStatus = "planning" | "active" | "review" | "retrospective" | "completed";
-export type TaskStatus = "backlog" | "todo" | "in_progress" | "review" | "done";
+// Free-form status slug — workspaces define their own statuses via the
+// `workspace_task_statuses` table (with optional per-project overrides).
+// The canonical five (backlog/todo/in_progress/review/done) are the seed
+// defaults; the type is string so custom slugs like "on_hold" round-trip
+// without TS gymnastics. Use `useTaskStatuses(workspaceId, projectId)` to
+// enumerate the legal set for a given scope.
+export type TaskStatus = string;
 export type TaskPriority = "critical" | "high" | "medium" | "low";
 export type TaskSourceType = "github_issue" | "jira" | "linear" | "manual";
 
@@ -2342,6 +2478,20 @@ export interface SprintListItem {
   total_points: number;
   completed_points: number;
   settings?: Record<string, unknown>;
+}
+
+// Result shape returned by the bulk cross-project move endpoint. Each
+// entry corresponds to one source task; `status="skipped"` ships an
+// `error_code` so the UI can render which moves failed and why.
+export interface BulkMoveResult {
+  task_id: string;
+  status: "moved" | "skipped";
+  new_task_id: string | null;
+  error_code: string | null;
+}
+
+export interface BulkMoveResponse {
+  results: BulkMoveResult[];
 }
 
 export interface SprintTask {
@@ -2387,8 +2537,62 @@ export interface SprintTask {
   mentioned_file_paths: string[];
   // Archive support
   is_archived: boolean;
+  // Scheduled timeline + estimated effort (overdue / over-estimate detection)
+  start_date: string | null;
+  end_date: string | null;
+  estimated_hours: number | null;
+  attachments: TaskAttachment[];
   created_at: string;
   updated_at: string;
+  // Per-workspace shareable identifier. task_key is the sequential
+  // integer; identifier is "[workspace_slug:task_key]"; public_url is
+  // the short link rendered as /t/{workspace_slug}/{task_key}.
+  task_key: number | null;
+  workspace_slug: string | null;
+  identifier: string | null;
+  public_url: string | null;
+}
+
+export interface TaskAttachment {
+  id: string;
+  task_id: string;
+  file_name: string;
+  file_url: string;
+  file_size: number | null;
+  content_type: string | null;
+  uploaded_by_id: string | null;
+  uploaded_at: string;
+}
+
+export interface TaskAttachmentList {
+  attachments: TaskAttachment[];
+}
+
+export interface PullRequestSummary {
+  id: string;
+  github_id: number;
+  number: number;
+  repository: string;
+  title: string;
+  state: string;
+  url: string | null;
+}
+
+export interface GitHubIssueSummary {
+  repository: string;
+  number: number;
+  title: string | null;
+  state: string | null;
+  url: string;
+}
+
+export interface TaskGitHubLink {
+  id: string;
+  link_type: "pull_request" | "commit" | "github_issue";
+  is_auto_linked: boolean;
+  created_at: string;
+  pull_request: PullRequestSummary | null;
+  github_issue: GitHubIssueSummary | null;
 }
 
 export interface TaskTemplate {
@@ -2528,7 +2732,18 @@ export type TaskActivityAction =
   | "comment"
   | "priority_changed"
   | "points_changed"
-  | "epic_changed";
+  | "epic_changed"
+  | "title_changed"
+  | "description_changed"
+  | "labels_changed"
+  | "start_date_changed"
+  | "end_date_changed"
+  | "estimated_hours_changed"
+  | "attachment_added"
+  | "attachment_removed"
+  | "archived"
+  | "unarchived"
+  | "sprint_changed";
 
 export interface TaskActivity {
   id: string;
@@ -2551,7 +2766,26 @@ export interface TaskActivityList {
 }
 
 // Custom Status Types
-export type StatusCategory = "todo" | "in_progress" | "done";
+// Free-form category slug. The canonical 6 are: backlog, todo, in_progress,
+// in_review, done, cancelled — but workspaces can define more via
+// `workspace_status_categories`. Use `useStatusCategories` to enumerate.
+export type StatusCategory = string;
+
+export type CategorySemantics = "open" | "active" | "done" | "cancelled";
+
+export interface WorkspaceStatusCategory {
+  id: string;
+  workspace_id: string;
+  project_id: string | null;
+  slug: StatusCategory;
+  label: string;
+  color: string;
+  semantics: CategorySemantics;
+  position: number;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface CustomTaskStatus {
   id: string;
@@ -2620,9 +2854,16 @@ export const workspaceApi = {
   },
 
   // Members
-  getMembers: async (workspaceId: string, includePending = false): Promise<WorkspaceMember[]> => {
+  getMembers: async (
+    workspaceId: string,
+    includePending = false,
+    includeRemoved = false,
+  ): Promise<WorkspaceMember[]> => {
     const response = await api.get(`/workspaces/${workspaceId}/members`, {
-      params: { include_pending: includePending },
+      params: {
+        include_pending: includePending,
+        include_removed: includeRemoved,
+      },
     });
     return response.data;
   },
@@ -2645,6 +2886,20 @@ export const workspaceApi = {
 
   updateMemberRole: async (workspaceId: string, developerId: string, role: string): Promise<WorkspaceMember> => {
     const response = await api.patch(`/workspaces/${workspaceId}/members/${developerId}`, { role });
+    return response.data;
+  },
+
+  // Toggle "active" ↔ "removed" without dropping the member's history.
+  // Used by the admin "Mark as left" / "Restore" row action.
+  setMemberStatus: async (
+    workspaceId: string,
+    developerId: string,
+    status: "active" | "removed",
+  ): Promise<WorkspaceMember> => {
+    const response = await api.patch(
+      `/workspaces/${workspaceId}/members/${developerId}/status`,
+      { status },
+    );
     return response.data;
   },
 
@@ -3017,6 +3272,9 @@ export const sprintApi = {
     parent_task_id?: string;
     mentioned_user_ids?: string[];
     mentioned_file_paths?: string[];
+    start_date?: string | null;
+    end_date?: string | null;
+    estimated_hours?: number | null;
   }): Promise<SprintTask> => {
     const response = await api.post(`/sprints/${sprintId}/tasks`, data);
     return response.data;
@@ -3033,8 +3291,12 @@ export const sprintApi = {
     epic_id?: string | null;
     sprint_id?: string | null;
     assignee_id?: string | null;
+    contributes_to_goal?: boolean;
     mentioned_user_ids?: string[];
     mentioned_file_paths?: string[];
+    start_date?: string | null;
+    end_date?: string | null;
+    estimated_hours?: number | null;
   }): Promise<SprintTask> => {
     const response = await api.patch(`/sprints/${sprintId}/tasks/${taskId}`, data);
     return response.data;
@@ -3059,6 +3321,15 @@ export const sprintApi = {
     return response.data;
   },
 
+  getTaskGitHubLinks: async (sprintId: string, taskId: string): Promise<TaskGitHubLink[]> => {
+    const response = await api.get(`/sprints/${sprintId}/tasks/${taskId}/github-links`);
+    return response.data;
+  },
+
+  unlinkGitHubLink: async (sprintId: string, taskId: string, linkId: string): Promise<void> => {
+    await api.delete(`/sprints/${sprintId}/tasks/${taskId}/github-links/${linkId}`);
+  },
+
   // Activity Log
   getTaskActivities: async (sprintId: string, taskId: string, limit = 50, offset = 0): Promise<TaskActivityList> => {
     const response = await api.get(`/sprints/${sprintId}/tasks/${taskId}/activities`, {
@@ -3070,6 +3341,35 @@ export const sprintApi = {
   addTaskComment: async (sprintId: string, taskId: string, comment: string): Promise<TaskActivity> => {
     const response = await api.post(`/sprints/${sprintId}/tasks/${taskId}/comments`, { comment });
     return response.data;
+  },
+
+  // Attachments
+  uploadTaskAttachments: async (
+    sprintId: string,
+    taskId: string,
+    files: File[],
+  ): Promise<TaskAttachmentList> => {
+    const formData = new FormData();
+    files.forEach((f) => formData.append("files", f));
+    const response = await api.post(
+      `/sprints/${sprintId}/tasks/${taskId}/attachments`,
+      formData,
+      { headers: { "Content-Type": "multipart/form-data" } },
+    );
+    return response.data;
+  },
+
+  listTaskAttachments: async (sprintId: string, taskId: string): Promise<TaskAttachmentList> => {
+    const response = await api.get(`/sprints/${sprintId}/tasks/${taskId}/attachments`);
+    return response.data;
+  },
+
+  deleteTaskAttachment: async (
+    sprintId: string,
+    taskId: string,
+    attachmentId: string,
+  ): Promise<void> => {
+    await api.delete(`/sprints/${sprintId}/tasks/${taskId}/attachments/${attachmentId}`);
   },
 
   assignTask: async (sprintId: string, taskId: string, developerId: string, reason?: string, confidence?: number): Promise<SprintTask> => {
@@ -3307,7 +3607,16 @@ export const sprintApi = {
   startPokerSession: async (sprintId: string): Promise<{
     session_id: string;
     sprint_id: string;
-    tasks: { id: string; title: string; description: string | null }[];
+    tasks: {
+      id: string;
+      title: string;
+      description: string | null;
+      priority: string | null;
+      task_type: string | null;
+      labels: string[];
+      story_points: number | null;
+      status: string | null;
+    }[];
     total_tasks: number;
   }> => {
     const response = await api.post(`/sprints/${sprintId}/planning-poker/start`);
@@ -3417,12 +3726,16 @@ export const projectTasksApi = {
     statusFilter?: TaskStatus;
     assigneeId?: string;
     includeSprintTasks?: boolean;
+    includeArchived?: boolean;
+    archivedOnly?: boolean;
   }): Promise<SprintTask[]> => {
     const response = await api.get(`/teams/${teamId}/tasks`, {
       params: {
         ...(options?.statusFilter && { status_filter: options.statusFilter }),
         ...(options?.assigneeId && { assignee_id: options.assigneeId }),
         ...(options?.includeSprintTasks !== undefined && { include_sprint_tasks: options.includeSprintTasks }),
+        ...(options?.includeArchived !== undefined && { include_archived: options.includeArchived }),
+        ...(options?.archivedOnly !== undefined && { archived_only: options.archivedOnly }),
       },
     });
     return response.data;
@@ -3444,6 +3757,9 @@ export const projectTasksApi = {
     sprint_id?: string;  // Optional - can assign to sprint on creation
     mentioned_user_ids?: string[];
     mentioned_file_paths?: string[];
+    start_date?: string | null;
+    end_date?: string | null;
+    estimated_hours?: number | null;
   }): Promise<SprintTask> => {
     const response = await api.post(`/teams/${teamId}/tasks`, data);
     return response.data;
@@ -3471,8 +3787,12 @@ export const projectTasksApi = {
     epic_id?: string | null;
     sprint_id?: string | null;
     assignee_id?: string | null;
+    contributes_to_goal?: boolean;
     mentioned_user_ids?: string[];
     mentioned_file_paths?: string[];
+    start_date?: string | null;
+    end_date?: string | null;
+    estimated_hours?: number | null;
   }): Promise<SprintTask> => {
     const response = await api.patch(`/teams/${teamId}/tasks/${taskId}`, data);
     return response.data;
@@ -3497,6 +3817,49 @@ export const projectTasksApi = {
   },
 
   /**
+   * Fork a task into another project in the same workspace. A new task is
+   * created in the target project, linked back to the source via a
+   * "duplicates" dependency. The source is archived OR marked done.
+   */
+  moveToProject: async (
+    teamId: string,
+    taskId: string,
+    body: {
+      target_project_id: string;
+      source_action: "archive" | "mark_done";
+      subtask_strategy?: "block" | "cascade" | "orphan";
+      target_status_slug?: string;
+    },
+  ): Promise<SprintTask> => {
+    const response = await api.post(
+      `/teams/${teamId}/tasks/${taskId}/move-to-project`,
+      body,
+    );
+    return response.data;
+  },
+
+  /**
+   * Bulk fork-and-link. Per-task results are returned; failures don't
+   * abort the batch.
+   */
+  bulkMoveToProject: async (
+    teamId: string,
+    body: {
+      task_ids: string[];
+      target_project_id: string;
+      source_action: "archive" | "mark_done";
+      subtask_strategy?: "block" | "cascade" | "orphan";
+      target_status_slug?: string;
+    },
+  ): Promise<BulkMoveResponse> => {
+    const response = await api.post(
+      `/teams/${teamId}/tasks/bulk-move-to-project`,
+      body,
+    );
+    return response.data;
+  },
+
+  /**
    * Delete a task (archives it).
    */
   delete: async (teamId: string, taskId: string): Promise<void> => {
@@ -3509,6 +3872,89 @@ export const projectTasksApi = {
   unarchive: async (teamId: string, taskId: string): Promise<SprintTask> => {
     const response = await api.post(`/teams/${teamId}/tasks/${taskId}/unarchive`);
     return response.data;
+  },
+
+  /**
+   * Attachments — work on backlog (sprint-less) project tasks too.
+   */
+  uploadTaskAttachments: async (
+    teamId: string,
+    taskId: string,
+    files: File[],
+  ): Promise<TaskAttachmentList> => {
+    const formData = new FormData();
+    files.forEach((f) => formData.append("files", f));
+    const response = await api.post(
+      `/teams/${teamId}/tasks/${taskId}/attachments`,
+      formData,
+      { headers: { "Content-Type": "multipart/form-data" } },
+    );
+    return response.data;
+  },
+
+  listTaskAttachments: async (
+    teamId: string,
+    taskId: string,
+  ): Promise<TaskAttachmentList> => {
+    const response = await api.get(`/teams/${teamId}/tasks/${taskId}/attachments`);
+    return response.data;
+  },
+
+  deleteTaskAttachment: async (
+    teamId: string,
+    taskId: string,
+    attachmentId: string,
+  ): Promise<void> => {
+    await api.delete(
+      `/teams/${teamId}/tasks/${taskId}/attachments/${attachmentId}`,
+    );
+  },
+
+  importTasks: async (
+    teamId: string,
+    source: TaskSourceType,
+    config: {
+      github?: { owner: string; repo: string; api_token?: string; labels?: string[]; limit?: number };
+      jira?: { api_url: string; api_key: string; project_key: string; jql_filter?: string; limit?: number };
+      linear?: { api_key: string; team_id?: string; labels?: string[]; limit?: number };
+    },
+  ): Promise<{ imported_count: number; tasks: SprintTask[] }> => {
+    const response = await api.post(`/teams/${teamId}/tasks/import`, { source, ...config });
+    return response.data;
+  },
+
+  getTaskActivities: async (
+    teamId: string,
+    taskId: string,
+    limit = 50,
+    offset = 0,
+  ): Promise<TaskActivityList> => {
+    const response = await api.get(
+      `/teams/${teamId}/tasks/${taskId}/activities`,
+      { params: { limit, offset } },
+    );
+    return response.data;
+  },
+
+  addTaskComment: async (
+    teamId: string,
+    taskId: string,
+    comment: string,
+  ): Promise<TaskActivity> => {
+    const response = await api.post(
+      `/teams/${teamId}/tasks/${taskId}/comments`,
+      { comment },
+    );
+    return response.data;
+  },
+
+  getTaskGitHubLinks: async (teamId: string, taskId: string): Promise<TaskGitHubLink[]> => {
+    const response = await api.get(`/teams/${teamId}/tasks/${taskId}/github-links`);
+    return response.data;
+  },
+
+  unlinkGitHubLink: async (teamId: string, taskId: string, linkId: string): Promise<void> => {
+    await api.delete(`/teams/${teamId}/tasks/${taskId}/github-links/${linkId}`);
   },
 };
 
@@ -3527,6 +3973,7 @@ export interface WorkspaceTasksListParams {
   labels?: string[];
   search?: string;
   include_archived?: boolean;
+  archived_only?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -3554,6 +4001,9 @@ export const workspaceTasksApi = {
         ...(params?.include_archived !== undefined && {
           include_archived: params.include_archived,
         }),
+        ...(params?.archived_only !== undefined && {
+          archived_only: params.archived_only,
+        }),
         ...(params?.limit !== undefined && { limit: params.limit }),
         ...(params?.offset !== undefined && { offset: params.offset }),
       },
@@ -3578,6 +4028,33 @@ export const workspaceTasksApi = {
     );
     return response.data;
   },
+
+  /**
+   * Create a task from the workspace-level All-Tasks Kanban (inline quick-add
+   * or column-header "+" modal). Requires a project_id; sprint is optional.
+   */
+  create: async (
+    workspaceId: string,
+    payload: {
+      title: string;
+      project_id: string;
+      sprint_id?: string | null;
+      description?: string;
+      story_points?: number;
+      priority?: TaskPriority;
+      labels?: string[];
+      assignee_id?: string;
+      status?: TaskStatus;
+      status_id?: string;
+      epic_id?: string;
+      start_date?: string;
+      end_date?: string;
+      estimated_hours?: number;
+    },
+  ): Promise<SprintTask> => {
+    const response = await api.post(`/workspaces/${workspaceId}/tasks`, payload);
+    return response.data;
+  },
 };
 
 // ============================================================================
@@ -3589,6 +4066,8 @@ export type CustomFieldType = "text" | "number" | "select" | "multiselect" | "da
 export interface TaskStatusConfig {
   id: string;
   workspace_id: string;
+  // When null this row is a workspace default; when set it's a project override.
+  project_id: string | null;
   name: string;
   slug: string;
   category: StatusCategory;
@@ -3624,8 +4103,13 @@ export interface CustomField {
 
 export const taskConfigApi = {
   // Task Statuses
-  getStatuses: async (workspaceId: string): Promise<TaskStatusConfig[]> => {
-    const response = await api.get(`/workspaces/${workspaceId}/task-statuses`);
+  getStatuses: async (
+    workspaceId: string,
+    options?: { projectId?: string | null },
+  ): Promise<TaskStatusConfig[]> => {
+    const response = await api.get(`/workspaces/${workspaceId}/task-statuses`, {
+      params: options?.projectId ? { project_id: options.projectId } : undefined,
+    });
     return response.data;
   },
 
@@ -3635,8 +4119,23 @@ export const taskConfigApi = {
     color?: string;
     icon?: string;
     is_default?: boolean;
+    project_id?: string;
   }): Promise<TaskStatusConfig> => {
     const response = await api.post(`/workspaces/${workspaceId}/task-statuses`, data);
+    return response.data;
+  },
+
+  /**
+   * Seed a project with copies of the workspace defaults so it can diverge.
+   * Idempotent: returns existing rows if the project already has overrides.
+   */
+  cloneToProject: async (
+    workspaceId: string,
+    projectId: string,
+  ): Promise<TaskStatusConfig[]> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/projects/${projectId}/task-statuses/clone-from-workspace`,
+    );
     return response.data;
   },
 
@@ -3656,13 +4155,87 @@ export const taskConfigApi = {
     return response.data;
   },
 
-  deleteStatus: async (workspaceId: string, statusId: string): Promise<void> => {
-    await api.delete(`/workspaces/${workspaceId}/task-statuses/${statusId}`);
+  deleteStatus: async (
+    workspaceId: string,
+    statusId: string,
+    options?: { migrateTo?: string },
+  ): Promise<void> => {
+    await api.delete(`/workspaces/${workspaceId}/task-statuses/${statusId}`, {
+      params: options?.migrateTo ? { migrate_to: options.migrateTo } : undefined,
+    });
+  },
+
+  /** How many active tasks currently use this status. Powers the delete modal. */
+  getStatusUsage: async (
+    workspaceId: string,
+    statusId: string,
+  ): Promise<{ count: number }> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/task-statuses/${statusId}/usage`,
+    );
+    return response.data;
   },
 
   reorderStatuses: async (workspaceId: string, statusIds: string[]): Promise<TaskStatusConfig[]> => {
     const response = await api.post(`/workspaces/${workspaceId}/task-statuses/reorder`, {
       status_ids: statusIds,
+    });
+    return response.data;
+  },
+
+  // Status Categories
+  getCategories: async (
+    workspaceId: string,
+    options?: { projectId?: string | null },
+  ): Promise<WorkspaceStatusCategory[]> => {
+    const response = await api.get(`/workspaces/${workspaceId}/status-categories`, {
+      params: options?.projectId ? { project_id: options.projectId } : undefined,
+    });
+    return response.data;
+  },
+
+  createCategory: async (
+    workspaceId: string,
+    data: {
+      slug: string;
+      label: string;
+      color?: string;
+      semantics?: CategorySemantics;
+      is_default?: boolean;
+      project_id?: string | null;
+    },
+  ): Promise<WorkspaceStatusCategory> => {
+    const response = await api.post(`/workspaces/${workspaceId}/status-categories`, data);
+    return response.data;
+  },
+
+  updateCategory: async (
+    workspaceId: string,
+    categoryId: string,
+    data: {
+      label?: string;
+      color?: string;
+      semantics?: CategorySemantics;
+      is_default?: boolean;
+    },
+  ): Promise<WorkspaceStatusCategory> => {
+    const response = await api.patch(
+      `/workspaces/${workspaceId}/status-categories/${categoryId}`,
+      data,
+    );
+    return response.data;
+  },
+
+  deleteCategory: async (workspaceId: string, categoryId: string): Promise<void> => {
+    await api.delete(`/workspaces/${workspaceId}/status-categories/${categoryId}`);
+  },
+
+  reorderCategories: async (
+    workspaceId: string,
+    categoryIds: string[],
+  ): Promise<WorkspaceStatusCategory[]> => {
+    const response = await api.post(`/workspaces/${workspaceId}/status-categories/reorder`, {
+      category_ids: categoryIds,
     });
     return response.data;
   },
@@ -4365,6 +4938,159 @@ export const billingApi = {
     const response = await api.get("/billing/limits");
     return response.data;
   },
+
+  getBreakdown: async (
+    workspaceId: string,
+    period: string = "current"
+  ): Promise<BillingBreakdown> => {
+    const response = await api.get("/billing/breakdown", {
+      params: { workspace_id: workspaceId, period },
+    });
+    return response.data;
+  },
+
+  getBreakdownHistory: async (
+    workspaceId: string,
+    months: number = 6
+  ): Promise<BillingBreakdownHistory> => {
+    const response = await api.get("/billing/breakdown/history", {
+      params: { workspace_id: workspaceId, months },
+    });
+    return response.data;
+  },
+};
+
+// Billing breakdown types
+export interface BillingLineItem {
+  category:
+    | "base_fee"
+    | "seats"
+    | "llm_usage"
+    | "storage"
+    | "free_credit"
+    | "overage"
+    | "other";
+  label: string;
+  description: string | null;
+  quantity: number;
+  unit: string;
+  rate_cents: number | null;
+  rate_display: string | null;
+  included_quantity: number | null;
+  billable_quantity: number;
+  subtotal_cents: number;
+  metadata: Record<string, any> | null;
+}
+
+export interface BillingBreakdown {
+  workspace_id: string;
+  workspace_name: string | null;
+  period_start: string;
+  period_end: string;
+  plan_id: string;
+  plan_name: string;
+  plan_tier: string;
+  billing_model: string;
+  line_items: BillingLineItem[];
+  subtotal_cents: number;
+  credit_cents: number;
+  total_cents: number;
+  previous_period_total_cents: number | null;
+  delta_cents: number | null;
+  delta_pct: number | null;
+  invoices: Invoice[];
+  info_counters: Record<string, any>;
+  computation_notes: string[];
+  margin: {
+    base_cost_cents: number;
+    charged_cents: number;
+    margin_cents: number;
+    margin_pct: number;
+  } | null;
+  generated_at: string;
+}
+
+export interface BillingBreakdownHistory {
+  current: BillingBreakdown;
+  history: BillingBreakdown[];
+}
+
+export interface PlatformBillingSummaryRow {
+  workspace_id: string;
+  workspace_name: string;
+  plan_tier: string;
+  billing_model: string;
+  period_start: string;
+  period_end: string;
+  total_cents: number;
+  base_cost_cents: number;
+  margin_cents: number;
+  seat_count: number;
+}
+
+export interface PlatformBillingSummary {
+  rows: PlatformBillingSummaryRow[];
+  page: number;
+  per_page: number;
+  total: number;
+}
+
+export interface PlatformBillingTotals {
+  period_start: string;
+  period_end: string;
+  total_revenue_cents: number;
+  total_base_cost_cents: number;
+  total_margin_cents: number;
+  workspace_count: number;
+  by_plan_tier: Record<string, number>;
+  by_billing_model: Record<string, number>;
+  top_workspaces: PlatformBillingSummaryRow[];
+}
+
+// Platform-admin billing API (admin-only)
+export const platformAdminBillingApi = {
+  getBreakdown: async (
+    workspaceId: string,
+    period: string = "current"
+  ): Promise<BillingBreakdown> => {
+    const response = await api.get("/platform-admin/billing/breakdown", {
+      params: { workspace_id: workspaceId, period },
+    });
+    return response.data;
+  },
+
+  getBreakdownHistory: async (
+    workspaceId: string,
+    months: number = 6
+  ): Promise<BillingBreakdownHistory> => {
+    const response = await api.get(
+      "/platform-admin/billing/breakdown/history",
+      { params: { workspace_id: workspaceId, months } }
+    );
+    return response.data;
+  },
+
+  getSummary: async (params: {
+    page?: number;
+    per_page?: number;
+    plan_tier?: string;
+    billing_model?: string;
+    search?: string;
+  }): Promise<PlatformBillingSummary> => {
+    const response = await api.get("/platform-admin/billing/summary", {
+      params,
+    });
+    return response.data;
+  },
+
+  getTotals: async (
+    period: string = "current"
+  ): Promise<PlatformBillingTotals> => {
+    const response = await api.get("/platform-admin/billing/totals", {
+      params: { period },
+    });
+    return response.data;
+  },
 };
 
 // ============ Reviews & Goals API Types ============
@@ -4448,12 +5174,33 @@ export interface ReviewSubmission {
   created_at: string;
 }
 
+/**
+ * Mirror of the backend `QuestionResponse` Pydantic model. Each
+ * entry under `question_responses` is an object — never a bare
+ * string. The earlier `Record<string, string>` type let a real prod
+ * bug ship; the contract now matches `backend/schemas/review.py:153`.
+ */
+export interface ReviewQuestionResponse {
+  rating?: number | null;
+  comment?: string | null;
+}
+
 export interface ReviewResponses {
   achievements: Achievement[];
   areas_for_growth: GrowthArea[];
-  question_responses: Record<string, string>;
+  question_responses: Record<string, ReviewQuestionResponse>;
   strengths: string[];
   growth_areas: string[];
+  // Optional COIN-format top-level fields used by the manager-finalize
+  // view as a free-text fallback when no structured Achievement /
+  // GrowthArea rows have been supplied. Backend tolerates missing keys.
+  // `impact` + `next_steps` round out the COIN shape; the
+  // manage/[memberId] feedback tab reads all four when a peer
+  // submission carries them.
+  context?: string;
+  observation?: string;
+  impact?: string;
+  next_steps?: string;
 }
 
 export interface Achievement {
@@ -4686,7 +5433,10 @@ export const reviewsApi = {
     reviewId: string,
     data: {
       responses: ReviewResponses;
-      overall_rating: number;
+      // Optional — the endpoint backs Save Draft, which can run
+      // before the manager has settled on an overall rating. The
+      // finalize call below is where the rating is required.
+      overall_rating?: number | null;
       ratings_breakdown?: Record<string, number>;
       linked_goals?: string[];
       linked_contributions?: string[];
@@ -4736,6 +5486,32 @@ export const reviewsApi = {
     const response = await api.get("/reviews/peer-requests/pending", {
       params: { reviewer_id: reviewerId },
     });
+    return response.data;
+  },
+
+  getPeerRequest: async (requestId: string): Promise<ReviewRequest> => {
+    const response = await api.get(`/reviews/peer-requests/${requestId}`);
+    return response.data;
+  },
+
+  listPeerRequestsForReview: async (
+    reviewId: string,
+  ): Promise<ReviewRequest[]> => {
+    const response = await api.get(`/reviews/${reviewId}/peer-requests`);
+    return response.data;
+  },
+
+  resendCycleNotifications: async (
+    cycleId: string,
+    payload: {
+      kind: "activation" | "deadline" | "phase_change";
+      recipient_ids?: string[];
+    },
+  ): Promise<{ sent: number; kind: string; recipient_count?: number; reason?: string }> => {
+    const response = await api.post(
+      `/reviews/cycles/${cycleId}/resend-notifications`,
+      payload,
+    );
     return response.data;
   },
 
@@ -6060,7 +6836,76 @@ export const documentApi = {
   deleteGitHubSync: async (workspaceId: string, documentId: string, syncId: string): Promise<void> => {
     await api.delete(`/workspaces/${workspaceId}/documents/${documentId}/github-sync/${syncId}`);
   },
+
+  // ── Proposed Edits — AI suggestion review queue ─────────────
+  // Wired to backend/scripts/migrate_document_proposed_edits.sql.
+  // The legacy `generate()` overwrites; the default flow now creates
+  // a proposal here that the user approves / rejects via the
+  // banner + diff review UI.
+  listProposedEdits: async (
+    workspaceId: string,
+    documentId: string,
+    statusFilter: string = "pending"
+  ): Promise<ProposedEdit[]> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/documents/${documentId}/proposed-edits`,
+      { params: { status: statusFilter } }
+    );
+    return response.data;
+  },
+
+  approveProposedEdit: async (
+    workspaceId: string,
+    documentId: string,
+    proposalId: string
+  ): Promise<ProposedEdit> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/documents/${documentId}/proposed-edits/${proposalId}/approve`
+    );
+    return response.data;
+  },
+
+  rejectProposedEdit: async (
+    workspaceId: string,
+    documentId: string,
+    proposalId: string,
+    reason?: string
+  ): Promise<ProposedEdit> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/documents/${documentId}/proposed-edits/${proposalId}/reject`,
+      { reason: reason ?? null }
+    );
+    return response.data;
+  },
 };
+
+export type ProposedEditSource =
+  | "code_change_sync"
+  | "regenerate"
+  | "suggest_improvements"
+  | "manual_ai_edit";
+
+export type ProposedEditStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "superseded";
+
+export interface ProposedEdit {
+  id: string;
+  document_id: string;
+  source: ProposedEditSource;
+  proposed_content: Record<string, unknown>;
+  base_content_sha: string | null;
+  diff_summary: { sections_added?: string[]; sections_removed?: string[]; headings_changed?: string[] } | null;
+  status: ProposedEditStatus;
+  proposed_by_id: string | null;
+  proposed_at: string;
+  reviewed_by_id: string | null;
+  reviewed_at: string | null;
+  reason: string | null;
+  is_stale: boolean;
+}
 
 // ============ Template API ============
 
@@ -9499,6 +10344,12 @@ export const crmAutomationApi = {
 // PLATFORM-WIDE AUTOMATIONS API
 // =============================================================================
 
+export interface GeneratedWorkflow {
+  nodes: Array<{ id: string; type: string; data: Record<string, unknown>; position?: { x: number; y: number } }>;
+  edges: Array<{ id?: string; source: string; target: string; sourceHandle?: string }>;
+  _meta?: { source?: string; module?: string };
+}
+
 export const automationsApi = {
   // List automations (optionally filter by module)
   list: async (
@@ -9506,6 +10357,25 @@ export const automationsApi = {
     params?: { module?: AutomationModule; object_id?: string; is_active?: boolean; skip?: number; limit?: number }
   ): Promise<Automation[]> => {
     const response = await api.get(`/workspaces/${workspaceId}/automations`, { params });
+    return response.data;
+  },
+
+  /**
+   * UX-DEF-004: Ask the LLM to draft a workflow from a one-line
+   * description. Returns ReactFlow-shaped {nodes, edges}; the caller
+   * drops it onto the canvas as if the user picked a template. The
+   * canvas validates the shape — bad input falls back to TemplateGallery.
+   * Throws on 422 (LLM returned invalid shape, surface to user) or
+   * 500 (generation failed, fall back).
+   */
+  generateWorkflowFromPrompt: async (
+    workspaceId: string,
+    data: { prompt: string; module?: string },
+  ): Promise<GeneratedWorkflow> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/automations/generate-workflow`,
+      data,
+    );
     return response.data;
   },
 
@@ -9974,7 +10844,7 @@ export interface CRMAgent {
   is_system: boolean;
 
   // LLM Configuration (optional for backwards compatibility)
-  llm_provider?: "claude" | "gemini" | "ollama";
+  llm_provider?: "claude" | "gemini" | "ollama" | "openrouter";
   llm_model?: string;
   temperature?: number;
   max_tokens?: number;
@@ -10078,6 +10948,11 @@ export interface AgentInboxMessage {
   workspace_id: string;
   message_id: string;
   thread_id: string | null;
+  /** RFC 5322 In-Reply-To header — populated by the inbound webhook
+   *  when the sender's mail client included a parent reference.
+   *  Frontend uses it to render a "View parent" jump in the detail
+   *  pane. UX-INB-027 / UX-DEF-007. */
+  in_reply_to_message_id?: string | null;
   from_email: string;
   from_name: string | null;
   to_email: string;
@@ -10160,6 +11035,12 @@ export interface ToolCallInfo {
   args: Record<string, unknown>;
 }
 
+export interface AgentMessageCitation {
+  title?: string | null;
+  url?: string | null;
+  snippet?: string | null;
+}
+
 export interface AgentMessage {
   id: string;
   conversation_id: string;
@@ -10170,8 +11051,21 @@ export interface AgentMessage {
   tool_name?: string | null;
   tool_output?: Record<string, unknown> | null;
   message_index: number;
+  citations?: AgentMessageCitation[] | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cost_usd?: number | null;
   created_at: string;
 }
+
+export type ChatStreamEvent =
+  | { type: "user_message"; id: string; content: string; created_at?: string | null }
+  | { type: "text_delta"; text: string }
+  | { type: "tool_use_start"; tool: string; id: string; input?: Record<string, unknown> }
+  | { type: "tool_result"; tool: string; id: string; output?: unknown }
+  | { type: "usage"; input_tokens?: number | null; output_tokens?: number | null; cost_usd?: number | null }
+  | { type: "done"; assistant_message_id: string; execution_id: string; duration_ms: number }
+  | { type: "error"; message: string };
 
 export interface AgentConversationWithMessages extends AgentConversation {
   messages: AgentMessage[];
@@ -10344,7 +11238,7 @@ export interface AgentCreateData {
   description?: string;
   agent_type?: AgentType;
   mention_handle?: string;
-  llm_provider?: "claude" | "gemini" | "ollama";
+  llm_provider?: "claude" | "gemini" | "ollama" | "openrouter";
   llm_model?: string;
   temperature?: number;
   max_tokens?: number;
@@ -10359,6 +11253,12 @@ export interface AgentCreateData {
   working_hours?: WorkingHoursConfig | null;
   escalation_email?: string;
   escalation_slack_channel?: string;
+  // Email integration (matches CRMAgent shape so the edit form can
+  // round-trip these fields without a separate update payload type).
+  email_address?: string | null;
+  email_enabled?: boolean;
+  auto_reply_enabled?: boolean;
+  email_signature?: string | null;
   crm_sync?: boolean;
   calendar_sync?: boolean;
   calendar_id?: string;
@@ -10517,6 +11417,99 @@ export const agentsApi = {
     return response.data;
   },
 
+  /**
+   * Server-side wizard draft (UX-DEF-003). One draft per
+   * (workspace, developer). The wizard's `useAgentDraft` hook uses
+   * these three endpoints to hydrate on mount, save debounced as
+   * the user types, and clear on successful agent creation.
+   */
+  getAgentDraft: async (
+    workspaceId: string,
+  ): Promise<{
+    id: string;
+    payload: Record<string, unknown>;
+    created_at: string | null;
+    updated_at: string | null;
+  } | null> => {
+    try {
+      const response = await api.get(`/workspaces/${workspaceId}/crm/agents/drafts/me`);
+      return response.data;
+    } catch (err) {
+      // 404 = no draft. The caller treats that as "fresh wizard"
+      // rather than an error condition.
+      if ((err as { response?: { status?: number } })?.response?.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  },
+
+  saveAgentDraft: async (
+    workspaceId: string,
+    payload: Record<string, unknown>,
+  ): Promise<{
+    id: string;
+    payload: Record<string, unknown>;
+    created_at: string | null;
+    updated_at: string | null;
+  }> => {
+    const response = await api.put(
+      `/workspaces/${workspaceId}/crm/agents/drafts/me`,
+      { payload },
+    );
+    return response.data;
+  },
+
+  deleteAgentDraft: async (workspaceId: string): Promise<void> => {
+    await api.delete(`/workspaces/${workspaceId}/crm/agents/drafts/me`);
+  },
+
+  /**
+   * Preview the agent's response to a sample input WITHOUT persisting
+   * an execution and WITHOUT running tools (no side effects). Used by
+   * the Prompts/LLM tabs' "Test this" affordance (UX-EDT-018) so the
+   * user can sanity-check prompt + model changes in place.
+   */
+  previewAgentPrompt: async (
+    workspaceId: string,
+    agentId: string,
+    data: { input: string },
+  ): Promise<{
+    content: string;
+    duration_ms: number;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    cost_usd: number | null;
+  }> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/crm/agents/${agentId}/test/prompt`,
+      data,
+    );
+    return response.data;
+  },
+
+  /**
+   * Server-side defaults for new agents (UX-EDT-024). Centralizes
+   * what used to be hardcoded `gemini-2.0-flash` across 4 frontend
+   * call-sites — wizard, edit page, and two creation paths.
+   */
+  getAgentDefaults: async (
+    workspaceId: string,
+  ): Promise<{
+    default_provider: "claude" | "gemini" | "openai" | "ollama" | "openrouter";
+    default_model: string;
+    provider_models: Record<string, string>;
+    default_temperature: number;
+    default_max_tokens: number;
+    default_confidence_threshold: number;
+    default_require_approval_below: number;
+    default_max_daily_responses: number;
+    default_response_delay_minutes: number;
+  }> => {
+    const response = await api.get(`/workspaces/${workspaceId}/crm/agents/defaults`);
+    return response.data;
+  },
+
   sendMessage: async (
     workspaceId: string,
     agentId: string,
@@ -10528,6 +11521,50 @@ export const agentsApi = {
       data
     );
     return response.data;
+  },
+
+  /**
+   * Stream a chat message via SSE. Returns a Response so the caller
+   * can consume `response.body` as a ReadableStream and parse the
+   * `data: {...}\n\n` events incrementally.
+   *
+   * Pass an AbortSignal to wire the chat's Stop button — when aborted
+   * the fetch closes the connection mid-stream and the backend
+   * detects the cancellation, marks the execution as `cancelled`,
+   * persists any partial content, then unwinds.
+   *
+   * Event payloads (mirrored from agent_service.stream_message):
+   *   user_message    {type, id, content, created_at}
+   *   text_delta      {type, text}
+   *   tool_use_start  {type, tool, id, input}
+   *   tool_result     {type, tool, id, output}
+   *   usage           {type, input_tokens, output_tokens, cost_usd}
+   *   done            {type, assistant_message_id, execution_id, duration_ms}
+   *   error           {type, message}
+   */
+  streamMessage: async (
+    workspaceId: string,
+    agentId: string,
+    conversationId: string,
+    data: { content: string },
+    signal?: AbortSignal,
+  ): Promise<Response> => {
+    const token = typeof window !== "undefined" ? window.localStorage.getItem("token") : null;
+    const url = `${api.defaults.baseURL ?? ""}/workspaces/${workspaceId}/crm/agents/${agentId}/conversations/${conversationId}/messages/stream`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(data),
+      signal,
+      credentials: "include",
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`Stream failed: ${response.status} ${response.statusText}`);
+    }
+    return response;
   },
 
   updateConversation: async (
@@ -10598,6 +11635,23 @@ export const agentsApi = {
     return response.data;
   },
 
+  /**
+   * Fetch every message in the thread containing this one. Returns
+   * an ordered list (created_at ASC) so the inbox detail can render
+   * a thread strip with the parent + sibling replies. Empty for
+   * orphan messages. UX-INB-027 / UX-DEF-007.
+   */
+  getInboxThread: async (
+    workspaceId: string,
+    agentId: string,
+    messageId: string
+  ): Promise<AgentInboxMessage[]> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/crm/agents/${agentId}/inbox/${messageId}/thread`,
+    );
+    return response.data;
+  },
+
   replyToInboxMessage: async (
     workspaceId: string,
     agentId: string,
@@ -10631,6 +11685,20 @@ export const agentsApi = {
   ): Promise<InboxActionResponse> => {
     const response = await api.post(
       `/workspaces/${workspaceId}/crm/agents/${agentId}/inbox/${messageId}/archive`
+    );
+    return response.data;
+  },
+
+  /** UX-INB-022: inverse of archive. Restores an archived message to
+   *  pending status so the AI queue picks it back up. Used by the
+   *  archive toast's "Undo" action. */
+  unarchiveInboxMessage: async (
+    workspaceId: string,
+    agentId: string,
+    messageId: string
+  ): Promise<InboxActionResponse> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/crm/agents/${agentId}/inbox/${messageId}/unarchive`
     );
     return response.data;
   },
@@ -12046,6 +13114,10 @@ export interface OKRGoal {
   period_type: OKRPeriodType;
   period_start?: string;
   period_end?: string;
+  // Aliases the backend exposes alongside period_start/period_end so the
+  // sprint-goals page can render date pickers without re-mapping keys.
+  start_date?: string;
+  end_date?: string;
   metric_type: OKRMetricType;
   target_value: number;
   current_value: number;
@@ -12079,6 +13151,7 @@ export interface OKRGoalUpdate {
   owner_id?: string;
   start_date?: string;
   end_date?: string;
+  period_type?: OKRPeriodType;
   target_value?: number;
   unit?: string;
   status?: OKRGoalStatus;
@@ -12790,6 +13863,7 @@ export interface EmailCampaign {
   workspace_id: string;
   name: string;
   subject?: string;
+  preview_text?: string | null;
   template_id?: string | null;
   template_name?: string;
   html_content?: string | null;
@@ -12878,6 +13952,10 @@ export interface CampaignAnalytics {
   click_to_open_rate: number;
   bounce_rate: number;
   unsubscribe_rate: number;
+  // Optional breakdowns returned for campaigns once tracking events
+  // have aggregated. UI guards on presence before rendering.
+  device_stats?: Record<string, number> | null;
+  link_stats?: Array<{ url: string; clicks: number; unique_clicks?: number }> | null;
 }
 
 export interface AnalyticsOverview {
@@ -16267,6 +17345,15 @@ export interface DeveloperSnapshotResponse {
 export interface MemberSummary {
   developer_id: string;
   developer_name?: string | null;
+  // Identity hints — populated by the backend so the comparison
+  // picker can search across name/email/github_login and dedupe any
+  // residual duplicates by identity_key.
+  email?: string | null;
+  github_login?: string | null;
+  avatar_url?: string | null;
+  identity_key?: string;
+  // "active" | "pending" | "suspended" | "removed" | "external"
+  membership_status?: string;
   commits_count: number;
   prs_merged: number;
   lines_changed: number;
@@ -16536,6 +17623,10 @@ export interface GamingFlag {
   severity: "low" | "medium" | "high";
   evidence: string;
   value?: number;
+  // Index signature so callers iterating heterogeneous flag rows (the
+  // insights/developers page does this via `Record<string, unknown>`)
+  // can read fields without per-field narrowing.
+  [key: string]: unknown;
 }
 
 export interface GamingFlagsResponse {
@@ -16762,6 +17853,7 @@ export const insightsApi = {
       period_type?: InsightsPeriodType;
       start_date?: string;
       end_date?: string;
+      include_inactive?: boolean;
     }
   ): Promise<TeamInsightsResponse> => {
     const response = await api.get(`/workspaces/${workspaceId}/insights/team`, {
@@ -18969,7 +20061,9 @@ export interface CompetitorResponse {
   workspace_id: string;
   name: string;
   domain: string;
-  tracked_pages: Record<string, unknown>[];
+  // List of tracked URLs as strings — backend may also include richer
+  // metadata objects later, but today the field is a flat URL array.
+  tracked_pages: string[];
   current_snapshot: Record<string, unknown>;
   is_active: boolean;
   created_at: string;
@@ -19137,8 +20231,10 @@ export interface ABMAccountListResponse {
 export interface ABMOverviewResponse {
   total_lists: number;
   total_accounts: number;
-  stage_distribution: Record<string, unknown>[];
-  tier_distribution: Record<string, unknown>[];
+  // Backend returns these as `{ stage_name: count }` / `{ tier_name: count }` maps,
+  // not arrays — the page indexes them by stage/tier key.
+  stage_distribution: Record<string, number>;
+  tier_distribution: Record<string, number>;
   avg_engagement_score: number;
   top_accounts: Record<string, unknown>[];
   penetration_metrics: Record<string, unknown>;
@@ -19776,6 +20872,9 @@ export interface TableField {
   id: string;
   name: string;
   slug: string;
+  // Owning object/table — surfaced on field rows so editors can route
+  // field-level mutations without holding a separate parent reference.
+  object_id?: string;
   attribute_type: string;
   description: string | null;
   is_required: boolean;
@@ -20125,7 +21224,7 @@ export const tablesApi = {
     },
     create: async (workspaceId: string, tableId: string, data: {
       name: string;
-      view_type?: "table" | "board" | "gallery" | "timeline";
+      view_type?: "table" | "kanban" | "board" | "gallery" | "timeline";
       filters?: Record<string, unknown>[];
       sorts?: Record<string, unknown>[];
       visible_attributes?: string[];
@@ -20138,7 +21237,7 @@ export const tablesApi = {
     },
     update: async (workspaceId: string, tableId: string, viewId: string, data: Partial<{
       name: string;
-      view_type: "table" | "board" | "gallery" | "timeline";
+      view_type: "table" | "kanban" | "board" | "gallery" | "timeline";
       filters: Record<string, unknown>[];
       sorts: Record<string, unknown>[];
       visible_attributes: string[];
@@ -20293,6 +21392,9 @@ export interface ChatSender {
   id: string;
   name: string | null;
   avatar_url?: string | null;
+  // Chat renderers cast sender into `Record<string, unknown>` to pass
+  // it through a generic avatar / mention helper — match that shape.
+  [key: string]: unknown;
 }
 
 export interface ChatMessage {
@@ -20675,6 +21777,546 @@ export const aiBenchmarkingApi = {
 
   listFeedback: async (params?: { entity_type?: string; page?: number; limit?: number }): Promise<PaginatedAIFeedback> => {
     const response = await api.get("/platform-admin/ai-feedback", { params });
+    return response.data;
+  },
+};
+
+// ─── Drive (collaborative file storage + AI metadata) ───────────────────────
+
+export type DriveFileKind =
+  | "file"
+  | "folder"
+  | "image"
+  | "video"
+  | "audio"
+  | "pdf"
+  | "doc";
+
+// AI metadata (status, summary, tags, categories) lives on the polymorphic
+// `file_metadata` row, not on DriveFile. Use `fileMetadataApi.get` (or the
+// `useFileMetadata` hook) keyed by `(source_type='drive_file', source_id=<DriveFile.id>)`.
+export interface DriveFile {
+  id: string;
+  workspace_id: string;
+  parent_id: string | null;
+  space_id: string | null;
+  file_name: string;
+  file_url: string | null;
+  file_size_bytes: number;
+  content_type: string | null;
+  kind: DriveFileKind;
+  uploaded_by_id: string | null;
+  uploaded_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface DriveFileList {
+  files: DriveFile[];
+  total: number;
+}
+
+export interface VideoAnnotation {
+  id: string;
+  file_id: string;
+  t_start_ms: number;
+  t_end_ms: number;
+  label: string;
+  description: string | null;
+  tags: string[];
+  confidence: number | null;
+  source: "qwen" | "manual";
+  bbox: { x: number; y: number; w: number; h: number } | null;
+  created_by_id: string | null;
+  created_at: string;
+}
+
+export interface VideoAnnotationList {
+  annotations: VideoAnnotation[];
+}
+
+export interface SmartViewFilter {
+  all_tags?: string[];
+  any_tags?: string[];
+  any_categories?: string[];
+  kind?: DriveFileKind;
+}
+
+export interface SmartView {
+  id: string;
+  workspace_id: string;
+  name: string;
+  icon: string | null;
+  color: string | null;
+  filter_query: SmartViewFilter;
+  is_shared: boolean;
+  created_by_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SmartViewList {
+  smart_views: SmartView[];
+}
+
+// Drive-specific search has been removed; use `workspaceSearchApi.search`
+// with `kinds: ["drive_file"]` instead.
+
+export interface DriveUsage {
+  used_bytes: number;
+  limit_bytes: number;
+  unlimited: boolean;
+  percent_used: number;
+  files_count: number;
+}
+
+export const driveApi = {
+  listFiles: async (
+    workspaceId: string,
+    params: {
+      parent_id?: string | null;
+      kind?: DriveFileKind;
+      search?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<DriveFileList> => {
+    const response = await api.get(`/workspaces/${workspaceId}/drive/files`, {
+      params,
+    });
+    return response.data;
+  },
+
+  getFile: async (workspaceId: string, fileId: string): Promise<DriveFile> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/drive/files/${fileId}`,
+    );
+    return response.data;
+  },
+
+  createFolder: async (
+    workspaceId: string,
+    name: string,
+    parentId: string | null = null,
+  ): Promise<DriveFile> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/drive/folders`,
+      { name, parent_id: parentId },
+    );
+    return response.data;
+  },
+
+  // Per-file XHR upload — gives true per-file progress (axios's batched
+  // multipart progress fires once for the whole batch). Caller passes a
+  // single File and receives a Promise that resolves with the persisted row.
+  uploadFile: (
+    workspaceId: string,
+    file: File,
+    parentId: string | null = null,
+    onProgress?: (loaded: number, total: number) => void,
+  ): Promise<DriveFile> => {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const params = parentId ? `?parent_id=${encodeURIComponent(parentId)}` : "";
+      const url = `${API_BASE_URL}/workspaces/${workspaceId}/drive/files${params}`;
+      xhr.open("POST", url);
+
+      const token =
+        typeof window !== "undefined" ? localStorage.getItem("token") : null;
+      if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) {
+          onProgress(e.loaded, e.total);
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const body = JSON.parse(xhr.responseText) as DriveFileList;
+            const first = body.files?.[0];
+            if (!first)
+              reject(new Error("Upload succeeded but no file returned"));
+            else resolve(first);
+          } catch (e) {
+            reject(e);
+          }
+        } else {
+          let detail = `Upload failed (${xhr.status})`;
+          try {
+            const body = JSON.parse(xhr.responseText);
+            detail = body.detail || detail;
+          } catch {}
+          reject(new Error(detail));
+        }
+      };
+      xhr.onerror = () => reject(new Error("Network error during upload"));
+
+      const fd = new FormData();
+      fd.append("files", file, file.name);
+      xhr.send(fd);
+    });
+  },
+
+  updateFile: async (
+    workspaceId: string,
+    fileId: string,
+    patch: { file_name?: string; parent_id?: string | null },
+  ): Promise<DriveFile> => {
+    const response = await api.patch(
+      `/workspaces/${workspaceId}/drive/files/${fileId}`,
+      patch,
+    );
+    return response.data;
+  },
+
+  deleteFile: async (workspaceId: string, fileId: string): Promise<void> => {
+    await api.delete(`/workspaces/${workspaceId}/drive/files/${fileId}`);
+  },
+
+  reannotate: async (workspaceId: string, fileId: string): Promise<void> => {
+    await api.post(
+      `/workspaces/${workspaceId}/drive/files/${fileId}/reannotate`,
+    );
+  },
+
+  // Video annotations
+  listAnnotations: async (
+    workspaceId: string,
+    fileId: string,
+  ): Promise<VideoAnnotationList> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/drive/files/${fileId}/annotations`,
+    );
+    return response.data;
+  },
+
+  createAnnotation: async (
+    workspaceId: string,
+    fileId: string,
+    data: {
+      t_start_ms: number;
+      t_end_ms: number;
+      label: string;
+      description?: string;
+      tags?: string[];
+      bbox?: { x: number; y: number; w: number; h: number };
+    },
+  ): Promise<VideoAnnotation> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/drive/files/${fileId}/annotations`,
+      data,
+    );
+    return response.data;
+  },
+
+  updateAnnotation: async (
+    workspaceId: string,
+    fileId: string,
+    annotationId: string,
+    patch: Partial<{
+      t_start_ms: number;
+      t_end_ms: number;
+      label: string;
+      // Allow null so callers can clear an existing description; this
+      // matches the VideoAnnotation type the hook accepts as `Partial<>`.
+      description: string | null;
+      tags: string[];
+    }>,
+  ): Promise<VideoAnnotation> => {
+    const response = await api.patch(
+      `/workspaces/${workspaceId}/drive/files/${fileId}/annotations/${annotationId}`,
+      patch,
+    );
+    return response.data;
+  },
+
+  deleteAnnotation: async (
+    workspaceId: string,
+    fileId: string,
+    annotationId: string,
+  ): Promise<void> => {
+    await api.delete(
+      `/workspaces/${workspaceId}/drive/files/${fileId}/annotations/${annotationId}`,
+    );
+  },
+
+  // Smart Views
+  listSmartViews: async (workspaceId: string): Promise<SmartViewList> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/drive/smart-views`,
+    );
+    return response.data;
+  },
+
+  createSmartView: async (
+    workspaceId: string,
+    data: {
+      name: string;
+      icon?: string;
+      color?: string;
+      filter_query: SmartViewFilter;
+      is_shared?: boolean;
+    },
+  ): Promise<SmartView> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/drive/smart-views`,
+      data,
+    );
+    return response.data;
+  },
+
+  updateSmartView: async (
+    workspaceId: string,
+    viewId: string,
+    patch: Partial<{
+      name: string;
+      icon: string | null;
+      color: string | null;
+      filter_query: SmartViewFilter;
+      is_shared: boolean;
+    }>,
+  ): Promise<SmartView> => {
+    const response = await api.patch(
+      `/workspaces/${workspaceId}/drive/smart-views/${viewId}`,
+      patch,
+    );
+    return response.data;
+  },
+
+  deleteSmartView: async (workspaceId: string, viewId: string): Promise<void> => {
+    await api.delete(`/workspaces/${workspaceId}/drive/smart-views/${viewId}`);
+  },
+
+  smartViewFiles: async (
+    workspaceId: string,
+    viewId: string,
+  ): Promise<DriveFileList> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/drive/smart-views/${viewId}/files`,
+    );
+    return response.data;
+  },
+
+  // Drive-specific search dropped — call `workspaceSearchApi.search(ws, q,
+  // { kinds: ["drive_file"] })` instead.
+
+  getUsage: async (workspaceId: string): Promise<DriveUsage> => {
+    const response = await api.get(`/workspaces/${workspaceId}/drive/usage`);
+    return response.data;
+  },
+};
+
+// ─── Super-admin: Plan editor ───────────────────────────────────────────────
+
+export interface PlanWorkspaceOverride {
+  workspace_id: string;
+  max_repos: number | null;
+  max_commits_per_repo: number | null;
+  max_prs_per_repo: number | null;
+  sync_history_days: number | null;
+  max_storage_gb: number | null;
+  llm_requests_per_day: number | null;
+  llm_requests_per_minute: number | null;
+  llm_tokens_per_minute: number | null;
+  free_llm_tokens_per_month: number | null;
+  enable_real_time_sync: boolean | null;
+  enable_advanced_analytics: boolean | null;
+  enable_exports: boolean | null;
+  enable_webhooks: boolean | null;
+  enable_team_features: boolean | null;
+  discount_percent: number | null;
+  notes: string | null;
+}
+
+export const adminPlansApi = {
+  list: async (): Promise<{ plans: PlanFeatures[] }> => {
+    const response = await api.get("/platform-admin/plans");
+    return response.data;
+  },
+
+  update: async (
+    planId: string,
+    patch: Partial<PlanFeatures>,
+  ): Promise<PlanFeatures> => {
+    const response = await api.patch(`/platform-admin/plans/${planId}`, patch);
+    return response.data;
+  },
+
+  getOverride: async (
+    workspaceId: string,
+  ): Promise<PlanWorkspaceOverride | null> => {
+    const response = await api.get(
+      `/platform-admin/workspaces/${workspaceId}/plan-override`,
+    );
+    return response.data;
+  },
+
+  upsertOverride: async (
+    workspaceId: string,
+    patch: Partial<PlanWorkspaceOverride>,
+  ): Promise<PlanWorkspaceOverride> => {
+    const response = await api.patch(
+      `/platform-admin/workspaces/${workspaceId}/plan-override`,
+      patch,
+    );
+    return response.data;
+  },
+
+  deleteOverride: async (workspaceId: string): Promise<void> => {
+    await api.delete(
+      `/platform-admin/workspaces/${workspaceId}/plan-override`,
+    );
+  },
+};
+
+// ─── Polymorphic file AI metadata ──────────────────────────────────────────
+
+export type FileSourceType =
+  | "drive_file"
+  | "task_attachment"
+  | "compliance_document";
+
+export type FileAIStatus = "pending" | "processing" | "done" | "failed";
+
+export interface FileAIMetadata {
+  metadata_id: string | null;
+  source_type: FileSourceType;
+  source_id: string;
+  ai_status: FileAIStatus;
+  ai_error: string | null;
+  ai_summary: string | null;
+  ai_tags: string[];
+  ai_categories: string[];
+  ai_processed_at: string | null;
+}
+
+export interface FileSearchHit {
+  metadata_id: string;
+  source_type: FileSourceType;
+  source_id: string;
+  workspace_id: string;
+  file_name: string;
+  file_url: string | null;
+  content_type: string | null;
+  ai_summary: string | null;
+  ai_tags: string[];
+  ai_categories: string[];
+  ai_status: FileAIStatus;
+  score: number;
+  highlights: string[];
+}
+
+export interface FileSearchResults {
+  results: FileSearchHit[];
+}
+
+export const fileMetadataApi = {
+  get: async (
+    workspaceId: string,
+    sourceType: FileSourceType,
+    sourceId: string,
+  ): Promise<FileAIMetadata> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/files/${sourceType}/${sourceId}/metadata`,
+    );
+    return response.data;
+  },
+
+  reannotate: async (
+    workspaceId: string,
+    sourceType: FileSourceType,
+    sourceId: string,
+  ): Promise<void> => {
+    await api.post(
+      `/workspaces/${workspaceId}/files/${sourceType}/${sourceId}/reannotate`,
+    );
+  },
+};
+
+export const workspaceSearchApi = {
+  search: async (
+    workspaceId: string,
+    query: string,
+    options: { kinds?: FileSourceType[]; limit?: number } = {},
+  ): Promise<FileSearchResults> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/search/files`,
+      {
+        params: {
+          q: query,
+          kinds: options.kinds?.join(",") || undefined,
+          limit: options.limit ?? 20,
+        },
+      },
+    );
+    return response.data;
+  },
+};
+
+// Unified file row for cross-source browsing (Drive grid renders these
+// alongside DriveFile rows for "Task Attachments" and "Compliance
+// Documents" virtual views).
+export interface SourceFileRow {
+  source_type: FileSourceType;
+  source_id: string;
+  workspace_id: string;
+  file_name: string;
+  file_url: string | null;
+  content_type: string | null;
+  kind: DriveFileKind;
+  file_size_bytes: number;
+  uploaded_at: string;
+}
+
+export interface SourceFileListResponse {
+  files: SourceFileRow[];
+  total: number;
+}
+
+export const sourceFilesApi = {
+  list: async (
+    workspaceId: string,
+    sourceType: FileSourceType,
+    options: { limit?: number; offset?: number } = {},
+  ): Promise<SourceFileListResponse> => {
+    const response = await api.get(`/workspaces/${workspaceId}/source-files`, {
+      params: {
+        source_type: sourceType,
+        limit: options.limit ?? 200,
+        offset: options.offset ?? 0,
+      },
+    });
+    return response.data;
+  },
+};
+
+export interface BackfillStatus {
+  workspace_id: string;
+  workflow_id: string | null;
+  status: "running" | "completed" | "failed" | "unknown" | "not-started";
+  enqueued: number | null;
+  skipped: number | null;
+  started_at: string | null;
+  closed_at: string | null;
+}
+
+export const adminBackfillApi = {
+  start: async (
+    workspaceId: string,
+    options: { delay_seconds?: number; max_files?: number } = {},
+  ): Promise<{ workspace_id: string; workflow_id: string; queued_at: string }> => {
+    const response = await api.post(
+      `/platform-admin/workspaces/${workspaceId}/backfill-file-metadata`,
+      options,
+    );
+    return response.data;
+  },
+
+  status: async (workspaceId: string): Promise<BackfillStatus> => {
+    const response = await api.get(
+      `/platform-admin/workspaces/${workspaceId}/backfill-file-metadata/status`,
+    );
     return response.data;
   },
 };

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -64,6 +64,40 @@ class Workspace(Base):
 
     # Settings (JSONB for flexibility)
     settings: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+    # Monotonic per-workspace counter used to assign SprintTask.task_key.
+    # Always read+incremented atomically in one UPDATE ... RETURNING.
+    next_task_key: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+
+    # LLM usage counters — month-to-date totals. Reset lazily on first
+    # usage of the new month via the LimitsService. The provider
+    # breakdown JSONB lets the UI render "10k deepseek + 2k ollama"
+    # without joining the per-call analysis cache.
+    llm_tokens_used_this_month: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    llm_input_tokens_this_month: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    llm_output_tokens_this_month: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    llm_requests_this_month: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    llm_tokens_reset_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    llm_provider_breakdown: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
+    # Month-to-date overage in cents — accumulated only when the
+    # workspace's plan has `enable_overage_billing=True` and usage
+    # crosses `free_llm_tokens_per_month`. Reset alongside the other
+    # monthly counters.
+    llm_overage_cost_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
 
     # Status
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -451,6 +485,9 @@ class WorkspacePlanOverride(Base):
     max_commits_per_repo: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_prs_per_repo: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sync_history_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Storage quota override (GB; -1 = unlimited).
+    max_storage_gb: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # LLM limit overrides
     llm_requests_per_day: Mapped[int | None] = mapped_column(Integer, nullable=True)

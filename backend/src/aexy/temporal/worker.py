@@ -51,10 +51,25 @@ def get_all_workflows() -> list:
 
 def get_all_activities() -> list:
     """Import and return all activity functions."""
+    from aexy.temporal.activities.ai_digests import (
+        analyze_task_pr_alignment,
+        compose_developer_digest,
+        compose_repo_health,
+        embed_pr_summary,
+        enqueue_workspace_weekly_digests,
+    )
+    from aexy.temporal.activities.review_digests import (
+        check_review_deadlines,
+        compose_developer_review_period,
+        compose_team_review_period,
+        enqueue_review_cycle_digests,
+    )
     from aexy.temporal.activities.analysis import (
+        aggregate_billing_usage,
         analyze_commit,
         analyze_developer,
         analyze_pr,
+        analyze_review,
         batch_profile_sync,
         batch_report_usage,
         process_document_sync_queue,
@@ -116,6 +131,12 @@ def get_all_activities() -> list:
         schedule_incremental_extraction,
         update_document_relationships,
     )
+    from aexy.temporal.activities.file_metadata import (
+        annotate_drive_video,            # deprecated shim
+        backfill_workspace_file_metadata,
+        extract_drive_file_metadata,     # deprecated shim
+        extract_file_ai_metadata,
+    )
     from aexy.temporal.activities.oncall import (
         check_ending_shifts,
         check_upcoming_shifts,
@@ -139,7 +160,14 @@ def get_all_activities() -> list:
         process_unprocessed_events,
     )
     from aexy.temporal.activities.insights import auto_generate_snapshots
-    from aexy.temporal.activities.sync import check_repo_auto_sync, sync_commits, sync_repository
+    from aexy.temporal.activities.sync import (
+        check_repo_auto_sync,
+        enqueue_active_pr_refresh,
+        enqueue_ai_analysis,
+        refresh_single_pr,
+        sync_commits,
+        sync_repository,
+    )
     from aexy.temporal.activities.tracking import (
         aggregate_daily_standups,
         aggregate_time_entries,
@@ -231,9 +259,24 @@ def get_all_activities() -> list:
         # Analysis
         analyze_commit,
         analyze_pr,
+        analyze_review,
         analyze_developer,
+        # Phase 3 — AI digests + embeddings
+        compose_developer_digest,
+        compose_repo_health,
+        embed_pr_summary,
+        enqueue_workspace_weekly_digests,
+        # Phase 4C
+        analyze_task_pr_alignment,
+        # Phase B — review digests
+        compose_developer_review_period,
+        compose_team_review_period,
+        enqueue_review_cycle_digests,
+        # Daily deadline-reminder sweep
+        check_review_deadlines,
         reset_daily_limits,
         batch_report_usage,
+        aggregate_billing_usage,
         batch_profile_sync,
         process_document_sync_queue,
         regenerate_document,
@@ -241,6 +284,9 @@ def get_all_activities() -> list:
         sync_repository,
         sync_commits,
         check_repo_auto_sync,
+        enqueue_ai_analysis,
+        enqueue_active_pr_refresh,
+        refresh_single_pr,
         # Email
         send_campaign,
         send_campaign_email,
@@ -322,6 +368,11 @@ def get_all_activities() -> list:
         update_document_relationships,
         cleanup_orphaned_entities,
         schedule_incremental_extraction,
+        # File AI metadata pipeline (polymorphic) + deprecated drive-only shims
+        extract_file_ai_metadata,
+        backfill_workspace_file_metadata,
+        extract_drive_file_metadata,
+        annotate_drive_video,
         # Workflow Actions
         execute_workflow_action,
         cleanup_old_executions,
@@ -447,15 +498,28 @@ async def run_worker(queues: list[str] | None = None) -> None:
         restrictions=SandboxRestrictions.default.with_passthrough_modules("aexy"),
     )
 
+    # Per-queue concurrency caps. The analysis queue runs LLM-bound
+    # activities (analyze_pr / compose_*) that share a global rate limit
+    # against the LLM provider. Without a cap, ~200 dispatches fan out
+    # from `enqueue_ai_analysis` and stampede the same 60-req/min window,
+    # burning Temporal retries. A cap of 5 concurrent LLM activities
+    # naturally serializes them under the rate limit.
+    _max_concurrent_per_queue: dict[str, int] = {
+        "analysis": 5,
+    }
+
     workers = []
     for queue in target_queues:
-        worker = Worker(
-            client,
-            task_queue=queue,
-            workflows=workflows,
-            activities=activities,
-            workflow_runner=sandbox_runner,
-        )
+        kwargs: dict = {
+            "client": client,
+            "task_queue": queue,
+            "workflows": workflows,
+            "activities": activities,
+            "workflow_runner": sandbox_runner,
+        }
+        if queue in _max_concurrent_per_queue:
+            kwargs["max_concurrent_activities"] = _max_concurrent_per_queue[queue]
+        worker = Worker(**kwargs)
         workers.append(worker)
 
     if len(workers) == 1:

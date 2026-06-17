@@ -1,6 +1,7 @@
 services:
   postgres:
-    image: postgres:18-alpine
+    build: ./postgres
+    image: aexy-postgres:18-alpine-pgvector
     container_name: aexy-postgres
     environment:
       POSTGRES_USER: postgres
@@ -94,6 +95,12 @@ services:
       - S3_REGION=us-east-1
       - S3_PUBLIC_ENDPOINT_URL=http://localhost:9000
       - PLATFORM_ORG_ID=${PLATFORM_ORG_ID:-}
+      # Inside the container `localhost` is the container itself, not
+      # the developer's host — LM Studio runs on the host. Use
+      # host.docker.internal so the agent action can actually reach
+      # the local LLM during E2E tests + dev. Override via
+      # `LMSTUDIO_BASE_URL` in the shell env to point at a remote box.
+      - LMSTUDIO_BASE_URL=${LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
     # LLM provider configuration (LLM_PROVIDER, LLM_MODEL, *_API_KEY, etc.)
     # is read from backend/.env by pydantic settings — do not duplicate here
     # or the compose values (often empty strings) will shadow the .env file.
@@ -153,6 +160,14 @@ services:
       - NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
       - NEXT_PUBLIC_GTM_WORKSPACE_ID=${NEXT_PUBLIC_GTM_WORKSPACE_ID:-}
       - NEXT_PUBLIC_GTM_API_URL=${NEXT_PUBLIC_GTM_API_URL:-http://localhost:8000/api/v1}
+      - NEXT_PUBLIC_STRIPE_ENABLED=${NEXT_PUBLIC_STRIPE_ENABLED:-false}
+      # Turbopack + many lazy-compiled routes can OOM the default
+      # Node heap during E2E runs that touch /agents, /automations,
+      # /chat, /compliance, … in quick succession. 6 GiB for the
+      # V8 heap; Turbopack's native (Rust) allocations live on top
+      # of that. Pair with `mem_limit: 7g` so Docker doesn't
+      # SIGKILL the process before Node has a chance to GC.
+      - NODE_OPTIONS=--max-old-space-size=6144
     depends_on:
       - backend
     volumes:
@@ -160,6 +175,7 @@ services:
       - /app/node_modules
       - /app/.next
     command: npm run dev
+    mem_limit: 7g
 
   mailagent:
     build:

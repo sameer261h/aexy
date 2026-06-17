@@ -219,6 +219,38 @@ async def _record_click_event(
     try:
         async with get_async_session() as db:
             from aexy.services.tracking_service import TrackingService
+            from aexy.models.email_marketing import (
+                TrackedLink as _TrackedLink,
+                CampaignRecipient as _CampaignRecipient,
+            )
+
+            # WS-070: verify the recipient_id query parameter actually
+            # belongs to the same campaign as the tracked link. Without
+            # this, an attacker can forge `?r=<other-recipient-id>` to
+            # pollute per-recipient click attribution. Drop the param
+            # silently if it doesn't match — the click itself is still
+            # recorded (link-level metric), just not attributed.
+            if recipient_id:
+                link_row = (
+                    await db.execute(
+                        select(_TrackedLink.campaign_id).where(_TrackedLink.id == link_id)
+                    )
+                ).scalar_one_or_none()
+                if link_row:
+                    rec_row = (
+                        await db.execute(
+                            select(_CampaignRecipient.campaign_id).where(
+                                _CampaignRecipient.id == recipient_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if rec_row != link_row:
+                        logger.warning(
+                            "Click attribution mismatch: link.campaign=%s vs recipient.campaign=%s",
+                            link_row,
+                            rec_row,
+                        )
+                        recipient_id = None
 
             tracking_service = TrackingService(db)
             await tracking_service.record_click(
@@ -362,10 +394,49 @@ async def _record_image_view(image_id: str):
 # UNSUBSCRIBE (One-Click)
 # =============================================================================
 
+_UNSUBSCRIBE_CONFIRM_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Confirm unsubscribe</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               display: flex; justify-content: center; align-items: center;
+               min-height: 100vh; margin: 0; background: #f5f5f5; }
+        .container { text-align: center; padding: 40px; background: white;
+                    border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); max-width: 480px; }
+        h1 { color: #333; margin-bottom: 16px; }
+        p { color: #666; }
+        button { padding: 12px 24px; font-size: 16px; background: #ef4444; color: white;
+                 border: none; border-radius: 6px; cursor: pointer; margin-top: 16px; }
+        button:hover { background: #dc2626; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Are you sure?</h1>
+        <p>You will stop receiving email from us after this.</p>
+        <form method="POST">
+            <button type="submit">Yes, unsubscribe me</button>
+        </form>
+    </div>
+</body>
+</html>
+"""
+
+
 @router.get(
     "/u/{token}",
     include_in_schema=False,
 )
+async def one_click_unsubscribe_confirm(token: str):
+    """WS-069: GET only renders the confirmation page. Email prefetchers
+    and link-checkers that follow GET links no longer trigger the state
+    change. The mail client's RFC 8058 List-Unsubscribe-Post button still
+    works because it issues POST."""
+    return Response(content=_UNSUBSCRIBE_CONFIRM_PAGE, media_type="text/html")
+
+
 @router.post(
     "/u/{token}",
     include_in_schema=False,
@@ -378,7 +449,7 @@ async def one_click_unsubscribe(
     """
     Handle one-click unsubscribe from List-Unsubscribe header.
 
-    Supports both GET (for link clicks) and POST (for mail client buttons).
+    POST only — see one_click_unsubscribe_confirm for the GET landing page.
     """
     async with get_async_session() as db:
         from aexy.models.email_marketing import (

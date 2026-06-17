@@ -14,6 +14,8 @@ from aexy.models.billing import Subscription, SubscriptionStatus
 from aexy.models.developer import Developer
 from aexy.models.plan import Plan, PlanTier
 from aexy.schemas.billing import (
+    BillingBreakdownHistoryResponse,
+    BillingBreakdownResponse,
     BillingHistoryEntry,
     ChangePlanRequest,
     CreateCheckoutSessionRequest,
@@ -40,6 +42,7 @@ from aexy.schemas.billing import (
     UsageSummaryResponse,
     WebhookResponse,
 )
+from aexy.services.billing_breakdown_service import BillingBreakdownService
 from aexy.services.stripe_service import StripeService
 from aexy.services.stripe_webhook_handler import StripeWebhookHandler
 from aexy.services.usage_service import UsageService
@@ -589,9 +592,67 @@ async def get_limits_usage(
     await limits_service._maybe_reset_llm_usage(developer)
     await limits_service._maybe_reset_monthly_tokens(developer)
 
-    # Calculate token usage info
+    # Calculate token usage info.
+    #
+    # Source of truth substitution (option B): the AI sync pipeline writes
+    # tokens to the workspace counter (Workspace.llm_tokens_used_this_month)
+    # rather than the developer counter (Developer.llm_tokens_used_this_month)
+    # because the call is workspace-billable, not author-billable. The
+    # per-developer column is dead — nobody writes it. So when the caller
+    # is a member of a workspace, we substitute that workspace's counters
+    # here so this legacy endpoint reflects reality.
+    #
+    # Preferred workspace selection: one the caller owns (most likely
+    # what they're billed for); else the first workspace they're a member
+    # of. If no workspace, fall back to the (zero) developer counters.
+    from aexy.models.workspace import Workspace, WorkspaceMember
+
+    workspace_row = (
+        await db.execute(
+            select(Workspace)
+            .join(
+                WorkspaceMember,
+                WorkspaceMember.workspace_id == Workspace.id,
+            )
+            .where(
+                WorkspaceMember.developer_id == developer_id,
+                # Skip workspaces the user has been removed from —
+                # otherwise their token allocation could still get
+                # billed to a stale workspace they no longer belong to.
+                WorkspaceMember.status == "active",
+            )
+            .order_by(
+                # Owners first, then by recency so we pick the most
+                # active workspace the user is likely paying for.
+                (Workspace.owner_id == developer_id).desc(),
+                Workspace.updated_at.desc(),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
     free_tokens = getattr(plan, "free_llm_tokens_per_month", 100000)
-    tokens_used = developer.llm_tokens_used_this_month or 0
+
+    token_source = "developer"
+    source_workspace_id: str | None = None
+    if workspace_row is not None:
+        # Make sure the workspace counters reset cleanly on month boundary
+        # before we read them.
+        await limits_service._maybe_reset_workspace_tokens(workspace_row)
+        tokens_used = int(workspace_row.llm_tokens_used_this_month or 0)
+        input_tokens = int(workspace_row.llm_input_tokens_this_month or 0)
+        output_tokens = int(workspace_row.llm_output_tokens_this_month or 0)
+        tokens_reset_at = workspace_row.llm_tokens_reset_at
+        overage_cost_cents = int(workspace_row.llm_overage_cost_cents or 0)
+        token_source = "workspace"
+        source_workspace_id = workspace_row.id
+    else:
+        tokens_used = developer.llm_tokens_used_this_month or 0
+        input_tokens = developer.llm_input_tokens_this_month or 0
+        output_tokens = developer.llm_output_tokens_this_month or 0
+        tokens_reset_at = developer.llm_tokens_reset_at
+        overage_cost_cents = int(developer.llm_overage_cost_cents or 0)
+
     tokens_remaining = max(0, free_tokens - tokens_used) if free_tokens > 0 else 0
     is_in_overage = tokens_used > free_tokens if free_tokens > 0 else False
     overage_tokens = max(0, tokens_used - free_tokens) if free_tokens > 0 else 0
@@ -608,6 +669,9 @@ async def get_limits_usage(
             unlimited=plan.max_repos == -1,
         ),
         llm=LimitsUsageLLM(
+            # `used_today` stays on the developer counter — the workspace
+            # counter is monthly and lacks daily granularity, so swapping
+            # it in would produce a misleading "used vs daily limit" ratio.
             used_today=developer.llm_requests_today,
             limit_per_day=plan.llm_requests_per_day,
             unlimited=plan.llm_requests_per_day == -1,
@@ -617,16 +681,18 @@ async def get_limits_usage(
         tokens=LimitsUsageTokens(
             free_tokens_per_month=free_tokens,
             tokens_used_this_month=tokens_used,
-            input_tokens_this_month=developer.llm_input_tokens_this_month or 0,
-            output_tokens_this_month=developer.llm_output_tokens_this_month or 0,
+            input_tokens_this_month=input_tokens,
+            output_tokens_this_month=output_tokens,
             tokens_remaining_free=tokens_remaining,
             is_in_overage=is_in_overage,
             overage_tokens=overage_tokens,
-            overage_cost_cents=developer.llm_overage_cost_cents or 0,
+            overage_cost_cents=overage_cost_cents,
             input_cost_per_1k_cents=getattr(plan, "llm_input_cost_per_1k_cents", 30),
             output_cost_per_1k_cents=getattr(plan, "llm_output_cost_per_1k_cents", 60),
             enable_overage_billing=getattr(plan, "enable_overage_billing", True),
-            reset_at=developer.llm_tokens_reset_at,
+            reset_at=tokens_reset_at,
+            source=token_source,
+            source_workspace_id=source_workspace_id,
         ),
         features=LimitsUsageFeatures(
             real_time_sync=plan.enable_real_time_sync,
@@ -636,6 +702,96 @@ async def get_limits_usage(
             team_features=plan.enable_team_features,
         ),
     )
+
+
+@router.get("/breakdown", response_model=BillingBreakdownResponse)
+async def get_billing_breakdown(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    developer_id: Annotated[str, Depends(get_current_developer_id)],
+    workspace_id: str,
+    period: str = "current",
+) -> BillingBreakdownResponse:
+    """Workspace-admin billing breakdown for a single period.
+
+    `period` is `current` (default), `previous`, or `YYYY-MM`. Margin
+    information is never exposed via this endpoint — see the
+    /platform-admin/billing/* routes for that.
+    """
+    await verify_workspace_admin(db, workspace_id, developer_id)
+
+    period_start: "datetime | None" = None
+    period_end: "datetime | None" = None
+    if period and period != "current":
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
+
+        if period == "previous":
+            now = _dt.now(_tz.utc)
+            this_start = now.replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+            if this_start.month == 1:
+                period_start = this_start.replace(
+                    year=this_start.year - 1, month=12
+                )
+            else:
+                period_start = this_start.replace(month=this_start.month - 1)
+            period_end = this_start
+        else:
+            try:
+                year_str, month_str = period.split("-")
+                year_int = int(year_str)
+                month_int = int(month_str)
+                period_start = _dt(year_int, month_int, 1, tzinfo=_tz.utc)
+                if month_int == 12:
+                    period_end = _dt(year_int + 1, 1, 1, tzinfo=_tz.utc)
+                else:
+                    period_end = _dt(year_int, month_int + 1, 1, tzinfo=_tz.utc)
+            except (ValueError, AttributeError):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="period must be 'current', 'previous', or 'YYYY-MM'",
+                )
+
+    service = BillingBreakdownService(db, include_margin=False)
+    try:
+        result = await service.get_breakdown(
+            workspace_id, period_start=period_start, period_end=period_end
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        )
+    return BillingBreakdownResponse.model_validate(result)
+
+
+@router.get(
+    "/breakdown/history",
+    response_model=BillingBreakdownHistoryResponse,
+)
+async def get_billing_breakdown_history(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    developer_id: Annotated[str, Depends(get_current_developer_id)],
+    workspace_id: str,
+    months: int = 6,
+) -> BillingBreakdownHistoryResponse:
+    """Current breakdown plus prior N months for a workspace."""
+    await verify_workspace_admin(db, workspace_id, developer_id)
+
+    if months < 1 or months > 24:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="months must be between 1 and 24",
+        )
+
+    service = BillingBreakdownService(db, include_margin=False)
+    try:
+        result = await service.get_history(workspace_id, months=months)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        )
+    return BillingBreakdownHistoryResponse.model_validate(result)
 
 
 @router.post("/webhook", response_model=WebhookResponse)

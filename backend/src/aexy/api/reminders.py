@@ -379,6 +379,17 @@ async def update_control_owner(
     """Update a control owner mapping."""
     await verify_workspace_access(workspace_id, current_user, db, "admin")
 
+    from sqlalchemy import select
+    from aexy.models.reminder import ControlOwner
+    co_check = await db.execute(
+        select(ControlOwner.id).where(
+            ControlOwner.id == control_owner_id,
+            ControlOwner.workspace_id == workspace_id,
+        )
+    )
+    if co_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Control owner not found")
+
     service = ReminderService(db)
     control_owner = await service.update_control_owner(control_owner_id, data)
 
@@ -401,6 +412,17 @@ async def delete_control_owner(
 ):
     """Delete a control owner mapping."""
     await verify_workspace_access(workspace_id, current_user, db, "admin")
+
+    from sqlalchemy import select
+    from aexy.models.reminder import ControlOwner
+    co_check = await db.execute(
+        select(ControlOwner.id).where(
+            ControlOwner.id == control_owner_id,
+            ControlOwner.workspace_id == workspace_id,
+        )
+    )
+    if co_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Control owner not found")
 
     service = ReminderService(db)
 
@@ -480,6 +502,17 @@ async def delete_domain_team_mapping(
 ):
     """Delete a domain team mapping."""
     await verify_workspace_access(workspace_id, current_user, db, "admin")
+
+    from sqlalchemy import select
+    from aexy.models.reminder import DomainTeamMapping
+    m_check = await db.execute(
+        select(DomainTeamMapping.id).where(
+            DomainTeamMapping.id == mapping_id,
+            DomainTeamMapping.workspace_id == workspace_id,
+        )
+    )
+    if m_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Domain team mapping not found")
 
     service = ReminderService(db)
 

@@ -75,7 +75,7 @@ export function WorkingHoursConfigPanel({
           checked={config.enabled}
           onChange={(e) => updateConfig({ enabled: e.target.checked })}
           disabled={disabled}
-          className="w-4 h-4 rounded border-border bg-accent text-purple-500 focus:ring-purple-500"
+          className="w-4 h-4 rounded border-border bg-accent text-purple-500 focus-visible:ring-purple-500"
         />
         <div className="flex-1">
           <div className="font-medium text-foreground flex items-center gap-2">
@@ -104,7 +104,7 @@ export function WorkingHoursConfigPanel({
               value={config.timezone}
               onChange={(e) => updateConfig({ timezone: e.target.value })}
               disabled={disabled}
-              className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
+              className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 disabled:opacity-50"
             >
               {TIMEZONES.map((tz) => (
                 <option key={tz.value} value={tz.value}>
@@ -125,7 +125,7 @@ export function WorkingHoursConfigPanel({
                 value={config.start}
                 onChange={(e) => updateConfig({ start: e.target.value })}
                 disabled={disabled}
-                className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
+                className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 disabled:opacity-50"
               />
             </div>
             <div>
@@ -137,7 +137,7 @@ export function WorkingHoursConfigPanel({
                 value={config.end}
                 onChange={(e) => updateConfig({ end: e.target.value })}
                 disabled={disabled}
-                className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
+                className="w-full px-4 py-2 bg-accent border border-border rounded-lg text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 disabled:opacity-50"
               />
             </div>
           </div>

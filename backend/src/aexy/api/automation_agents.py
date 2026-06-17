@@ -43,6 +43,31 @@ async def check_workspace_permission(
         )
 
 
+async def _assert_automation_and_agent_in_workspace(
+    db: AsyncSession, workspace_id: str, automation_id: str, agent_id: str
+) -> None:
+    """Both the automation and the agent must belong to this workspace."""
+    from sqlalchemy import select
+    from aexy.models.agent import CRMAgent
+    from aexy.models.crm import CRMAutomation
+    automation_check = await db.execute(
+        select(CRMAutomation.id).where(
+            CRMAutomation.id == automation_id,
+            CRMAutomation.workspace_id == workspace_id,
+        )
+    )
+    if automation_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Automation not found")
+    agent_check = await db.execute(
+        select(CRMAgent.id).where(
+            CRMAgent.id == agent_id,
+            CRMAgent.workspace_id == workspace_id,
+        )
+    )
+    if agent_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+
 # =============================================================================
 # AGENT TRIGGERS ON AUTOMATIONS
 # =============================================================================
@@ -63,6 +88,9 @@ async def create_agent_trigger(
 ):
     """Create or update an agent trigger for an automation."""
     await check_workspace_permission(db, workspace_id, str(developer.id))
+    await _assert_automation_and_agent_in_workspace(
+        db, workspace_id, automation_id, data.agent_id
+    )
     service = AutomationAgentService(db)
 
     try:

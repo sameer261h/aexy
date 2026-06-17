@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
+import { toast } from "sonner";
 import { WizardProgress, WizardStep } from "./WizardProgress";
 import { WizardNavigation } from "./WizardNavigation";
 import {
@@ -16,7 +17,56 @@ import {
   ReviewStep,
 } from "./steps";
 import { useAgents } from "@/hooks/useAgents";
+import { useAgentDefaults } from "@/hooks/useAgentDefaults";
+import { useAgentDraft } from "@/hooks/useAgentDraft";
 import { AgentType, StandardAgentType, WorkingHoursConfig, AGENT_TYPE_CONFIG, agentsApi } from "@/lib/api";
+
+// UX-WIZ-001: persist the 8-step wizard form to localStorage so Cmd+R
+// on step 7 doesn't erase the user's progress. Keyed by workspace so a
+// user juggling multiple workspaces doesn't bleed drafts across them.
+// The persisted shape is a flat snapshot; on hydrate we set each piece
+// of state from it. Cleared on successful submit OR explicit discard.
+const DRAFT_VERSION = 1;
+interface WizardDraft {
+  v: number;
+  step: number;
+  agentType: AgentType | null;
+  name: string;
+  description: string;
+  mentionHandle: string;
+  llmProvider: "claude" | "gemini" | "ollama" | "openrouter";
+  llmModel: string;
+  temperature: number;
+  maxTokens: number;
+  tools: string[];
+  autoRespond: boolean;
+  confidenceThreshold: number;
+  requireApprovalBelow: number;
+  maxDailyResponses: number;
+  responseDelayMinutes: number;
+  workingHours: WorkingHoursConfig | null;
+  systemPrompt: string;
+  customInstructions: string;
+  emailEnabled: boolean;
+  emailHandle: string;
+  emailDomain: string;
+  autoReplyEnabled: boolean;
+  emailSignature: string;
+  savedAt: number;
+}
+const draftKey = (workspaceId: string) => `agent-wizard-draft:${workspaceId}`;
+function readDraft(workspaceId: string): WizardDraft | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(draftKey(workspaceId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed?.v !== DRAFT_VERSION) return null;
+    return parsed as WizardDraft;
+  } catch {
+    return null;
+  }
+}
 
 const WIZARD_STEPS: WizardStep[] = [
   { id: "type", title: "Type", description: "Choose agent type" },
@@ -40,34 +90,158 @@ export function AgentCreationWizard({
 }: AgentCreationWizardProps) {
   const router = useRouter();
   const { createAgent, isCreating } = useAgents(workspaceId);
-  const [currentStep, setCurrentStep] = useState(0);
+  // UX-EDT-024: pull server-side defaults instead of hardcoding
+  // gemini-2.0-flash. The hook keeps a hardcoded fallback so the
+  // first paint isn't blank if the call is in flight.
+  const { defaults } = useAgentDefaults(workspaceId);
+  // UX-DEF-003: server-side wizard draft for cross-device resume.
+  // Layered on top of the localStorage path — localStorage covers
+  // same-browser Cmd+R; this covers picking the wizard back up on
+  // a different machine.
+  const serverDraftHook = useAgentDraft(workspaceId);
+  // Lazy initializer reads the saved draft once on mount so the user
+  // resumes where they left off. Subsequent state changes write back
+  // via the autosave effect below.
+  const initialDraft = useRef<WizardDraft | null>(null);
+  if (initialDraft.current === null && typeof window !== "undefined") {
+    initialDraft.current = readDraft(workspaceId);
+  }
+  const draft = initialDraft.current;
+  const [hydratedFromDraft] = useState(() => Boolean(draft));
+  const [currentStep, setCurrentStep] = useState(draft?.step ?? 0);
   const [error, setError] = useState<string | null>(null);
 
   // Form state
-  const [agentType, setAgentType] = useState<AgentType | null>(null);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [mentionHandle, setMentionHandle] = useState("");
-  const [llmProvider, setLlmProvider] = useState<"claude" | "gemini" | "ollama" | "openrouter">("gemini");
-  const [llmModel, setLlmModel] = useState("gemini-2.0-flash");
-  const [temperature, setTemperature] = useState(0.7);
-  const [maxTokens, setMaxTokens] = useState(2000);
-  const [tools, setTools] = useState<string[]>([]);
-  const [autoRespond, setAutoRespond] = useState(true);
-  const [confidenceThreshold, setConfidenceThreshold] = useState(0.7);
-  const [requireApprovalBelow, setRequireApprovalBelow] = useState(0.8);
-  const [maxDailyResponses, setMaxDailyResponses] = useState(100);
-  const [responseDelayMinutes, setResponseDelayMinutes] = useState(5);
-  const [workingHours, setWorkingHours] = useState<WorkingHoursConfig | null>(null);
-  const [systemPrompt, setSystemPrompt] = useState("");
-  const [customInstructions, setCustomInstructions] = useState("");
+  const [agentType, setAgentType] = useState<AgentType | null>(draft?.agentType ?? null);
+  const [name, setName] = useState(draft?.name ?? "");
+  const [description, setDescription] = useState(draft?.description ?? "");
+  const [mentionHandle, setMentionHandle] = useState(draft?.mentionHandle ?? "");
+  const [llmProvider, setLlmProvider] = useState<"claude" | "gemini" | "ollama" | "openrouter">(
+    draft?.llmProvider ?? "gemini",
+  );
+  const [llmModel, setLlmModel] = useState(draft?.llmModel ?? "gemini-2.0-flash");
+  const [temperature, setTemperature] = useState(draft?.temperature ?? 0.7);
+  const [maxTokens, setMaxTokens] = useState(draft?.maxTokens ?? 2000);
+  const [tools, setTools] = useState<string[]>(draft?.tools ?? []);
+  const [autoRespond, setAutoRespond] = useState(draft?.autoRespond ?? true);
+  const [confidenceThreshold, setConfidenceThreshold] = useState(draft?.confidenceThreshold ?? 0.7);
+  const [requireApprovalBelow, setRequireApprovalBelow] = useState(draft?.requireApprovalBelow ?? 0.8);
+  const [maxDailyResponses, setMaxDailyResponses] = useState(draft?.maxDailyResponses ?? 100);
+  const [responseDelayMinutes, setResponseDelayMinutes] = useState(draft?.responseDelayMinutes ?? 5);
+  const [workingHours, setWorkingHours] = useState<WorkingHoursConfig | null>(draft?.workingHours ?? null);
+  const [systemPrompt, setSystemPrompt] = useState(draft?.systemPrompt ?? "");
+  const [customInstructions, setCustomInstructions] = useState(draft?.customInstructions ?? "");
 
   // Email configuration state
-  const [emailEnabled, setEmailEnabled] = useState(false);
-  const [emailHandle, setEmailHandle] = useState("");
-  const [emailDomain, setEmailDomain] = useState("");
-  const [autoReplyEnabled, setAutoReplyEnabled] = useState(true);
-  const [emailSignature, setEmailSignature] = useState("");
+  const [emailEnabled, setEmailEnabled] = useState(draft?.emailEnabled ?? false);
+  const [emailHandle, setEmailHandle] = useState(draft?.emailHandle ?? "");
+  const [emailDomain, setEmailDomain] = useState(draft?.emailDomain ?? "");
+  const [autoReplyEnabled, setAutoReplyEnabled] = useState(draft?.autoReplyEnabled ?? true);
+  const [emailSignature, setEmailSignature] = useState(draft?.emailSignature ?? "");
+
+  // One-time toast: tell the user we restored their draft so the
+  // pre-filled state doesn't look like the wizard is broken / out of
+  // sync with the URL. "Discard" wipes the draft + resets to defaults.
+  useEffect(() => {
+    if (!hydratedFromDraft) return;
+    toast.message("Resumed your in-progress agent", {
+      description: "Picked up where you left off. Discard to start fresh.",
+      duration: 8000,
+      action: {
+        label: "Discard",
+        onClick: () => {
+          if (typeof window !== "undefined") {
+            window.localStorage.removeItem(draftKey(workspaceId));
+          }
+          // Also drop the server-side draft so a discard on this
+          // device doesn't leave the wizard re-appearing on the
+          // next one.
+          void serverDraftHook.clear();
+          // Reload the page to reset every piece of state cleanly —
+          // a manual setX(default) call for every field is fragile.
+          if (typeof window !== "undefined") window.location.reload();
+        },
+      },
+    });
+    // Intentionally only fire once per mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Autosave: serialize the full state into localStorage on every
+  // change. Cheap because the payload is small (no canvas, no images)
+  // and JSON.stringify on ~25 primitives is sub-ms. The draft is
+  // cleared on successful submit (handleSubmit) — Cmd+R or tab close
+  // mid-flow keeps the snapshot.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const snapshot: WizardDraft = {
+      v: DRAFT_VERSION,
+      step: currentStep,
+      agentType,
+      name,
+      description,
+      mentionHandle,
+      llmProvider,
+      llmModel,
+      temperature,
+      maxTokens,
+      tools,
+      autoRespond,
+      confidenceThreshold,
+      requireApprovalBelow,
+      maxDailyResponses,
+      responseDelayMinutes,
+      workingHours,
+      systemPrompt,
+      customInstructions,
+      emailEnabled,
+      emailHandle,
+      emailDomain,
+      autoReplyEnabled,
+      emailSignature,
+      savedAt: Date.now(),
+    };
+    try {
+      window.localStorage.setItem(draftKey(workspaceId), JSON.stringify(snapshot));
+    } catch {
+      // localStorage can throw under private-browsing / quota limits;
+      // autosave failing isn't worth a user-facing toast.
+    }
+    // UX-DEF-003: also sync to the server (debounced inside the
+    // hook). localStorage keeps working as the same-browser fast
+    // path — the server call layers cross-device on top.
+    // `snapshot` is already a plain object — pass it through.
+    serverDraftHook.save(snapshot as unknown as Record<string, unknown>);
+  }, [
+    workspaceId,
+    currentStep,
+    agentType,
+    name,
+    description,
+    mentionHandle,
+    llmProvider,
+    llmModel,
+    temperature,
+    maxTokens,
+    tools,
+    autoRespond,
+    confidenceThreshold,
+    requireApprovalBelow,
+    maxDailyResponses,
+    responseDelayMinutes,
+    workingHours,
+    systemPrompt,
+    customInstructions,
+    emailEnabled,
+    emailHandle,
+    emailDomain,
+    autoReplyEnabled,
+    emailSignature,
+    // serverDraftHook is intentionally NOT a dep — the hook's
+    // `save` reference is stable, and adding it would trigger this
+    // effect on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ]);
 
   // When agent type is selected, initialize with defaults
   const handleTypeSelect = (type: AgentType) => {
@@ -133,6 +307,20 @@ export function AgentCreationWizard({
     }
   };
 
+  // UX-WIZ-002: "Skip to review with defaults" — once the user has
+  // picked an agent type and named the agent, the remaining 5 steps
+  // (LLM / tools / behavior / prompts / email) all have sensible
+  // defaults. This jumps straight to Review so power users can ship a
+  // serviceable agent in 30 seconds and tune later from the edit page.
+  // Only enabled after step 1 (Basic Info) so we're guaranteed to have
+  // both agent_type and a name.
+  const skipToReview = () => {
+    if (!agentType || !name.trim()) return;
+    setCurrentStep(WIZARD_STEPS.length - 1);
+    setError(null);
+  };
+  const canSkip = currentStep >= 1 && currentStep < WIZARD_STEPS.length - 1 && agentType !== null && name.trim().length > 0;
+
   const handleSubmit = async () => {
     if (!agentType || !name) return;
 
@@ -176,6 +364,17 @@ export function AgentCreationWizard({
           // Don't fail the whole creation, just log the error
         }
       }
+
+      // Clear the autosaved draft now that creation succeeded.
+      // Failed submissions keep the draft so the user can retry without
+      // re-typing. Both local + server paths are cleared — failed
+      // creates leave both intact.
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(draftKey(workspaceId));
+      }
+      // Server-side draft is fire-and-forget — a network error
+      // here doesn't change the fact that the agent was created.
+      void serverDraftHook.clear();
 
       // Redirect to the new agent's page
       router.push(`/agents/${newAgent.id}`);
@@ -352,6 +551,22 @@ export function AgentCreationWizard({
 
         <div className="bg-muted rounded-xl border border-border p-6">
           {renderStepContent()}
+
+          {/* UX-WIZ-002: Skip-to-review escape hatch. Renders above the
+              standard nav so it doesn't compete with the primary Next /
+              Submit buttons. Hidden until we have an agent type + name
+              so it can't accidentally create a nameless agent. */}
+          {canSkip ? (
+            <div className="mt-6 -mb-2 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={skipToReview}
+                className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors focus-visible:ring-2 focus-visible:ring-purple-500 rounded"
+              >
+                Skip to review with sensible defaults →
+              </button>
+            </div>
+          ) : null}
 
           <WizardNavigation
             currentStep={currentStep}

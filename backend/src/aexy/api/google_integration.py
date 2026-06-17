@@ -52,6 +52,10 @@ from aexy.schemas.google_integration import (
     SyncedEventResponse,
     SyncJobStatusResponse,
 )
+from aexy.services.oauth_token_service import (
+    RefreshTokenRevokedError,
+    ensure_valid_google_token,
+)
 from aexy.services.workspace_service import WorkspaceService
 
 logger = logging.getLogger(__name__)
@@ -208,6 +212,17 @@ async def connect_from_developer_google(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Your Google connection doesn't have Gmail/Calendar permissions. Please reconnect Google with full permissions.",
+        )
+
+    # Refresh the developer's token if it's expired/near-expiry so the
+    # workspace integration starts with a live access_token. If the refresh
+    # token has been revoked, tell the user to reconnect.
+    try:
+        await ensure_valid_google_token(db, dev_connection)
+    except RefreshTokenRevokedError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Your Google connection has expired. Please reconnect Google.",
         )
 
     # Check if workspace already has an integration
@@ -909,6 +924,18 @@ async def link_email_to_record(
     email = email_result.scalar_one_or_none()
     if not email:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found")
+
+    # The CRM record must also belong to this workspace, otherwise an A-member
+    # can stitch their email to a record in workspace B.
+    from aexy.models.crm import CRMRecord
+    record_check = await db.execute(
+        select(CRMRecord.id).where(
+            CRMRecord.id == data.record_id,
+            CRMRecord.workspace_id == workspace_id,
+        )
+    )
+    if record_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")
 
     # Check if link already exists
     existing = await db.execute(

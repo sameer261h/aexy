@@ -41,6 +41,9 @@ interface FilterBarProps {
     storyPoints: number[];
   };
   className?: string;
+  /** Hide non-essential filters (priority, labels, epics, story points).
+      Used by archive views where only search/assignee/sprint apply. */
+  minimal?: boolean;
 }
 
 interface FilterDropdownProps {
@@ -320,6 +323,7 @@ export function FilterBar({
   hasActiveFilters,
   filterOptions,
   className,
+  minimal = false,
 }: FilterBarProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -455,13 +459,15 @@ export function FilterBar({
           />
 
           {/* Priority filter */}
-          <PriorityFilter
-            selected={filters.priorities}
-            onChange={(selected) => onFilterChange({ priorities: selected })}
-          />
+          {!minimal && (
+            <PriorityFilter
+              selected={filters.priorities}
+              onChange={(selected) => onFilterChange({ priorities: selected })}
+            />
+          )}
 
           {/* Label filter */}
-          {filterOptions.labels.length > 0 && (
+          {!minimal && filterOptions.labels.length > 0 && (
             <MultiSelectFilter
               label="Label"
               icon={<Tag className="h-4 w-4" />}
@@ -481,7 +487,7 @@ export function FilterBar({
           />
 
           {/* Epic filter */}
-          {filterOptions.epics.length > 0 && (
+          {!minimal && filterOptions.epics.length > 0 && (
             <MultiSelectFilter
               label="Epic"
               icon={<Target className="h-4 w-4" />}
@@ -492,7 +498,7 @@ export function FilterBar({
           )}
 
           {/* Story Points filter */}
-          {filterOptions.storyPoints.length > 0 && (
+          {!minimal && filterOptions.storyPoints.length > 0 && (
             <StoryPointsFilter
               options={filterOptions.storyPoints}
               selected={filters.storyPoints}

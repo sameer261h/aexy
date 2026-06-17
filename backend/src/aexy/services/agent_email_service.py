@@ -321,6 +321,153 @@ class AgentEmailService:
             status="archived",
         )
 
+    async def unarchive_message(self, message_id: str) -> AgentInboxMessage | None:
+        """Restore an archived inbox message (UX-INB-022 inverse).
+
+        Resets status to `pending` so the next AI processing run picks
+        it back up. If the message was responded to/escalated before
+        archive, those audit fields are preserved — un-archiving just
+        un-hides the row.
+        """
+        return await self.update_inbox_message(
+            message_id,
+            status="pending",
+        )
+
+    async def get_thread_for_message(
+        self,
+        message_id: str,
+        agent_id: str,
+        workspace_id: str,
+    ) -> list[AgentInboxMessage]:
+        """Return every inbox message in the same thread as `message_id`,
+        ordered by `created_at` ASC. UX-INB-027 / UX-DEF-007.
+
+        Resolution order:
+          1. If the anchor has `thread_id`, pull every row with that
+             thread_id (the common path — most mail providers set
+             this on every reply).
+          2. Otherwise walk the RFC 5322 `in_reply_to_message_id`
+             chain up to the root, then forward to collect siblings
+             that reply to anything we've collected.
+
+        Returns `[]` when the anchor doesn't exist or doesn't belong
+        to the given agent/workspace.
+
+        The chain walk is bounded by a 50-step cap so a malicious
+        sender can't make us walk forever on a poisoned dataset.
+        """
+        from sqlalchemy import select as _select
+        from sqlalchemy.orm import noload as _noload
+        from aexy.models.agent_inbox import AgentInboxMessage as _Msg
+
+        # The thread strip on the inbox UI only needs the message rows
+        # themselves — not their `workspace` / `escalated_to_developer`
+        # relations. Apply `noload` so the service query doesn't trip
+        # the `selectin` eager-loader, which would issue extra round
+        # trips per thread row.
+        _no_rel = (
+            _noload(_Msg.workspace),
+            _noload(_Msg.escalated_to_developer),
+        )
+
+        # Fetch anchor with noload too — the shared get_inbox_message
+        # path eagerly loads workspace via selectin, which we don't
+        # need here and which trips the in-memory test DB.
+        anchor_stmt = (
+            _select(_Msg)
+            .options(*_no_rel)
+            .where(_Msg.id == message_id)
+        )
+        anchor_result = await self.db.execute(anchor_stmt)
+        anchor = anchor_result.scalar_one_or_none()
+        if not anchor or anchor.agent_id != agent_id or anchor.workspace_id != workspace_id:
+            return []
+
+        # Common path: thread_id is set.
+        if anchor.thread_id:
+            stmt = (
+                _select(_Msg)
+                .options(*_no_rel)
+                .where(
+                    _Msg.agent_id == agent_id,
+                    _Msg.workspace_id == workspace_id,
+                    _Msg.thread_id == anchor.thread_id,
+                )
+                .order_by(_Msg.created_at.asc())
+            )
+            result = await self.db.execute(stmt)
+            return list(result.scalars().all())
+
+        # Fallback: chase in_reply_to chain.
+        visited_ids: set[str] = set()
+        visited_message_ids: set[str] = set()
+
+        def _add(msg: _Msg) -> None:
+            visited_ids.add(msg.id)
+            if msg.message_id:
+                visited_message_ids.add(msg.message_id)
+
+        _add(anchor)
+
+        # Walk parents up to a root (capped).
+        cursor = anchor
+        for _ in range(50):
+            parent_ref = cursor.in_reply_to_message_id
+            if not parent_ref:
+                break
+            stmt = _select(_Msg).options(*_no_rel).where(
+                _Msg.agent_id == agent_id,
+                _Msg.workspace_id == workspace_id,
+                _Msg.message_id == parent_ref,
+            )
+            result = await self.db.execute(stmt)
+            parent = result.scalar_one_or_none()
+            if not parent or parent.id in visited_ids:
+                break
+            _add(parent)
+            cursor = parent
+
+        # Walk forward: anything pointing back at our collected set.
+        # Each round only queries for the *new* frontier (message ids we
+        # haven't already searched for children) so total work is O(n)
+        # rather than O(n²). Capped at 50 rounds for the same reason as
+        # the backward walk — a poisoned dataset shouldn't loop forever.
+        searched_message_ids: set[str] = set()
+        frontier = set(visited_message_ids)
+        for _ in range(50):
+            frontier -= searched_message_ids
+            if not frontier:
+                break
+            stmt = _select(_Msg).options(*_no_rel).where(
+                _Msg.agent_id == agent_id,
+                _Msg.workspace_id == workspace_id,
+                _Msg.in_reply_to_message_id.in_(frontier),
+            )
+            result = await self.db.execute(stmt)
+            new_rows = [m for m in result.scalars().all() if m.id not in visited_ids]
+            searched_message_ids |= frontier
+            if not new_rows:
+                break
+            next_frontier: set[str] = set()
+            for m in new_rows:
+                _add(m)
+                if m.message_id:
+                    next_frontier.add(m.message_id)
+            frontier = next_frontier
+
+        if not visited_ids:
+            return []
+
+        stmt = (
+            _select(_Msg)
+            .options(*_no_rel)
+            .where(_Msg.id.in_(visited_ids))
+            .order_by(_Msg.created_at.asc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
     # =========================================================================
     # AI PROCESSING
     # =========================================================================

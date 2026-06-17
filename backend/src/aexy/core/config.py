@@ -136,6 +136,57 @@ class LLMSettings(BaseSettings):
         validation_alias="DEEPSEEK_FALLBACK_MODELS",
     )
 
+    # LM Studio settings (local OpenAI-compatible server, no API key needed).
+    # Used by `tests/ai/` to run the full AI test suite against a local model
+    # without spending cloud-LLM budget. Set LLM_PROVIDER=lmstudio to route
+    # production traffic here as well.
+    lmstudio_base_url: str = Field(
+        default="http://localhost:1234/v1",
+        description="LM Studio OpenAI-compatible base URL",
+        validation_alias="LMSTUDIO_BASE_URL",
+    )
+    lmstudio_model: str = Field(
+        default="qwen/qwen3.5-9b",
+        description="LM Studio model id (must be loaded in LM Studio)",
+        validation_alias="LMSTUDIO_MODEL",
+    )
+    lmstudio_api_key: str = Field(
+        default="",
+        description="Optional bearer token if LM Studio is fronted by a proxy",
+        validation_alias="LMSTUDIO_API_KEY",
+    )
+
+    # Vision provider — used for image captioning + Qwen-VL video annotations.
+    # `openrouter` routes to qwen/qwen2.5-vl-72b-instruct via OpenRouter; `ollama`
+    # uses a local Ollama instance running a Qwen-VL tag (e.g. qwen2.5vl:7b).
+    vision_provider: str = Field(
+        default="openrouter",
+        description="Vision provider: openrouter | ollama",
+        validation_alias="VISION_PROVIDER",
+    )
+    vision_model: str = Field(
+        default="qwen/qwen2.5-vl-72b-instruct",
+        description="Vision model identifier (provider-specific)",
+        validation_alias="VISION_MODEL",
+    )
+
+    # Embeddings provider — used for chunk-level vectors stored in pgvector.
+    embeddings_provider: str = Field(
+        default="openrouter",
+        description="Embeddings provider: openrouter | ollama",
+        validation_alias="EMBEDDINGS_PROVIDER",
+    )
+    embeddings_model: str = Field(
+        default="openai/text-embedding-3-large",
+        description="Embeddings model identifier (provider-specific)",
+        validation_alias="EMBEDDINGS_MODEL",
+    )
+    embeddings_dim: int = Field(
+        default=1024,
+        description="Embedding vector dimension. Must match file_embeddings.embedding column.",
+        validation_alias="EMBEDDINGS_DIM",
+    )
+
     # Processing mode (configurable per billing plan)
     processing_mode: ProcessingMode = Field(
         default=ProcessingMode.BATCH,
@@ -295,6 +346,11 @@ class LLMSettings(BaseSettings):
                 requests_per_day=self.deepseek_requests_per_day,
                 tokens_per_minute=self.deepseek_tokens_per_minute,
             ),
+            "lmstudio": ProviderRateLimitSettings(
+                requests_per_minute=-1,
+                requests_per_day=-1,
+                tokens_per_minute=-1,
+            ),
         }
         return limits_map.get(provider, ProviderRateLimitSettings())
 
@@ -316,6 +372,28 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
     backend_url: str = "http://localhost:8000"
     mailagent_url: str = "http://localhost:8001"
+    # HMAC shared secret between backend and mailagent. Backend signs every
+    # outbound request; mailagent rejects requests without a valid signature
+    # (see WS-077). Empty in dev is allowed so docker-compose works
+    # out-of-the-box, but mailagent's `internal_secret` MUST also be empty
+    # in that case. In production both sides must be set to the same value.
+    mailagent_signing_secret: str = ""
+
+    # Email provider webhook secrets — used to verify inbound bounce/complaint
+    # /unsubscribe events. Each provider has its own signature scheme; see
+    # api/email_webhooks.py for the per-provider helpers.
+    sendgrid_webhook_public_key: str = ""        # base64 ECDSA public key
+    mailgun_webhook_signing_key: str = ""        # HMAC key
+    postmark_webhook_basic_auth: str = ""        # "user:pass" — verified against Authorization header
+    ses_sns_topic_arn_allowlist: str = ""        # comma-separated TopicArns we will accept events from
+
+    # When True (default), verify_*_signature helpers return False on missing
+    # config — i.e., the webhook is rejected. Set to False ONLY for local
+    # development where you intentionally want to accept unsigned events;
+    # production deployments must keep this True and configure every provider
+    # they receive webhooks from. (Closes the fail-open hole flagged in 0.7.88
+    # review.)
+    webhooks_require_signing: bool = True
 
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/aexy"
@@ -571,6 +649,10 @@ class Settings(BaseSettings):
     microsoft_redirect_uri: str = Field(
         default="http://localhost:8000/api/v1/integrations/microsoft/callback",
         description="Microsoft OAuth redirect URI for calendar integration",
+    )
+    microsoft_auth_redirect_uri: str = Field(
+        default="http://localhost:8000/api/v1/auth/microsoft/callback",
+        description="Microsoft OAuth redirect URI for sign-in/sign-up",
     )
 
     # Slack Integration

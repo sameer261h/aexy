@@ -3,11 +3,14 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import redis.asyncio as _aioredis
+
+from aexy.core.config import get_settings
 from aexy.core.database import get_db
 from aexy.models.assessment import (
     Assessment,
@@ -26,6 +29,61 @@ from aexy.services.r2_upload_service import get_r2_upload_service
 from aexy.services.automation_service import dispatch_automation_event
 
 router = APIRouter(prefix="/take", tags=["assessment-take"])
+
+
+# Per-(assessment, ip) Candidate creation rate-limit for the public take
+# flow (WS-068). Without this, an attacker can mint thousands of Candidate
+# rows under any organization with a public assessment, polluting the
+# hiring pipeline and triggering downstream `assessment.completed` /
+# `assessment.score_below` automations.
+_CANDIDATE_LIMIT_PER_IP_PER_HOUR = 5
+_CANDIDATE_LIMIT_PER_ASSESSMENT_PER_HOUR = 50
+
+
+def _client_ip_from(request: Request | None) -> str:
+    if request is None:
+        return "unknown"
+    forwarded = request.headers.get("x-forwarded-for") if request.headers else None
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+async def _check_candidate_create_rate_limit(
+    assessment_id: str, client_ip: str
+) -> None:
+    """Two-axis sliding window via Redis INCR + EXPIRE."""
+    settings = get_settings()
+    try:
+        client = _aioredis.from_url(settings.redis_url)
+    except Exception:
+        # If Redis is unreachable, fail open rather than break the whole
+        # assessment surface. A logger.warning is emitted by aioredis.
+        return
+    try:
+        ip_key = f"assessment:candidate_create:{assessment_id}:ip:{client_ip}"
+        as_key = f"assessment:candidate_create:{assessment_id}:total"
+        ip_count = await client.incr(ip_key)
+        if ip_count == 1:
+            await client.expire(ip_key, 3600)
+        if ip_count > _CANDIDATE_LIMIT_PER_IP_PER_HOUR:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many candidate registrations from this IP. Try again later.",
+            )
+        as_count = await client.incr(as_key)
+        if as_count == 1:
+            await client.expire(as_key, 3600)
+        if as_count > _CANDIDATE_LIMIT_PER_ASSESSMENT_PER_HOUR:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many candidate registrations for this assessment. Try again later.",
+            )
+    finally:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
 
 
 # ============================================================================
@@ -154,30 +212,16 @@ async def get_assessment_by_public_token_or_id(
     token: str,
     db: AsyncSession,
 ) -> Assessment | None:
-    """Try to find assessment by public_token or ID."""
-    # First try public_token
+    """Resolve a public-take token to its Assessment.
+
+    WS-067: only the `public_token` is accepted. The previous UUID-as-id
+    fallback defeated `public_token` rotation — any UUID leaked through
+    internal links, analytics, or browser history could still take the
+    assessment as long as `is_public=True`.
+    """
     query = select(Assessment).where(Assessment.public_token == token)
     result = await db.execute(query)
-    assessment = result.scalar_one_or_none()
-
-    if assessment:
-        return assessment
-
-    # Try as assessment ID (UUID)
-    try:
-        import re
-        uuid_pattern = re.compile(
-            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-            re.IGNORECASE
-        )
-        if uuid_pattern.match(token):
-            query = select(Assessment).where(Assessment.id == token)
-            result = await db.execute(query)
-            return result.scalar_one_or_none()
-    except Exception:
-        pass
-
-    return None
+    return result.scalar_one_or_none()
 
 
 async def get_invitation_or_assessment(
@@ -364,6 +408,7 @@ async def get_assessment_info(
 @router.post("/{token}/start", response_model=StartAttemptResponse)
 async def start_assessment(
     token: str,
+    http_request: Request,
     request: StartAttemptRequest | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> StartAttemptResponse:
@@ -396,6 +441,11 @@ async def start_assessment(
         if existing_invitation:
             invitation = existing_invitation
         else:
+            # WS-068: rate-limit Candidate creation per IP and per assessment
+            # to stop pipeline-flooding via the public take URL.
+            client_ip = _client_ip_from(http_request)
+            await _check_candidate_create_rate_limit(str(assessment.id), client_ip)
+
             # Create candidate and invitation
             candidate = Candidate(
                 organization_id=assessment.organization_id,

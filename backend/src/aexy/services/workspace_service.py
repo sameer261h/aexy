@@ -281,6 +281,39 @@ class WorkspaceService:
         await self.db.refresh(member)
         return member
 
+    async def set_member_status(
+        self,
+        workspace_id: str,
+        developer_id: str,
+        new_status: str,
+    ) -> WorkspaceMember | None:
+        """Toggle a member between "active" and "removed".
+
+        Used by the admin "Mark as left" / "Restore" actions on the
+        workspace members page. Distinct from `remove_member` because it
+        also supports the *un*-remove transition without re-running the
+        invite flow — the WorkspaceMember row stays put, only the
+        status flips, so history (commits, reviews, etc.) attributed to
+        the member is preserved across the round-trip.
+        """
+        allowed = {"active", "removed"}
+        if new_status not in allowed:
+            raise ValueError(
+                f"status must be one of {sorted(allowed)}, got {new_status!r}"
+            )
+
+        member = await self.get_member(workspace_id, developer_id)
+        if not member:
+            return None
+
+        if member.role == "owner" and new_status == "removed":
+            raise ValueError("Cannot mark the workspace owner as left")
+
+        member.status = new_status
+        await self.db.flush()
+        await self.db.refresh(member)
+        return member
+
     async def get_members(
         self,
         workspace_id: str,
@@ -432,9 +465,19 @@ class WorkspaceService:
         return member_level >= required_level
 
     async def is_owner(self, workspace_id: str, developer_id: str) -> bool:
-        """Check if a developer is the workspace owner."""
+        """Check if a developer is the *active* workspace owner.
+
+        Defense-in-depth: `remove_member` already refuses to flip an
+        owner row to `removed`, but a future bug or direct DB edit
+        could break that invariant. Require active membership here so
+        the check matches `check_permission`'s behavior.
+        """
         member = await self.get_member(workspace_id, developer_id)
-        return member is not None and member.role == "owner"
+        return (
+            member is not None
+            and member.role == "owner"
+            and member.status == "active"
+        )
 
     # Pending Invites
     async def create_pending_invite(

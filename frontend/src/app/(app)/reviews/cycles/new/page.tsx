@@ -15,12 +15,14 @@ import {
 } from "lucide-react";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { reviewsApi } from "@/lib/api";
+import { formatDate, formatDateShort } from "@/lib/datetime";
 import { toast } from "sonner";
 import { useTranslations } from "next-intl";
 
 export default function NewReviewCyclePage() {
   const t = useTranslations("reviews.cycles.form");
   const tp = useTranslations("reviews.cycles");
+  const tc = useTranslations("common");
   const router = useRouter();
   const { user, isLoading: authLoading, isAuthenticated, logout } = useAuth();
   const { currentWorkspaceId, currentWorkspaceLoading, hasWorkspaces } = useWorkspace();
@@ -82,9 +84,16 @@ export default function NewReviewCyclePage() {
 
       toast.success(tp("cycleCreated"));
       router.push(`/reviews/cycles/${cycle.id}`);
-    } catch (err) {
+    } catch (err: unknown) {
       console.error("Failed to create review cycle:", err);
-      setError("Failed to create review cycle. Please try again.");
+      // Surface the backend's `detail` message (date-range conflicts,
+      // overlapping cycle names, etc.) instead of the generic copy —
+      // otherwise users see the same string for validation errors
+      // and 5xx and have no way to recover.
+      const detail = (err as {
+        response?: { data?: { detail?: string } };
+      })?.response?.data?.detail;
+      setError(detail ?? "Failed to create review cycle. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -111,7 +120,7 @@ export default function NewReviewCyclePage() {
   if (!hasWorkspaces || !currentWorkspaceId) {
     return (
       <div className="min-h-screen bg-background">
-<main className="max-w-7xl mx-auto px-4 py-8">
+      <main className="max-w-7xl mx-auto px-4 py-8">
           <div className="text-center py-16">
             <div className="w-20 h-20 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
               <Calendar className="w-10 h-10 text-muted-foreground" />
@@ -135,7 +144,7 @@ export default function NewReviewCyclePage() {
 
   return (
     <div className="min-h-screen bg-background">
-<main className="max-w-3xl mx-auto px-4 py-8">
+      <main className="max-w-3xl mx-auto px-4 py-8">
         {/* Breadcrumb */}
         <Breadcrumb
           items={[
@@ -163,7 +172,7 @@ export default function NewReviewCyclePage() {
         <form onSubmit={handleSubmit} className="space-y-8">
           {/* Basic Info */}
           <div className="bg-background/50 rounded-xl border border-border p-6">
-            <h2 className="text-lg font-semibold text-foreground mb-4">Basic Information</h2>
+            <h2 className="text-lg font-semibold text-foreground mb-4">{t("basicInformation")}</h2>
             <div className="space-y-4">
               <div>
                 <label htmlFor="cycle-name" className="block text-sm font-medium text-foreground mb-1.5">
@@ -189,10 +198,10 @@ export default function NewReviewCyclePage() {
                   onChange={(e) => setCycleType(e.target.value)}
                   className="w-full bg-muted border border-border rounded-lg px-4 py-2.5 text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500"
                 >
-                  <option value="annual">Annual</option>
-                  <option value="semi_annual">Semi-Annual</option>
-                  <option value="quarterly">Quarterly</option>
-                  <option value="custom">Custom</option>
+                  <option value="annual">{t("types.annual")}</option>
+                  <option value="semi_annual">{t("types.semiAnnual")}</option>
+                  <option value="quarterly">{t("types.quarterly")}</option>
+                  <option value="custom">{t("types.custom")}</option>
                 </select>
               </div>
 
@@ -291,7 +300,7 @@ export default function NewReviewCyclePage() {
                     <p className="text-xs font-medium text-blue-400">{t("timeline.selfReview")}</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       {selfReviewDeadline
-                        ? `Due ${new Date(selfReviewDeadline).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                        ? `Due ${formatDateShort(selfReviewDeadline)}`
                         : t("timeline.noDeadline")}
                     </p>
                   </div>
@@ -300,7 +309,7 @@ export default function NewReviewCyclePage() {
                     <p className="text-xs font-medium text-purple-400">{t("timeline.peerReview")}</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       {peerReviewDeadline
-                        ? `Due ${new Date(peerReviewDeadline).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                        ? `Due ${formatDateShort(peerReviewDeadline)}`
                         : t("timeline.noDeadline")}
                     </p>
                   </div>
@@ -309,7 +318,7 @@ export default function NewReviewCyclePage() {
                     <p className="text-xs font-medium text-amber-400">{t("timeline.managerReview")}</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       {managerReviewDeadline
-                        ? `Due ${new Date(managerReviewDeadline).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                        ? `Due ${formatDateShort(managerReviewDeadline)}`
                         : t("timeline.noDeadline")}
                     </p>
                   </div>
@@ -318,13 +327,13 @@ export default function NewReviewCyclePage() {
                 {/* Period range */}
                 <div className="flex items-center justify-between mt-4 pt-3 border-t border-border">
                   <span className="text-xs text-muted-foreground">
-                    {new Date(periodStart).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                    {formatDate(periodStart)}
                   </span>
                   <span className="text-xs text-muted-foreground">
                     {cycleType === "quarterly" ? "~3 months" : cycleType === "semi_annual" ? "~6 months" : cycleType === "annual" ? "~12 months" : "Custom"}
                   </span>
                   <span className="text-xs text-muted-foreground">
-                    {new Date(periodEnd).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                    {formatDate(periodEnd)}
                   </span>
                 </div>
               </div>
@@ -394,7 +403,13 @@ export default function NewReviewCyclePage() {
                         min="0"
                         max="10"
                         value={minPeerReviewers}
-                        onChange={(e) => setMinPeerReviewers(parseInt(e.target.value))}
+                        onChange={(e) => {
+                          // Clearing the field yields NaN; default to 0
+                          // so the body we POST has a number, not NaN
+                          // (Pydantic rejects NaN at the boundary).
+                          const parsed = parseInt(e.target.value, 10);
+                          setMinPeerReviewers(Number.isNaN(parsed) ? 0 : parsed);
+                        }}
                         className="w-full bg-muted border border-border rounded-lg px-4 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500"
                       />
                     </div>
@@ -407,7 +422,12 @@ export default function NewReviewCyclePage() {
                         min="1"
                         max="20"
                         value={maxPeerReviewers}
-                        onChange={(e) => setMaxPeerReviewers(parseInt(e.target.value))}
+                        onChange={(e) => {
+                          // See min-reviewers note — NaN -> 1 (the
+                          // min boundary of this input).
+                          const parsed = parseInt(e.target.value, 10);
+                          setMaxPeerReviewers(Number.isNaN(parsed) ? 1 : parsed);
+                        }}
                         className="w-full bg-muted border border-border rounded-lg px-4 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500"
                       />
                     </div>
@@ -422,9 +442,9 @@ export default function NewReviewCyclePage() {
                       onChange={(e) => setPeerSelectionMode(e.target.value)}
                       className="w-full bg-muted border border-border rounded-lg px-4 py-2.5 text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500"
                     >
-                      <option value="employee_choice">Employee Choice Only</option>
-                      <option value="manager_assigned">Manager Assigned Only</option>
-                      <option value="both">Both (Recommended)</option>
+                      <option value="employee_choice">{t("peerSelectionModes.employeeChoice")}</option>
+                      <option value="manager_assigned">{t("peerSelectionModes.managerAssigned")}</option>
+                      <option value="both">{t("peerSelectionModes.both")}</option>
                     </select>
                     <p className="text-xs text-muted-foreground mt-1">
                       {t("settings.peerSelectionHelp")}
@@ -466,15 +486,27 @@ export default function NewReviewCyclePage() {
               href="/reviews/cycles"
               className="px-6 py-2.5 text-muted-foreground hover:text-foreground transition"
             >
-              Cancel
+              {tc("cancel")}
             </Link>
             <span
               data-testid="create-cycle-tooltip"
               title={(!name || !periodStart || !periodEnd || !!dateValidationError) ? t("disabledTooltip") : ""}
             >
+              {/* Screen readers don't parse the `title` on the
+                  wrapping span when the inner button is focused —
+                  surface the same disabled-reason via a hidden
+                  description that the button references explicitly. */}
+              <span id="create-cycle-disabled-reason" className="sr-only">
+                {t("disabledTooltip")}
+              </span>
               <button
                 type="submit"
                 disabled={isSubmitting || !name || !periodStart || !periodEnd || !!dateValidationError}
+                aria-describedby={
+                  !name || !periodStart || !periodEnd || !!dateValidationError
+                    ? "create-cycle-disabled-reason"
+                    : undefined
+                }
                 className="flex items-center gap-2 px-6 py-2.5 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-600/50 disabled:cursor-not-allowed text-white rounded-lg transition font-medium"
               >
                 {isSubmitting ? (

@@ -6,10 +6,33 @@ from contextlib import asynccontextmanager, contextmanager
 from typing import Generator
 
 from sqlalchemy import create_engine
+from sqlalchemy.dialects.postgresql import ARRAY, INET, JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from aexy.core.config import get_settings
+
+
+# SQLite dialect shims so test suites that hit `sqlite+aiosqlite:///:memory:`
+# can still compile models declared with PostgreSQL-specific types. Production
+# always runs against PostgreSQL, so these shims are inert at runtime; they
+# only matter when `tests/conftest.py` builds a transient SQLite schema via
+# `Base.metadata.create_all()`. Without them the test suite fails before any
+# test body runs (`can't render element of type ARRAY` / `… JSONB`).
+@compiles(ARRAY, "sqlite")
+def _compile_array_sqlite(type_, compiler, **kw):  # noqa: ANN001
+    return "JSON"
+
+
+@compiles(JSONB, "sqlite")
+def _compile_jsonb_sqlite(type_, compiler, **kw):  # noqa: ANN001
+    return "JSON"
+
+
+@compiles(INET, "sqlite")
+def _compile_inet_sqlite(type_, compiler, **kw):  # noqa: ANN001
+    return "VARCHAR(45)"
 
 
 class Base(DeclarativeBase):

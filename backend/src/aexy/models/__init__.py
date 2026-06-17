@@ -1,7 +1,7 @@
 """Database models for Aexy."""
 
 from aexy.models.plan import Plan, PlanTier, BillingModel, DEFAULT_PLANS
-from aexy.models.developer import Developer, GitHubConnection, GitHubInstallation, GoogleConnection
+from aexy.models.developer import Developer, DeveloperEmailAlias, GitHubConnection, GitHubInstallation, GoogleConnection, MicrosoftConnection
 from aexy.models.billing import (
     CustomerBilling,
     Subscription,
@@ -37,6 +37,8 @@ from aexy.models.repository import (
     Repository,
     DeveloperRepository,
     DeveloperOrganization,
+    WorkspaceRepository,
+    TeamRepository,
 )
 from aexy.models.workspace import (
     Workspace,
@@ -56,9 +58,11 @@ from aexy.models.sprint import (
     SprintPlanningSession,
     SprintRetrospective,
     WorkspaceTaskStatus,
+    WorkspaceStatusCategory,
     WorkspaceCustomField,
     TaskGitHubLink,
     TaskActivity,
+    TaskAttachment,
     TaskTemplate,
 )
 from aexy.models.epic import Epic
@@ -111,6 +115,7 @@ from aexy.models.agent_policy import (
     PolicyDecisionType,
     ConfigChangeType,
 )
+from aexy.models.agent_draft import AgentDraft
 from aexy.models.oncall import (
     OnCallConfig,
     OnCallSchedule,
@@ -127,6 +132,9 @@ from aexy.models.documentation import (
     CollaborationSession,
     DocumentCollaborator,
     DocumentSyncQueue,
+    DocumentProposedEdit,
+    ProposedEditSource,
+    ProposedEditStatus,
     DocumentStatus,
     DocumentLinkType,
     DocumentPermission,
@@ -432,6 +440,23 @@ from aexy.models.compliance_document import (
     ComplianceEntityType,
     ComplianceDocumentLinkType,
 )
+from aexy.models.drive import (
+    DriveFile,
+    SmartView,
+)
+from aexy.models.file_metadata import (
+    FileMetadata,
+    FileEmbedding,
+    VideoAnnotation,
+    SOURCE_DRIVE_FILE,
+    SOURCE_TASK_ATTACHMENT,
+    SOURCE_COMPLIANCE_DOCUMENT,
+    ALL_SOURCE_TYPES,
+    AI_STATUS_PENDING,
+    AI_STATUS_PROCESSING,
+    AI_STATUS_DONE,
+    AI_STATUS_FAILED,
+)
 from aexy.models.reminder import (
     Reminder,
     ReminderInstance,
@@ -504,6 +529,8 @@ from aexy.models.api_token import ApiToken
 from aexy.models.ask import AskConversation, AskMessage, AskConversationParticipant, AskShareLink
 from aexy.models.ai_feedback import AIFeedback
 from aexy.models.llm_prompt_log import LLMPromptLog
+from aexy.models.llm_analysis_cache import LlmAnalysisCache
+from aexy.models.insights_snapshot import InsightsSnapshot
 from aexy.models.chat import (
     ChatChannel,
     ChatChannelMember,
@@ -532,9 +559,11 @@ __all__ = [
     "UsageType",
     # Developer
     "Developer",
+    "DeveloperEmailAlias",
     "GitHubConnection",
     "GitHubInstallation",
     "GoogleConnection",
+    "MicrosoftConnection",
     # Activity
     "Commit",
     "PullRequest",
@@ -578,9 +607,11 @@ __all__ = [
     "SprintRetrospective",
     # Task Configuration
     "WorkspaceTaskStatus",
+    "WorkspaceStatusCategory",
     "WorkspaceCustomField",
     "TaskGitHubLink",
     "TaskActivity",
+    "TaskAttachment",
     # Epic
     "Epic",
     # User Story
@@ -632,6 +663,7 @@ __all__ = [
     "NOTIFICATION_CATEGORIES",
     "EVENT_TYPE_TO_CATEGORY",
     # Agent Policies
+    "AgentDraft",
     "AgentPolicy",
     "AgentPolicyDecision",
     "AgentConfigAudit",
@@ -653,6 +685,9 @@ __all__ = [
     "CollaborationSession",
     "DocumentCollaborator",
     "DocumentSyncQueue",
+    "DocumentProposedEdit",
+    "ProposedEditSource",
+    "ProposedEditStatus",
     "DocumentStatus",
     "DocumentLinkType",
     "DocumentPermission",
@@ -937,6 +972,21 @@ __all__ = [
     "ComplianceDocumentStatus",
     "ComplianceEntityType",
     "ComplianceDocumentLinkType",
+    # Drive (collaborative file storage)
+    "DriveFile",
+    "SmartView",
+    # Polymorphic file metadata (drive_file / task_attachment / compliance_document)
+    "FileMetadata",
+    "FileEmbedding",
+    "VideoAnnotation",
+    "SOURCE_DRIVE_FILE",
+    "SOURCE_TASK_ATTACHMENT",
+    "SOURCE_COMPLIANCE_DOCUMENT",
+    "ALL_SOURCE_TYPES",
+    "AI_STATUS_PENDING",
+    "AI_STATUS_PROCESSING",
+    "AI_STATUS_DONE",
+    "AI_STATUS_FAILED",
     # Reminders
     "Reminder",
     "ReminderInstance",
@@ -1033,6 +1083,9 @@ __all__ = [
     "AIFeedback",
     # LLM Prompt Log
     "LLMPromptLog",
+    # LLM Analysis Cache + Insights Snapshots (GitHub AI pipeline)
+    "LlmAnalysisCache",
+    "InsightsSnapshot",
     # Team Chat
     "ChatChannel",
     "ChatChannelMember",

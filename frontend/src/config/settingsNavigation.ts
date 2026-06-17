@@ -21,6 +21,7 @@ import {
   Bell,
   Settings2,
   Receipt,
+  Fingerprint,
   type LucideIcon,
 } from "lucide-react";
 
@@ -92,6 +93,14 @@ export const settingsNavigation: SettingsNavCategory[] = [
         icon: FolderGit2,
         description: "Manage GitHub repositories for analysis and sync",
         keywords: ["github", "repo", "sync", "git", "code"],
+      },
+      {
+        id: "identity",
+        label: "Identity",
+        href: "/settings/identity",
+        icon: Fingerprint,
+        description: "Reclaim commits attributed to an orphaned GitHub identity",
+        keywords: ["ghost", "claim", "github", "commits", "merge", "attribution"],
       },
       {
         id: "projects",
@@ -242,6 +251,15 @@ export const settingsNavigation: SettingsNavCategory[] = [
         icon: CreditCard,
         description: "Manage your subscription, billing, and payment methods",
         keywords: ["billing", "payment", "invoice", "stripe", "credit card"],
+      },
+      {
+        id: "billing-breakdown",
+        label: "Billing Breakdown",
+        href: "/settings/billing/breakdown",
+        icon: Receipt,
+        description: "Line-item breakdown of charges, usage, rates, and prior periods",
+        adminOnly: true,
+        keywords: ["billing", "breakdown", "line item", "usage", "rate", "invoice", "history"],
       },
       {
         id: "usage",

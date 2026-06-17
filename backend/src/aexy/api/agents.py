@@ -1,13 +1,21 @@
 """API endpoints for AI Agents."""
 
+import json
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from aexy.core.database import get_db
 from aexy.api.developers import get_current_developer
 from aexy.models.developer import Developer
 from aexy.services.workspace_service import WorkspaceService
 from aexy.services.agent_service import AgentService
+from aexy.services.agent_draft_service import AgentDraftService
 from aexy.services.writing_style_service import WritingStyleService
 from aexy.services.agent_email_service import AgentEmailService
 from aexy.services.activity_logger import log_activity
@@ -61,6 +69,24 @@ async def check_workspace_permission(
             status_code=403,
             detail="Insufficient permissions for this workspace",
         )
+
+
+async def _assert_agent_in_workspace(
+    db: AsyncSession, workspace_id: str, agent_id: str
+) -> None:
+    """Verify a CRMAgent belongs to this workspace before exposing its
+    inbox/messages/routing rules. Stops cross-workspace probes via the
+    `agent_id` path parameter."""
+    from sqlalchemy import select
+    from aexy.models.agent import CRMAgent
+    result = await db.execute(
+        select(CRMAgent.id).where(
+            CRMAgent.id == agent_id,
+            CRMAgent.workspace_id == workspace_id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
 
 
 # =============================================================================
@@ -170,6 +196,135 @@ async def list_available_tools(
     """List all available tools for agent configuration."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
     return AgentService.get_available_tools()
+
+
+class AgentDraftPayload(BaseModel):
+    """Opaque wizard payload (UX-DEF-003). Whatever shape the
+    frontend's wizard state has — we don't validate contents."""
+
+    payload: dict
+
+
+@router.get("/drafts/me")
+async def get_my_agent_draft(
+    workspace_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Return the current developer's in-progress wizard draft for
+    this workspace, or 404 if none. UX-DEF-003.
+
+    Returning a 404 (not a 200 with `null`) so the frontend hook can
+    cleanly distinguish "no draft" from "draft is the literal null
+    payload" — the latter would be a frontend bug but we'd rather
+    not have the API encode it.
+    """
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    service = AgentDraftService(db)
+    draft = await service.get_draft(
+        workspace_id=workspace_id,
+        developer_id=str(current_developer.id),
+    )
+    if not draft:
+        raise HTTPException(status_code=404, detail="No draft")
+    return {
+        "id": draft.id,
+        "payload": draft.payload,
+        "created_at": draft.created_at.isoformat() if draft.created_at else None,
+        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+    }
+
+
+@router.put("/drafts/me")
+async def upsert_my_agent_draft(
+    workspace_id: str,
+    data: AgentDraftPayload,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Save (or overwrite) the developer's draft for this workspace.
+
+    PUT semantics — one save fully replaces the prior payload.
+    Frontend calls this debounced as the user types. Returns the
+    persisted updated_at so the UI can render "last saved Xs ago".
+    """
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    service = AgentDraftService(db)
+    draft = await service.save_draft(
+        workspace_id=workspace_id,
+        developer_id=str(current_developer.id),
+        payload=data.payload,
+    )
+    await db.commit()
+    return {
+        "id": draft.id,
+        "payload": draft.payload,
+        "created_at": draft.created_at.isoformat() if draft.created_at else None,
+        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+    }
+
+
+@router.delete("/drafts/me", status_code=204)
+async def delete_my_agent_draft(
+    workspace_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Drop the developer's draft. Idempotent — fires from the
+    frontend after a successful agent creation; the response is
+    always 204 even when nothing was there to delete."""
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    service = AgentDraftService(db)
+    await service.delete_draft(
+        workspace_id=workspace_id,
+        developer_id=str(current_developer.id),
+    )
+    await db.commit()
+    return None
+
+
+@router.get("/defaults")
+async def get_agent_defaults(
+    workspace_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Server-side defaults for new agents (UX-EDT-024).
+
+    Centralizes what was previously hardcoded as `gemini-2.0-flash` in
+    four frontend call-sites. Reads from `LLMSettings` so deploys can
+    flip the default provider without a frontend ship.
+
+    Returns the provider + its current default model, plus the
+    project-wide defaults for temperature / max_tokens / behavior
+    knobs. Frontend creation flows (wizard, edit page) read from
+    this on mount instead of carrying their own defaults.
+    """
+    from aexy.core.config import settings
+
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+
+    # Resolve the default model per provider so the wizard's LLM step
+    # can pre-fill correctly when the operator switches providers.
+    provider_models = {
+        "claude": settings.llm.llm_model if settings.llm.llm_provider == "claude" else "claude-sonnet-4-20250514",
+        "gemini": getattr(settings.llm, "gemini_model", "gemini-2.0-flash"),
+        "openai": getattr(settings.llm, "openai_model", "gpt-4o-mini"),
+        "ollama": getattr(settings.llm, "ollama_model", "codellama:13b"),
+        "lmstudio": getattr(settings.llm, "lmstudio_model", "qwen/qwen3.5-9b"),
+    }
+    default_provider = settings.llm.llm_provider
+    return {
+        "default_provider": default_provider,
+        "default_model": provider_models.get(default_provider, settings.llm.llm_model),
+        "provider_models": provider_models,
+        "default_temperature": 0.7,
+        "default_max_tokens": 2000,
+        "default_confidence_threshold": 0.7,
+        "default_require_approval_below": 0.8,
+        "default_max_daily_responses": 100,
+        "default_response_delay_minutes": 5,
+    }
 
 
 @router.get("/check-handle", response_model=HandleAvailabilityResponse)
@@ -582,6 +737,106 @@ async def send_message(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class PreviewPromptRequest(BaseModel):
+    """Sample input for the prompt preview affordance (UX-EDT-018)."""
+
+    input: str = Field(..., min_length=1, max_length=4000)
+
+
+@router.post("/{agent_id}/test/prompt")
+async def test_prompt(
+    workspace_id: str,
+    agent_id: str,
+    data: PreviewPromptRequest,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Preview what the agent would respond to a sample input.
+
+    Runs the agent's system prompt + LLM config but WITHOUT tools, so
+    nothing the user previews can have side effects. No execution row
+    is persisted. UX-EDT-018.
+
+    Returns the full assistant content + duration + token usage so the
+    Prompts/LLM tabs can render an in-place preview before the user
+    commits config changes.
+    """
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    service = AgentService(db)
+    agent = await service.get_agent(agent_id)
+    if not agent or agent.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    try:
+        result = await service.preview_prompt(
+            agent_id=agent_id,
+            sample_input=data.input,
+            user_id=str(current_developer.id),
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Prompt preview failed: %s", e)
+        raise HTTPException(status_code=500, detail="Preview failed. Check your LLM config.")
+
+
+@router.post("/{agent_id}/conversations/{conversation_id}/messages/stream")
+async def stream_message(
+    workspace_id: str,
+    agent_id: str,
+    conversation_id: str,
+    data: MessageCreate,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Send a message and stream the agent response as SSE.
+
+    Event types: user_message, text_delta, tool_use_start, tool_result,
+    usage, done, error. The frontend's chat surface consumes this via
+    fetch + ReadableStream; the legacy non-streaming endpoint above
+    stays in place for non-UI callers (mobile webview, etc).
+    """
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
+    service = AgentService(db)
+
+    conversation = await service.get_conversation(conversation_id)
+    if (
+        not conversation
+        or conversation.agent_id != agent_id
+        or str(conversation.workspace_id) != workspace_id
+    ):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    async def generate():
+        try:
+            async for chunk in service.stream_message(
+                conversation_id=conversation_id,
+                content=data.content,
+                user_id=str(current_developer.id),
+            ):
+                yield chunk
+        except Exception as e:
+            logger.error("Agent stream failed: %s", e, exc_info=True)
+            # service.stream_message already persists + emits its own
+            # error event for non-cancel exceptions; this catch is
+            # belt-and-suspenders for surface-level failures (e.g.
+            # workspace fetch). Mirror the SSE shape so the frontend
+            # parser doesn't choke.
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Server error during agent run'})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.patch("/{agent_id}/conversations/{conversation_id}", response_model=ConversationResponse)
 async def update_conversation(
     workspace_id: str,
@@ -928,6 +1183,7 @@ async def get_inbox_message(
 ):
     """Get a specific inbox message with full details."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
 
     email_service = AgentEmailService(db)
     message = await email_service.get_inbox_message(message_id)
@@ -936,6 +1192,44 @@ async def get_inbox_message(
         raise HTTPException(status_code=404, detail="Message not found")
 
     return message
+
+
+@router.get("/{agent_id}/inbox/{message_id}/thread", response_model=list[InboxMessageResponse])
+async def get_inbox_thread(
+    workspace_id: str,
+    agent_id: str,
+    message_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Get every message in the same thread as the given message.
+
+    UX-INB-027 / UX-DEF-007: surfaces parent + sibling history so the
+    inbox detail can render a thread strip. Resolution order:
+
+      1. If the message has a `thread_id`, return all rows in that
+         thread (this is the common path — most mail providers set
+         the thread id on every reply).
+      2. Otherwise fall back to RFC 5322 in_reply_to chasing: walk
+         up via in_reply_to_message_id until we hit a root, then
+         return that root + every message that points back to any
+         message we collected.
+
+    Ordered by created_at ASC so the UI can render top→bottom.
+    """
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
+
+    email_service = AgentEmailService(db)
+    anchor = await email_service.get_inbox_message(message_id)
+    if not anchor or anchor.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    return await email_service.get_thread_for_message(
+        message_id=message_id,
+        agent_id=agent_id,
+        workspace_id=workspace_id,
+    )
 
 
 @router.post("/{agent_id}/inbox/{message_id}/reply", response_model=InboxActionResponse)
@@ -949,6 +1243,7 @@ async def reply_to_inbox_message(
 ):
     """Send a reply to an inbox message (manual or AI-suggested)."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
 
     email_service = AgentEmailService(db)
     message = await email_service.get_inbox_message(message_id)
@@ -985,6 +1280,7 @@ async def escalate_inbox_message(
 ):
     """Escalate a message to a team member."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
 
     email_service = AgentEmailService(db)
     message = await email_service.get_inbox_message(message_id)
@@ -1016,6 +1312,7 @@ async def archive_inbox_message(
 ):
     """Archive an inbox message."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
 
     email_service = AgentEmailService(db)
     message = await email_service.get_inbox_message(message_id)
@@ -1033,6 +1330,39 @@ async def archive_inbox_message(
     )
 
 
+@router.post("/{agent_id}/inbox/{message_id}/unarchive", response_model=InboxActionResponse)
+async def unarchive_inbox_message(
+    workspace_id: str,
+    agent_id: str,
+    message_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_developer: Developer = Depends(get_current_developer),
+):
+    """Restore an archived inbox message (UX-INB-022).
+
+    Inverse of archive — flips status back to `pending` so the AI
+    processing queue picks it up again. Preserves the responded /
+    escalated audit fields if they were set before archive.
+    """
+    await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
+
+    email_service = AgentEmailService(db)
+    message = await email_service.get_inbox_message(message_id)
+
+    if not message or message.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    await email_service.unarchive_message(message_id)
+    await db.commit()
+
+    return InboxActionResponse(
+        success=True,
+        message="Message restored",
+        inbox_message_id=message_id,
+    )
+
+
 @router.post("/{agent_id}/inbox/{message_id}/process", response_model=InboxMessageResponse)
 async def process_inbox_message(
     workspace_id: str,
@@ -1043,6 +1373,7 @@ async def process_inbox_message(
 ):
     """Process an inbox message with AI (classify, summarize, suggest response)."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id))
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
 
     email_service = AgentEmailService(db)
     message = await email_service.get_inbox_message(message_id)
@@ -1124,6 +1455,20 @@ async def delete_routing_rule(
 ):
     """Delete an email routing rule."""
     await check_workspace_permission(db, workspace_id, str(current_developer.id), "admin")
+    await _assert_agent_in_workspace(db, workspace_id, agent_id)
+
+    # Verify the rule belongs to this agent in this workspace.
+    from sqlalchemy import select
+    from aexy.models.agent_inbox import AgentEmailRoutingRule
+    rule_check = await db.execute(
+        select(AgentEmailRoutingRule.id).where(
+            AgentEmailRoutingRule.id == rule_id,
+            AgentEmailRoutingRule.agent_id == agent_id,
+            AgentEmailRoutingRule.workspace_id == workspace_id,
+        )
+    )
+    if rule_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Routing rule not found")
 
     email_service = AgentEmailService(db)
     success = await email_service.delete_routing_rule(rule_id)

@@ -514,3 +514,66 @@ class DocumentSpaceMemberResponse(BaseModel):
     invited_by_name: str | None = None
     joined_at: datetime | None = None
     created_at: datetime
+
+
+# =============================================================================
+# Proposed Edits — AI suggestion review queue
+# =============================================================================
+
+ProposedEditSourceLiteral = Literal[
+    "code_change_sync",
+    "regenerate",
+    "suggest_improvements",
+    "manual_ai_edit",
+]
+
+ProposedEditStatusLiteral = Literal[
+    "pending",
+    "approved",
+    "rejected",
+    "superseded",
+]
+
+
+class ProposedEditCreate(BaseModel):
+    """Payload to create a new proposed edit for a document.
+
+    Created by the regenerate / sync / suggest-improvements service
+    paths — not exposed publicly for arbitrary AI output insertion
+    (the public surface is the existing generate / suggest endpoints,
+    which now route through the service).
+    """
+
+    source: ProposedEditSourceLiteral
+    proposed_content: dict[str, Any]
+    base_content_sha: str | None = None
+    diff_summary: dict[str, Any] | None = None
+
+
+class ProposedEditResponse(BaseModel):
+    """Full proposed-edit row as returned by the API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    document_id: str
+    source: ProposedEditSourceLiteral
+    proposed_content: dict[str, Any]
+    base_content_sha: str | None = None
+    diff_summary: dict[str, Any] | None = None
+    status: ProposedEditStatusLiteral
+    proposed_by_id: str | None = None
+    proposed_at: datetime
+    reviewed_by_id: str | None = None
+    reviewed_at: datetime | None = None
+    reason: str | None = None
+    # Computed: True when base_content_sha != document.content_sha at
+    # read-time. Surfaces the merge-conflict badge in the FE.
+    is_stale: bool = False
+
+
+class ProposedEditReject(BaseModel):
+    """Payload for the reject endpoint. Reason is optional but
+    encouraged — the FE prompts for it."""
+
+    reason: str | None = None

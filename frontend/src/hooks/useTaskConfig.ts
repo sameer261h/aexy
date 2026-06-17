@@ -6,12 +6,21 @@ import {
   TaskStatusConfig,
   CustomField,
   StatusCategory,
+  CategorySemantics,
+  WorkspaceStatusCategory,
   CustomFieldType,
   CustomFieldOption,
 } from "@/lib/api";
+import { invalidateTaskCaches } from "@/hooks/invalidateTaskCaches";
 
 // Task Statuses
-export function useTaskStatuses(workspaceId: string | null) {
+// When `projectId` is supplied the hook returns the project's status set, with
+// the backend falling back to workspace defaults if the project hasn't
+// customized yet. Use this everywhere a board column is rendered.
+export function useTaskStatuses(
+  workspaceId: string | null,
+  projectId: string | null = null,
+) {
   const queryClient = useQueryClient();
 
   const {
@@ -20,8 +29,8 @@ export function useTaskStatuses(workspaceId: string | null) {
     error,
     refetch,
   } = useQuery<TaskStatusConfig[]>({
-    queryKey: ["taskStatuses", workspaceId],
-    queryFn: () => taskConfigApi.getStatuses(workspaceId!),
+    queryKey: ["taskStatuses", workspaceId, projectId],
+    queryFn: () => taskConfigApi.getStatuses(workspaceId!, { projectId }),
     enabled: !!workspaceId,
   });
 
@@ -32,9 +41,27 @@ export function useTaskStatuses(workspaceId: string | null) {
       color?: string;
       icon?: string;
       is_default?: boolean;
-    }) => taskConfigApi.createStatus(workspaceId!, data),
+    }) =>
+      taskConfigApi.createStatus(workspaceId!, {
+        ...data,
+        // When this hook is project-scoped, every new status is created
+        // as a project override rather than a workspace default.
+        ...(projectId ? { project_id: projectId } : {}),
+      }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId] });
+      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId, projectId] });
+    },
+  });
+
+  const cloneFromWorkspaceMutation = useMutation({
+    mutationFn: () => {
+      if (!workspaceId || !projectId) {
+        throw new Error("cloneFromWorkspace requires both workspaceId and projectId");
+      }
+      return taskConfigApi.cloneToProject(workspaceId, projectId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId, projectId] });
     },
   });
 
@@ -53,15 +80,25 @@ export function useTaskStatuses(workspaceId: string | null) {
       };
     }) => taskConfigApi.updateStatus(workspaceId!, statusId, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId] });
+      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId, projectId] });
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (statusId: string) =>
-      taskConfigApi.deleteStatus(workspaceId!, statusId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId] });
+    mutationFn: ({
+      statusId,
+      migrateTo,
+    }: {
+      statusId: string;
+      migrateTo?: string;
+    }) => taskConfigApi.deleteStatus(workspaceId!, statusId, { migrateTo }),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId, projectId] });
+      // Only blow away the task caches when tasks were actually rewritten —
+      // the common "delete an unused status" path leaves them alone.
+      if (variables.migrateTo) {
+        invalidateTaskCaches(queryClient, workspaceId);
+      }
     },
   });
 
@@ -69,7 +106,7 @@ export function useTaskStatuses(workspaceId: string | null) {
     mutationFn: (statusIds: string[]) =>
       taskConfigApi.reorderStatuses(workspaceId!, statusIds),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId] });
+      queryClient.invalidateQueries({ queryKey: ["taskStatuses", workspaceId, projectId] });
     },
   });
 
@@ -83,6 +120,13 @@ export function useTaskStatuses(workspaceId: string | null) {
     return (statuses || []).find((s) => s.slug === slug);
   };
 
+  // True when the rows we're showing for a project are actually workspace
+  // defaults (the project hasn't customized yet). Useful for "Customize for
+  // this project" CTAs in the UI.
+  const isUsingWorkspaceFallback = !!projectId && (statuses || []).every(
+    (s) => s.project_id === null,
+  );
+
   return {
     statuses: statuses || [],
     isLoading,
@@ -92,6 +136,9 @@ export function useTaskStatuses(workspaceId: string | null) {
     updateStatus: updateMutation.mutateAsync,
     deleteStatus: deleteMutation.mutateAsync,
     reorderStatuses: reorderMutation.mutateAsync,
+    cloneFromWorkspace: cloneFromWorkspaceMutation.mutateAsync,
+    isCloning: cloneFromWorkspaceMutation.isPending,
+    isUsingWorkspaceFallback,
     isCreating: createMutation.isPending,
     isUpdating: updateMutation.isPending,
     isDeleting: deleteMutation.isPending,
@@ -102,6 +149,84 @@ export function useTaskStatuses(workspaceId: string | null) {
     todoStatuses: getStatusesByCategory("todo"),
     inProgressStatuses: getStatusesByCategory("in_progress"),
     doneStatuses: getStatusesByCategory("done"),
+  };
+}
+
+// Status Categories
+// Mirrors useTaskStatuses scope semantics: when `projectId` is supplied the
+// hook returns the project's category set, falling back to workspace defaults
+// when the project has no overrides. Used by the StatusModal so the bucket
+// dropdown reflects whichever categories the workspace has defined.
+export function useStatusCategories(
+  workspaceId: string | null,
+  projectId: string | null = null,
+) {
+  const queryClient = useQueryClient();
+
+  const {
+    data: categories,
+    isLoading,
+    error,
+    refetch,
+  } = useQuery<WorkspaceStatusCategory[]>({
+    queryKey: ["statusCategories", workspaceId, projectId],
+    queryFn: () => taskConfigApi.getCategories(workspaceId!, { projectId }),
+    enabled: !!workspaceId,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (data: {
+      slug: string;
+      label: string;
+      color?: string;
+      semantics?: CategorySemantics;
+      is_default?: boolean;
+    }) =>
+      taskConfigApi.createCategory(workspaceId!, {
+        ...data,
+        ...(projectId ? { project_id: projectId } : {}),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["statusCategories", workspaceId, projectId] });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({
+      categoryId,
+      data,
+    }: {
+      categoryId: string;
+      data: {
+        label?: string;
+        color?: string;
+        semantics?: CategorySemantics;
+        is_default?: boolean;
+      };
+    }) => taskConfigApi.updateCategory(workspaceId!, categoryId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["statusCategories", workspaceId, projectId] });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (categoryId: string) => taskConfigApi.deleteCategory(workspaceId!, categoryId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["statusCategories", workspaceId, projectId] });
+    },
+  });
+
+  return {
+    categories: categories || [],
+    isLoading,
+    error,
+    refetch,
+    createCategory: createMutation.mutateAsync,
+    updateCategory: updateMutation.mutateAsync,
+    deleteCategory: deleteMutation.mutateAsync,
+    isCreating: createMutation.isPending,
+    isUpdating: updateMutation.isPending,
+    isDeleting: deleteMutation.isPending,
   };
 }
 

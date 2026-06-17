@@ -20,7 +20,19 @@ const mockWorkspace = {
   slug: "test-workspace",
 };
 
-const mockWorkspaceMember = {
+// `joined_at` widened to `string | null` here so both mocks share one
+// inferred shape — otherwise the helper's `members?: typeof X[]` narrows
+// to `string` and the null-date fixture below stops type-checking.
+const mockWorkspaceMember: {
+  id: string;
+  workspace_id: string;
+  developer_id: string;
+  developer_name: string;
+  developer_email: string;
+  developer_avatar_url: string;
+  role: string;
+  joined_at: string | null;
+} = {
   id: "member-1",
   workspace_id: "ws-1",
   developer_id: "test-user-123",
@@ -31,7 +43,7 @@ const mockWorkspaceMember = {
   joined_at: "2025-06-15T10:00:00Z",
 };
 
-const mockWorkspaceMemberNoDate = {
+const mockWorkspaceMemberNoDate: typeof mockWorkspaceMember = {
   id: "member-2",
   workspace_id: "ws-1",
   developer_id: "user-no-date",
@@ -51,6 +63,16 @@ async function setupReviewsMocks(
     members?: typeof mockWorkspaceMember[];
   }
 ) {
+  // Middleware redirects auth-required paths unless this cookie is
+  // present. The cookie is normally mirrored from localStorage by
+  // useAuth on mount — too late for SSR. Seed it directly.
+  await page.context().addCookies([
+    {
+      name: "aexy_authed",
+      value: "1",
+      url: process.env.PLAYWRIGHT_BASE_URL || "http://localhost:3000",
+    },
+  ]);
   await page.addInitScript(() => {
     localStorage.setItem("token", "fake-test-token");
   });
@@ -421,13 +443,15 @@ test.describe("P1.1: Goal deletion — styled confirmation modal", () => {
     // Click delete button
     await page.click("[data-testid='delete-goal-btn']");
 
-    // Should show a styled modal, NOT a browser confirm
-    await expect(page.locator("[data-testid='delete-confirm-modal']")).toBeVisible();
-    await expect(page.locator("[data-testid='delete-confirm-modal']")).toContainText(/delete|remove/i);
+    // Should render the shared Radix ConfirmDialog (role="dialog"
+    // with focus trap + Esc), NOT a native browser confirm.
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText(/delete|remove/i);
 
-    // Should have Cancel and Confirm buttons
-    await expect(page.locator("[data-testid='delete-confirm-cancel']")).toBeVisible();
-    await expect(page.locator("[data-testid='delete-confirm-submit']")).toBeVisible();
+    // Cancel + primary action are both real <button>s inside the dialog.
+    await expect(dialog.getByRole("button", { name: /cancel/i })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: /delete goal/i })).toBeVisible();
   });
 
   test("cancel button closes modal without deleting", async ({ page }) => {
@@ -461,13 +485,14 @@ test.describe("P1.1: Goal deletion — styled confirmation modal", () => {
     await page.waitForSelector("text=Test Goal");
 
     await page.click("[data-testid='delete-goal-btn']");
-    await expect(page.locator("[data-testid='delete-confirm-modal']")).toBeVisible();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
 
     // Click cancel
-    await page.click("[data-testid='delete-confirm-cancel']");
+    await dialog.getByRole("button", { name: /cancel/i }).click();
 
-    // Modal should close, goal should still be visible
-    await expect(page.locator("[data-testid='delete-confirm-modal']")).toHaveCount(0);
+    // Dialog should unmount; goal should still be visible.
+    await expect(dialog).toHaveCount(0);
     await expect(page.locator("text=Test Goal")).toBeVisible();
   });
 });
@@ -720,18 +745,11 @@ test.describe("P1.8: Error toasts on API failures", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe("P2.a11y: Icon-only button labels", () => {
-  test("management view icon buttons have aria-labels", async ({ page }) => {
-    await setupReviewsMocks(page);
-    await page.goto("/reviews/manage");
-    await page.waitForSelector("text=Review Management");
-
-    // Eye button should have aria-label
-    const eyeBtn = page.locator("button[aria-label='Preview member']");
-    await expect(eyeBtn).toBeVisible();
-
-    // Export button should have aria-label or text
-    await expect(page.locator("button:has-text('Export Report')")).toBeVisible();
-  });
+  // Note: the previous "Preview member" eye button + "Export Report"
+  // button on /reviews/manage were dead no-ops (no onClick handlers)
+  // and were removed as part of the UX quick-wins from the reviews
+  // tracker (UX-RV-MGR-001 / MGR-003). When they come back with real
+  // handlers, restore an aria-label assertion here.
 
   test("goal card delete button has aria-label", async ({ page }) => {
     await setupReviewsMocks(page);

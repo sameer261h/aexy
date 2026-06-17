@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {
-  X,
   History,
   Clock,
   RotateCcw,
@@ -16,7 +15,14 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { formatAbsolute, formatRelative } from "@/lib/datetime";
 import { toast } from "sonner";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 
 interface WorkflowVersion {
   id: string;
@@ -186,69 +192,53 @@ export function VersionHistory({
     }
   }, [compareMode, compareVersionA, compareVersionB, loadDiff]);
 
-  if (!isOpen) return null;
-
-  const formatDate = (dateString: string | null) => {
-    if (!dateString) return "Unknown";
-    const date = new Date(dateString);
-    return date.toLocaleString();
-  };
-
-  const formatTimeAgo = (dateString: string | null) => {
-    if (!dateString) return "";
-    const date = new Date(dateString);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
-
-    if (days > 0) return `${days}d ago`;
-    if (hours > 0) return `${hours}h ago`;
-    if (minutes > 0) return `${minutes}m ago`;
-    return "Just now";
-  };
+  // formatDate / formatTimeAgo lifted to lib/datetime.ts (UX-CPY-001).
+  // formatRelative returns "" for null, so wrap with the "Unknown" /
+  // "" fallbacks the prior implementation provided.
+  const formatDate = (dateString: string | null) =>
+    formatAbsolute(dateString) || "Unknown";
+  const formatTimeAgo = formatRelative;
 
   return (
-    <div className="fixed inset-y-0 right-0 w-[450px] bg-muted border-l border-border shadow-xl z-[100] flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-border">
-        <div className="flex items-center gap-2">
-          <History className="h-5 w-5 text-muted-foreground" />
-          <h2 className="text-foreground font-semibold">Version History</h2>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => {
-              setCompareMode(!compareMode);
-              setDiff(null);
-              setCompareVersionA(null);
-              setCompareVersionB(null);
-            }}
-            className={`p-1.5 rounded transition-colors ${
-              compareMode
-                ? "bg-blue-500/20 text-blue-400"
-                : "text-muted-foreground hover:text-foreground hover:bg-accent"
-            }`}
-            title="Compare versions"
-          >
-            <GitCompare className="h-4 w-4" />
-          </button>
-          <button
-            onClick={loadVersions}
-            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-            title="Refresh"
-          >
-            <RefreshCw className="h-4 w-4" />
-          </button>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
+    <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      {/* This sheet historically used `w-[450px]` — wider than the other
+          three drawers. Standardizing on the Sheet primitive's default
+          (w-3/4 sm:max-w-sm ≈ w-96) for visual parity with the rest of
+          the workflow surface. */}
+      <SheetContent side="right" className="p-0 flex flex-col">
+        <SheetHeader className="flex-row items-center justify-between p-4 space-y-0">
+          <div className="flex items-center gap-2">
+            <History className="h-5 w-5 text-muted-foreground" />
+            <SheetTitle>Version History</SheetTitle>
+          </div>
+          <div className="flex items-center gap-1 mr-8">
+            <button
+              onClick={() => {
+                setCompareMode(!compareMode);
+                setDiff(null);
+                setCompareVersionA(null);
+                setCompareVersionB(null);
+              }}
+              aria-label="Compare versions"
+              className={`p-1.5 rounded transition-colors ${
+                compareMode
+                  ? "bg-blue-500/20 text-blue-600 dark:text-blue-400"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
+              }`}
+              title="Compare versions"
+            >
+              <GitCompare className="h-4 w-4" />
+            </button>
+            <button
+              onClick={loadVersions}
+              aria-label="Refresh version history"
+              className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              title="Refresh"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </button>
+          </div>
+        </SheetHeader>
 
       {/* Current Version Banner */}
       <div className="px-4 py-2 bg-accent/50 border-b border-border">
@@ -502,6 +492,7 @@ export function VersionHistory({
           )}
         </div>
       )}
-    </div>
+      </SheetContent>
+    </Sheet>
   );
 }

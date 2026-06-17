@@ -21,9 +21,6 @@ const nextConfig = {
       },
     ],
   },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -35,6 +32,42 @@ const nextConfig = {
         destination: '/public/book/:path*',
       },
     ];
+  },
+  async headers() {
+    // Clickjacking & frame-busting policy.
+    //
+    // Embed surfaces (/embed/*) are *intentionally* iframable by customer
+    // pages — we control them via `frame-ancestors *` (no DENY) plus a
+    // per-link origin allowlist enforced on the API side (WS-074).
+    //
+    // Everything else (the app shell, admin tools, auth pages, and the
+    // marketing landing) is denied framing so an attacker can't render the
+    // logged-in shell or the OAuth callback inside a hostile parent and
+    // pull off clickjacking or token-bleed attacks.
+    const denyFrame = {
+      // Negative-lookahead is anchored to "embed/" so unrelated paths like
+      // /embedded-* still receive clickjacking headers. Without the slash,
+      // /embedded-foo would match neither rule and ship no frame-ancestors.
+      source: "/((?!embed/).*)",
+      headers: [
+        { key: "X-Frame-Options", value: "DENY" },
+        { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+        { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+        { key: "X-Content-Type-Options", value: "nosniff" },
+      ],
+    };
+    const allowEmbedFrame = {
+      source: "/embed/:path*",
+      headers: [
+        // `frame-ancestors *` is intentional — per-link enforcement is on
+        // the API side (TableShareLink.allowed_origins, planned). When
+        // that's deployed, replace `*` with the per-deployment allowlist.
+        { key: "Content-Security-Policy", value: "frame-ancestors *" },
+        { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+        { key: "X-Content-Type-Options", value: "nosniff" },
+      ],
+    };
+    return [denyFrame, allowEmbedFrame];
   },
 };
 

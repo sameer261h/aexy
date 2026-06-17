@@ -6,6 +6,5 @@ export { ExecutionHistory } from "./ExecutionHistory";
 export { TestResultsPanel } from "./TestResultsPanel";
 export { VersionHistory } from "./VersionHistory";
 export { FieldPicker, InlineFieldPicker } from "./FieldPicker";
-export { TemplateSelector } from "./TemplateSelector";
 export * from "./nodes";
 export * from "./edges";

@@ -295,6 +295,22 @@ async def get_poker_session_state(
     db: AsyncSession = Depends(get_db),
 ):
     """Get current state of a planning poker session."""
+    # Caller must be a member of the sprint's workspace; the in-memory state
+    # leaks task titles, votes, and current participants otherwise.
+    from sqlalchemy import select
+    from aexy.models.sprint import Sprint
+    from aexy.services.workspace_service import WorkspaceService
+
+    sprint = (
+        await db.execute(select(Sprint).where(Sprint.id == sprint_id))
+    ).scalar_one_or_none()
+    if not sprint:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sprint not found")
+    if not await WorkspaceService(db).check_permission(
+        str(sprint.workspace_id), str(current_user.id), "viewer"
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a member of this workspace")
+
     state = poker_manager.get_state(session_id)
     if not state:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
@@ -320,6 +336,28 @@ async def poker_websocket(
     if not developer:
         await websocket.close(code=4001, reason="Developer not found")
         return
+
+    # Workspace membership check — resolve the sprint, then require the
+    # connecting developer to be a viewer of its workspace before accepting
+    # the upgrade. Without this, anyone with a valid JWT can join any
+    # session by guessing sprint_id + session_id.
+    from sqlalchemy import select as _select
+    from aexy.core.database import get_async_session
+    from aexy.models.sprint import Sprint
+    from aexy.services.workspace_service import WorkspaceService
+
+    async with get_async_session() as _db:
+        sprint = (
+            await _db.execute(_select(Sprint).where(Sprint.id == sprint_id))
+        ).scalar_one_or_none()
+        if not sprint:
+            await websocket.close(code=4004, reason="Sprint not found")
+            return
+        if not await WorkspaceService(_db).check_permission(
+            str(sprint.workspace_id), str(developer.id), "viewer"
+        ):
+            await websocket.close(code=4003, reason="Not a member of this workspace")
+            return
 
     user_id = str(developer.id)
     user_name = developer.name or "Anonymous"
@@ -702,11 +740,25 @@ async def finalize_poker_session(
         if final_estimate is not None and isinstance(final_estimate, (int, float)):
             task = await task_service.get_task(task_id)
             if task:
-                task.story_points = int(final_estimate)
+                old_points = task.story_points
+                new_points = int(final_estimate)
+                task.story_points = new_points
+                # History tab event so the planning-poker estimate appears as
+                # a points_changed row alongside other activity. Skip when the
+                # value didn't change to keep the log noise-free.
+                if old_points != new_points:
+                    await task_service.log_activity(
+                        task_id=task_id,
+                        action="points_changed",
+                        actor_id=str(current_user.id),
+                        field_name="story_points",
+                        old_value=str(old_points) if old_points is not None else None,
+                        new_value=str(new_points),
+                    )
                 updated_tasks.append({
                     "task_id": task_id,
                     "title": task.title,
-                    "story_points": int(final_estimate),
+                    "story_points": new_points,
                 })
 
     # Update planning session record

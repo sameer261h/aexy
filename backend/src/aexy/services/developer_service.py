@@ -1,12 +1,13 @@
 """Developer profile service."""
 
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from aexy.models.developer import Developer, GitHubConnection, GoogleConnection
+from aexy.models.developer import Developer, GitHubConnection, GoogleConnection, MicrosoftConnection
 from aexy.schemas.developer import DeveloperCreate, DeveloperUpdate
 
 
@@ -83,6 +84,7 @@ class DeveloperService:
             .options(
                 selectinload(Developer.github_connection),
                 selectinload(Developer.google_connection),
+                selectinload(Developer.microsoft_connection),
             )
         )
         result = await self.db.execute(stmt)
@@ -101,6 +103,7 @@ class DeveloperService:
             .options(
                 selectinload(Developer.github_connection),
                 selectinload(Developer.google_connection),
+                selectinload(Developer.microsoft_connection),
             )
         )
         result = await self.db.execute(stmt)
@@ -115,6 +118,7 @@ class DeveloperService:
             .options(
                 selectinload(Developer.github_connection),
                 selectinload(Developer.google_connection),
+                selectinload(Developer.microsoft_connection),
             )
         )
         result = await self.db.execute(stmt)
@@ -129,6 +133,7 @@ class DeveloperService:
             .options(
                 selectinload(Developer.github_connection),
                 selectinload(Developer.google_connection),
+                selectinload(Developer.microsoft_connection),
             )
         )
         result = await self.db.execute(stmt)
@@ -143,6 +148,22 @@ class DeveloperService:
             .options(
                 selectinload(Developer.github_connection),
                 selectinload(Developer.google_connection),
+                selectinload(Developer.microsoft_connection),
+            )
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_microsoft_id(self, microsoft_id: str) -> Developer | None:
+        """Get developer by Microsoft (Entra ID) object ID."""
+        stmt = (
+            select(Developer)
+            .join(MicrosoftConnection)
+            .where(MicrosoftConnection.microsoft_id == microsoft_id)
+            .options(
+                selectinload(Developer.github_connection),
+                selectinload(Developer.google_connection),
+                selectinload(Developer.microsoft_connection),
             )
         )
         result = await self.db.execute(stmt)
@@ -223,6 +244,679 @@ class DeveloperService:
         await self.db.refresh(connection)
         return connection
 
+    async def list_workspace_ghosts(
+        self,
+        workspace_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List ghost developers whose activity touches a workspace's repos,
+        with per-ghost activity counts and suggested match candidates.
+
+        A "match candidate" is a workspace member whose Developer.name or
+        GitHubConnection.github_username case-insensitively matches the
+        ghost's name. Suggestions are an ordered list (best match first);
+        empty when no fuzzy match exists.
+
+        Output rows look like:
+          {
+            "ghost_id": "...",
+            "name": "<github-login-or-display-name>",
+            "commits": 47,
+            "prs": 12,
+            "reviews": 8,
+            "suggestions": [
+              { "developer_id": "...", "name": "...", "github_username": "...", "reason": "github_username_match" },
+              ...
+            ],
+          }
+        """
+        from aexy.models.activity import Commit, PullRequest, CodeReview
+        from aexy.models.developer import GitHubConnection
+        from aexy.models.repository import Repository, WorkspaceRepository
+        from aexy.models.workspace import WorkspaceMember
+
+        # 1) Resolve which repository full_names are in this workspace.
+        adopted_repos = (
+            await self.db.execute(
+                select(Repository.full_name)
+                .join(
+                    WorkspaceRepository,
+                    WorkspaceRepository.repository_id == Repository.id,
+                )
+                .where(
+                    WorkspaceRepository.workspace_id == workspace_id,
+                    WorkspaceRepository.is_active == True,  # noqa: E712
+                )
+            )
+        ).scalars().all()
+        if not adopted_repos:
+            return []
+        repo_set = set(adopted_repos)
+
+        # 2) Find all "ghost" developer ids referenced by commits in those
+        # repos. A ghost is one with email IS NULL and no GitHubConnection.
+        # We deliberately do the no-conn filter via NOT EXISTS so the count
+        # query stays cheap even at scale.
+        ghost_commit_counts_stmt = (
+            select(
+                Commit.developer_id,
+                Developer.name,
+                func.count(Commit.id).label("commits"),
+            )
+            .join(Developer, Developer.id == Commit.developer_id)
+            .where(
+                Commit.repository.in_(repo_set),
+                Developer.email.is_(None),
+                ~select(GitHubConnection.id)
+                .where(GitHubConnection.developer_id == Developer.id)
+                .exists(),
+            )
+            .group_by(Commit.developer_id, Developer.name)
+            .order_by(func.count(Commit.id).desc())
+            .limit(limit)
+        )
+        ghost_rows = (await self.db.execute(ghost_commit_counts_stmt)).all()
+        if not ghost_rows:
+            return []
+
+        ghost_ids = [str(g.developer_id) for g in ghost_rows]
+        ghost_names = {str(g.developer_id): (g.name or "") for g in ghost_rows}
+
+        # 3) Per-ghost PR + review counts (scoped to the same repos).
+        pr_counts_stmt = (
+            select(PullRequest.developer_id, func.count(PullRequest.id))
+            .where(
+                PullRequest.developer_id.in_(ghost_ids),
+                PullRequest.repository.in_(repo_set),
+            )
+            .group_by(PullRequest.developer_id)
+        )
+        pr_counts = {
+            str(dev_id): cnt
+            for dev_id, cnt in (await self.db.execute(pr_counts_stmt)).all()
+        }
+        review_counts_stmt = (
+            select(CodeReview.developer_id, func.count(CodeReview.id))
+            .where(
+                CodeReview.developer_id.in_(ghost_ids),
+                CodeReview.repository.in_(repo_set),
+            )
+            .group_by(CodeReview.developer_id)
+        )
+        review_counts = {
+            str(dev_id): cnt
+            for dev_id, cnt in (await self.db.execute(review_counts_stmt)).all()
+        }
+
+        # 4) Build a name → developer index for the workspace's members so
+        # we can suggest matches. Two index keys per developer: their
+        # Developer.name and their GitHubConnection.github_username.
+        member_stmt = (
+            select(
+                Developer.id,
+                Developer.name,
+                Developer.avatar_url,
+                GitHubConnection.github_username,
+            )
+            .outerjoin(
+                GitHubConnection,
+                GitHubConnection.developer_id == Developer.id,
+            )
+            .join(
+                WorkspaceMember,
+                WorkspaceMember.developer_id == Developer.id,
+            )
+            .where(WorkspaceMember.workspace_id == workspace_id)
+        )
+        member_rows = (await self.db.execute(member_stmt)).all()
+        by_login: dict[str, dict[str, Any]] = {}
+        by_name: dict[str, dict[str, Any]] = {}
+        for row in member_rows:
+            entry = {
+                "developer_id": str(row.id),
+                "name": row.name,
+                "github_username": row.github_username,
+                "avatar_url": row.avatar_url,
+            }
+            if row.github_username:
+                by_login[row.github_username.lower()] = entry
+            if row.name:
+                by_name[row.name.lower()] = entry
+
+        # 5) Assemble output.
+        out: list[dict[str, Any]] = []
+        for g in ghost_rows:
+            ghost_id_str = str(g.developer_id)
+            display_name = ghost_names.get(ghost_id_str, "")
+            key = display_name.lower() if display_name else ""
+
+            suggestions: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for candidate, reason in (
+                (by_login.get(key), "github_username_match"),
+                (by_name.get(key), "developer_name_match"),
+            ):
+                if candidate and candidate["developer_id"] not in seen:
+                    suggestions.append({**candidate, "reason": reason})
+                    seen.add(candidate["developer_id"])
+
+            out.append(
+                {
+                    "ghost_id": ghost_id_str,
+                    "name": display_name,
+                    "commits": int(g.commits),
+                    "prs": pr_counts.get(ghost_id_str, 0),
+                    "reviews": review_counts.get(ghost_id_str, 0),
+                    "suggestions": suggestions,
+                }
+            )
+        return out
+
+    async def merge_ghost_by_id(
+        self,
+        ghost_developer_id: str,
+        target_developer_id: str,
+    ) -> dict[str, int]:
+        """Admin-driven merge: move all activity rows from a specific ghost
+        into a specific target developer, then delete the ghost.
+
+        Same safety check as `merge_ghost_into_developer` (ghost must have
+        no GitHubConnection of its own). Used by the workspace-admin UI
+        when the auto-merge couldn't find a match (e.g. github_username
+        casing drift or username change).
+        """
+        from sqlalchemy import update
+
+        from aexy.models.activity import CodeReview, Commit, PullRequest
+        from aexy.models.developer import GitHubConnection
+
+        if ghost_developer_id == target_developer_id:
+            return {"commits": 0, "prs": 0, "reviews": 0, "ghost_deleted": 0}
+
+        ghost = await self.db.get(Developer, ghost_developer_id)
+        target = await self.db.get(Developer, target_developer_id)
+        if ghost is None or target is None:
+            return {"commits": 0, "prs": 0, "reviews": 0, "ghost_deleted": 0}
+
+        # Safety: don't merge two "real" developers — only ghost → real.
+        if ghost.email is not None:
+            raise ValueError("Source row is not a ghost (has an email)")
+        has_conn = (
+            await self.db.execute(
+                select(GitHubConnection.id)
+                .where(GitHubConnection.developer_id == ghost.id)
+                .limit(1)
+            )
+        ).first() is not None
+        if has_conn:
+            raise ValueError("Source row is not a ghost (has a GitHub connection)")
+
+        commits_updated = (
+            await self.db.execute(
+                update(Commit)
+                .where(Commit.developer_id == ghost.id)
+                .values(developer_id=target.id)
+            )
+        ).rowcount or 0
+        prs_updated = (
+            await self.db.execute(
+                update(PullRequest)
+                .where(PullRequest.developer_id == ghost.id)
+                .values(developer_id=target.id)
+            )
+        ).rowcount or 0
+        reviews_updated = (
+            await self.db.execute(
+                update(CodeReview)
+                .where(CodeReview.developer_id == ghost.id)
+                .values(developer_id=target.id)
+            )
+        ).rowcount or 0
+
+        await self.db.delete(ghost)
+        await self.db.flush()
+
+        return {
+            "commits": commits_updated,
+            "prs": prs_updated,
+            "reviews": reviews_updated,
+            "ghost_deleted": 1,
+        }
+
+    async def _find_orphan_candidates(
+        self,
+        canonical_developer_id: str,
+        github_username: str,
+    ) -> list[Developer]:
+        """Find every Developer row whose attribution plausibly belongs
+        to the caller's canonical identity, scoped to "no GitHubConnection
+        of its own" (so we never absorb a real account).
+
+        Matches THREE distinct ghost flavors that the two sync resolvers
+        create over time:
+
+          1. Email-NULL ghost from `_resolve_developer_for_pr` step 2 —
+             `name == github_username AND email IS NULL`.
+          2. Pseudo-ghost from `_resolve_developer_for_commit` step 3 with
+             a GitHub no-reply email — `email ~ %+{username}@users.noreply.github.com`.
+          3. Pseudo-ghost from `_resolve_developer_for_commit` step 3 with
+             an *arbitrary* email — caught data-driven, via the commits
+             those rows already own carrying our github_username.
+
+          (3) is the one that catches the email-drift case where a
+          contributor's git config changed email at some point and a
+          second pseudo-Developer row was created. Without (3) the
+          login-merge skips those rows and the alias_map at query time
+          is the only thing holding the leaderboard together.
+
+        All candidates are filtered to "no GitHubConnection" so real
+        accounts with matching usernames or emails are protected.
+        """
+        from sqlalchemy import or_
+
+        from aexy.models.activity import Commit
+        from aexy.models.developer import GitHubConnection
+
+        lower_username = github_username.lower()
+        noreply_legacy = f"{lower_username}@users.noreply.github.com"
+        noreply_modern = f"%+{lower_username}@users.noreply.github.com"
+
+        # Heuristic matches (PR-resolver ghost + no-reply commit-resolver).
+        heuristic_stmt = (
+            select(Developer)
+            .where(
+                Developer.id != canonical_developer_id,
+                or_(
+                    and_(
+                        func.lower(Developer.name) == lower_username,
+                        Developer.email.is_(None),
+                    ),
+                    func.lower(Developer.email) == noreply_legacy,
+                    func.lower(Developer.email).like(noreply_modern),
+                ),
+            )
+        )
+        heuristic_rows = (
+            await self.db.execute(heuristic_stmt)
+        ).scalars().all()
+
+        # Data-driven match: any Developer row that owns commits whose
+        # `author_github_login` matches our username. Catches step-3
+        # commit-resolver pseudo-ghosts with arbitrary emails.
+        attribution_stmt = (
+            select(Developer)
+            .where(
+                Developer.id != canonical_developer_id,
+                select(Commit.id)
+                .where(
+                    Commit.developer_id == Developer.id,
+                    func.lower(Commit.author_github_login) == lower_username,
+                )
+                .exists(),
+            )
+        )
+        attribution_rows = (
+            await self.db.execute(attribution_stmt)
+        ).scalars().all()
+
+        # Dedupe and filter out anything with its own GitHubConnection.
+        seen: set[str] = set()
+        result: list[Developer] = []
+        for dev in [*heuristic_rows, *attribution_rows]:
+            if dev.id in seen:
+                continue
+            seen.add(dev.id)
+            has_conn = (
+                await self.db.execute(
+                    select(GitHubConnection.id)
+                    .where(GitHubConnection.developer_id == dev.id)
+                    .limit(1)
+                )
+            ).first() is not None
+            if not has_conn:
+                result.append(dev)
+        return result
+
+    async def preview_ghost_match(
+        self,
+        canonical_developer_id: str,
+        github_username: str,
+    ) -> dict[str, Any]:
+        """Read-only preview of what `merge_ghost_into_developer` would do.
+
+        Returns the matching ghost developer's id (if any) plus the count
+        of activity rows currently attached to it. Used to show users
+        "we found N commits we can claim for you" before they hit the
+        merge button.
+        """
+        from aexy.models.activity import CodeReview, Commit, PullRequest
+
+        # Use the shared candidate finder so preview matches merge exactly —
+        # heuristic ghosts (email-NULL, no-reply email) plus data-driven
+        # commits whose `author_github_login` matches this username.
+        ghosts = await self._find_orphan_candidates(
+            canonical_developer_id, github_username
+        )
+        if not ghosts:
+            return {
+                "ghost_id": None,
+                "commits": 0,
+                "prs": 0,
+                "reviews": 0,
+            }
+
+        ghost_ids = [g.id for g in ghosts]
+
+        commit_count = (
+            await self.db.execute(
+                select(func.count(Commit.id)).where(
+                    Commit.developer_id.in_(ghost_ids)
+                )
+            )
+        ).scalar_one()
+        pr_count = (
+            await self.db.execute(
+                select(func.count(PullRequest.id)).where(
+                    PullRequest.developer_id.in_(ghost_ids)
+                )
+            )
+        ).scalar_one()
+        review_count = (
+            await self.db.execute(
+                select(func.count(CodeReview.id)).where(
+                    CodeReview.developer_id.in_(ghost_ids)
+                )
+            )
+        ).scalar_one()
+
+        # UI only uses `ghost_id` as a "is there something to claim" flag,
+        # so returning one representative id is sufficient even when
+        # multiple ghosts exist.
+        return {
+            "ghost_id": str(ghost_ids[0]),
+            "commits": commit_count,
+            "prs": pr_count,
+            "reviews": review_count,
+        }
+
+    async def merge_ghost_into_developer(
+        self,
+        canonical_developer_id: str,
+        github_username: str,
+    ) -> dict[str, int]:
+        """Reassign all activity rows from a matching ghost developer
+        into the canonical developer, then delete the ghost.
+
+        A "ghost developer" is one we auto-created during sync to attribute
+        commits/PRs/reviews from a contributor we couldn't resolve to a real
+        Developer row. They're identified by:
+            * email IS NULL          (never logged in)
+            * name == github_username  (sync uses login as the name)
+            * no github_connection   (otherwise they're a real account)
+
+        Returns counts of rows reassigned. Idempotent — if no ghost exists,
+        returns zeros and does nothing.
+
+        Three flavors of ghost are caught (see `_find_orphan_candidates`):
+            1. Email-NULL ghost from the PR-resolver
+            2. No-reply-email pseudo-ghost from the commit-resolver
+            3. Arbitrary-email pseudo-ghost identified data-driven via
+               commits already carrying our github_username
+        """
+        from sqlalchemy import update
+
+        from aexy.models.activity import CodeReview, Commit, PullRequest
+
+        true_ghosts = await self._find_orphan_candidates(
+            canonical_developer_id, github_username
+        )
+        if not true_ghosts:
+            return {"commits": 0, "prs": 0, "reviews": 0, "ghost_deleted": 0}
+
+        ghost_id_list = [g.id for g in true_ghosts]
+        commits_updated = (
+            await self.db.execute(
+                update(Commit)
+                .where(Commit.developer_id.in_(ghost_id_list))
+                .values(developer_id=canonical_developer_id)
+            )
+        ).rowcount or 0
+        prs_updated = (
+            await self.db.execute(
+                update(PullRequest)
+                .where(PullRequest.developer_id.in_(ghost_id_list))
+                .values(developer_id=canonical_developer_id)
+            )
+        ).rowcount or 0
+        reviews_updated = (
+            await self.db.execute(
+                update(CodeReview)
+                .where(CodeReview.developer_id.in_(ghost_id_list))
+                .values(developer_id=canonical_developer_id)
+            )
+        ).rowcount or 0
+
+        # Delete every merged ghost row. Any FK rows we didn't explicitly
+        # reassign (workspace_members, etc.) are zero for true ghosts;
+        # ON DELETE CASCADE handles edge cases.
+        for g in true_ghosts:
+            await self.db.delete(g)
+        await self.db.flush()
+
+        return {
+            "commits": commits_updated,
+            "prs": prs_updated,
+            "reviews": reviews_updated,
+            "ghost_deleted": len(true_ghosts),
+        }
+
+    # ---------------------------------------------------------------
+    # Email aliases
+    # ---------------------------------------------------------------
+
+    async def list_email_aliases(
+        self, developer_id: str
+    ) -> list["DeveloperEmailAlias"]:
+        """Return every alias attached to this developer, oldest first."""
+        from aexy.models.developer import DeveloperEmailAlias
+
+        rows = (
+            await self.db.execute(
+                select(DeveloperEmailAlias)
+                .where(DeveloperEmailAlias.developer_id == developer_id)
+                .order_by(DeveloperEmailAlias.created_at.asc())
+            )
+        ).scalars().all()
+        return list(rows)
+
+    async def preview_alias_backfill(
+        self, developer_id: str, email: str
+    ) -> dict[str, int]:
+        """Count commits currently mis-attributed to a non-canonical
+        Developer row whose email matches `email`. The number the user
+        will see in the UI before they confirm adding the alias.
+
+        Strictly read-only. Filters to commits whose `developer_id` row
+        has NO own `GitHubConnection` (i.e., a pseudo-ghost) so we never
+        promise to reclaim something off a real account.
+        """
+        from aexy.models.activity import Commit
+        from aexy.models.developer import GitHubConnection
+
+        email_lc = email.strip().lower()
+        if not email_lc:
+            return {"commits": 0}
+
+        count = (
+            await self.db.execute(
+                select(func.count(Commit.id))
+                .where(
+                    Commit.developer_id != developer_id,
+                    func.lower(Commit.author_email) == email_lc,
+                    ~select(GitHubConnection.id)
+                    .where(GitHubConnection.developer_id == Commit.developer_id)
+                    .exists(),
+                )
+            )
+        ).scalar_one()
+        return {"commits": int(count or 0)}
+
+    async def add_email_alias(
+        self, developer_id: str, email: str
+    ) -> tuple["DeveloperEmailAlias", dict[str, int]]:
+        """Attach an alias and immediately backfill — move every Commit
+        currently sitting on a pseudo-ghost with this email onto the
+        caller's canonical row, then delete any pseudo-ghost rows that
+        are left empty.
+
+        Returns `(alias, {commits, ghost_deleted})`. The caller is
+        responsible for committing.
+
+        Raises `DeveloperAlreadyExistsError` if the email already belongs
+        to another developer (either canonically or as their alias).
+        """
+        from sqlalchemy import update
+
+        from aexy.models.activity import Commit
+        from aexy.models.developer import DeveloperEmailAlias, GitHubConnection
+
+        email_lc = email.strip().lower()
+        if not email_lc or "@" not in email_lc:
+            raise DeveloperServiceError(f"Invalid email: {email!r}")
+
+        # Conflict: alias already claimed by another developer.
+        conflict_alias = (
+            await self.db.execute(
+                select(DeveloperEmailAlias).where(
+                    func.lower(DeveloperEmailAlias.email) == email_lc,
+                    DeveloperEmailAlias.developer_id != developer_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if conflict_alias is not None:
+            raise DeveloperAlreadyExistsError(
+                f"Email {email_lc!r} is already an alias of another developer"
+            )
+
+        # Conflict: another developer's canonical email matches.
+        conflict_canonical = (
+            await self.db.execute(
+                select(Developer).where(
+                    func.lower(Developer.email) == email_lc,
+                    Developer.id != developer_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if conflict_canonical is not None:
+            # Allow only if the conflict is a pseudo-ghost (no GitHubConnection);
+            # those rows are what we'd be absorbing anyway via the backfill.
+            has_conn = (
+                await self.db.execute(
+                    select(GitHubConnection.id)
+                    .where(GitHubConnection.developer_id == conflict_canonical.id)
+                    .limit(1)
+                )
+            ).first() is not None
+            if has_conn:
+                raise DeveloperAlreadyExistsError(
+                    f"Email {email_lc!r} belongs to another active developer"
+                )
+
+        # Idempotent: if we already own this alias, return it without
+        # re-running the backfill.
+        existing = (
+            await self.db.execute(
+                select(DeveloperEmailAlias).where(
+                    DeveloperEmailAlias.developer_id == developer_id,
+                    func.lower(DeveloperEmailAlias.email) == email_lc,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return existing, {"commits": 0, "ghost_deleted": 0}
+
+        alias = DeveloperEmailAlias(developer_id=developer_id, email=email_lc)
+        self.db.add(alias)
+        await self.db.flush()
+
+        # Inline backfill: every Commit currently attributed to a
+        # pseudo-ghost with this email moves to the canonical row.
+        ghost_ids = (
+            await self.db.execute(
+                select(Developer.id).where(
+                    Developer.id != developer_id,
+                    func.lower(Developer.email) == email_lc,
+                    ~select(GitHubConnection.id)
+                    .where(GitHubConnection.developer_id == Developer.id)
+                    .exists(),
+                )
+            )
+        ).scalars().all()
+
+        commits_moved = 0
+        ghost_deleted = 0
+        if ghost_ids:
+            commits_moved = (
+                await self.db.execute(
+                    update(Commit)
+                    .where(Commit.developer_id.in_(list(ghost_ids)))
+                    .values(developer_id=developer_id)
+                )
+            ).rowcount or 0
+            # Delete the now-empty pseudo-ghost rows.
+            for gid in ghost_ids:
+                ghost = await self.db.get(Developer, gid)
+                if ghost is not None:
+                    await self.db.delete(ghost)
+                    ghost_deleted += 1
+            await self.db.flush()
+
+        # Also catch any commits whose author_email matches but happen
+        # to sit on some OTHER developer_id that is itself a pseudo-ghost
+        # (e.g., the email/name combo differs from the row's canonical
+        # email). These rows didn't show up in the ghost_ids lookup above
+        # because their `Developer.email` doesn't match the alias.
+        extra_moved = (
+            await self.db.execute(
+                update(Commit)
+                .where(
+                    Commit.developer_id != developer_id,
+                    func.lower(Commit.author_email) == email_lc,
+                    ~select(GitHubConnection.id)
+                    .where(GitHubConnection.developer_id == Commit.developer_id)
+                    .exists(),
+                )
+                .values(developer_id=developer_id)
+            )
+        ).rowcount or 0
+        commits_moved += extra_moved
+
+        return alias, {"commits": int(commits_moved), "ghost_deleted": ghost_deleted}
+
+    async def remove_email_alias(
+        self, developer_id: str, alias_id: str
+    ) -> bool:
+        """Detach an alias. Does NOT re-attribute commits — once they
+        moved to canonical, they stay there. Removing the alias only
+        stops *future* commits with that email from auto-routing here.
+        Returns True if an alias was deleted.
+        """
+        from aexy.models.developer import DeveloperEmailAlias
+
+        alias = (
+            await self.db.execute(
+                select(DeveloperEmailAlias).where(
+                    DeveloperEmailAlias.id == alias_id,
+                    DeveloperEmailAlias.developer_id == developer_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if alias is None:
+            return False
+        await self.db.delete(alias)
+        await self.db.flush()
+        return True
+
     async def get_or_create_by_github(
         self,
         github_id: int,
@@ -251,6 +945,9 @@ class DeveloperService:
                 if scopes:
                     developer.github_connection.scopes = scopes
                 await self.db.flush()
+            # Re-run ghost merge in case past syncs created ghosts under a
+            # case-variant of this login (the dedup is one-shot on login).
+            await self.merge_ghost_into_developer(developer.id, github_username)
             return developer
 
         # Try to find by email
@@ -269,6 +966,7 @@ class DeveloperService:
                 token_expires_at=token_expires_at,
             )
             await self.db.refresh(developer)
+            await self.merge_ghost_into_developer(developer.id, github_username)
             return developer
 
         # Create new developer
@@ -294,6 +992,7 @@ class DeveloperService:
         )
 
         await self.db.refresh(developer, ["github_connection"])
+        await self.merge_ghost_into_developer(developer.id, github_username)
         await self._dispatch_signup_handler(developer, "github")
         return developer
 
@@ -304,6 +1003,7 @@ class DeveloperService:
             .options(
                 selectinload(Developer.github_connection),
                 selectinload(Developer.google_connection),
+                selectinload(Developer.microsoft_connection),
             )
             .offset(skip)
             .limit(limit)
@@ -477,4 +1177,164 @@ class DeveloperService:
 
         await self.db.refresh(developer, ["google_connection"])
         await self._dispatch_signup_handler(developer, "google")
+        return developer
+
+    # -------------------------- Microsoft OAuth --------------------------
+
+    async def connect_microsoft(
+        self,
+        developer_id: str,
+        microsoft_id: str,
+        microsoft_email: str,
+        access_token: str,
+        refresh_token: str | None = None,
+        token_expires_at: datetime | None = None,
+        microsoft_name: str | None = None,
+        microsoft_avatar_url: str | None = None,
+        scopes: list[str] | None = None,
+    ) -> MicrosoftConnection:
+        """Connect a Microsoft account to a developer."""
+        developer = await self.get_by_id(developer_id)
+
+        existing = await self.get_by_microsoft_id(microsoft_id)
+        if existing and existing.id != developer_id:
+            raise DeveloperServiceError(
+                f"Microsoft account {microsoft_email} is already connected to another developer"
+            )
+
+        # Scopes we want to preserve across logins (mirror Google's pattern)
+        crm_scopes = {"Mail.Read", "Calendars.ReadWrite"}
+
+        if developer.microsoft_connection:
+            existing_scopes = set(developer.microsoft_connection.scopes or [])
+            new_scopes = set(scopes or [])
+
+            existing_has_crm = bool(existing_scopes & crm_scopes)
+            new_has_crm = bool(new_scopes & crm_scopes)
+
+            if new_has_crm or not existing_has_crm:
+                developer.microsoft_connection.access_token = access_token
+                if refresh_token:
+                    developer.microsoft_connection.refresh_token = refresh_token
+                if token_expires_at:
+                    developer.microsoft_connection.token_expires_at = token_expires_at
+
+            if scopes:
+                developer.microsoft_connection.scopes = list(existing_scopes | new_scopes)
+
+            # Keep profile fields in sync with what Graph just returned
+            developer.microsoft_connection.microsoft_email = microsoft_email
+            if microsoft_name is not None:
+                developer.microsoft_connection.microsoft_name = microsoft_name
+            if microsoft_avatar_url is not None:
+                developer.microsoft_connection.microsoft_avatar_url = microsoft_avatar_url
+
+            await self.db.flush()
+            await self.db.refresh(developer.microsoft_connection)
+            return developer.microsoft_connection
+
+        connection = MicrosoftConnection(
+            developer_id=developer.id,
+            microsoft_id=microsoft_id,
+            microsoft_email=microsoft_email,
+            microsoft_name=microsoft_name,
+            microsoft_avatar_url=microsoft_avatar_url,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_expires_at=token_expires_at,
+            scopes=scopes,
+        )
+        self.db.add(connection)
+        await self.db.flush()
+
+        if not developer.avatar_url and microsoft_avatar_url:
+            developer.avatar_url = microsoft_avatar_url
+            await self.db.flush()
+
+        await self.db.refresh(connection)
+        return connection
+
+    async def get_or_create_by_microsoft(
+        self,
+        microsoft_id: str,
+        microsoft_email: str,
+        access_token: str,
+        refresh_token: str | None = None,
+        token_expires_at: datetime | None = None,
+        microsoft_name: str | None = None,
+        microsoft_avatar_url: str | None = None,
+        scopes: list[str] | None = None,
+    ) -> Developer:
+        """Get or create developer from Microsoft OAuth."""
+        crm_scopes = {"Mail.Read", "Calendars.ReadWrite"}
+
+        developer = await self.get_by_microsoft_id(microsoft_id)
+        if developer:
+            if developer.microsoft_connection:
+                existing_scopes = set(developer.microsoft_connection.scopes or [])
+                new_scopes = set(scopes or [])
+
+                existing_has_crm = bool(existing_scopes & crm_scopes)
+                new_has_crm = bool(new_scopes & crm_scopes)
+
+                if new_has_crm or not existing_has_crm:
+                    developer.microsoft_connection.access_token = access_token
+                    if refresh_token:
+                        developer.microsoft_connection.refresh_token = refresh_token
+                    if token_expires_at:
+                        developer.microsoft_connection.token_expires_at = token_expires_at
+
+                if scopes:
+                    developer.microsoft_connection.scopes = list(existing_scopes | new_scopes)
+
+                # Keep profile fields in sync with what Graph just returned
+                developer.microsoft_connection.microsoft_email = microsoft_email
+                if microsoft_name is not None:
+                    developer.microsoft_connection.microsoft_name = microsoft_name
+                if microsoft_avatar_url is not None:
+                    developer.microsoft_connection.microsoft_avatar_url = microsoft_avatar_url
+
+                await self.db.flush()
+            return developer
+
+        # Link Microsoft to an existing developer with matching email
+        developer = await self.get_by_email(microsoft_email)
+        if developer:
+            await self.connect_microsoft(
+                developer_id=developer.id,
+                microsoft_id=microsoft_id,
+                microsoft_email=microsoft_email,
+                access_token=access_token,
+                refresh_token=refresh_token,
+                token_expires_at=token_expires_at,
+                microsoft_name=microsoft_name,
+                microsoft_avatar_url=microsoft_avatar_url,
+                scopes=scopes,
+            )
+            await self.db.refresh(developer, ["microsoft_connection"])
+            return developer
+
+        # New developer
+        developer = Developer(
+            email=microsoft_email,
+            name=microsoft_name,
+            avatar_url=microsoft_avatar_url,
+        )
+        self.db.add(developer)
+        await self.db.flush()
+
+        await self.connect_microsoft(
+            developer_id=developer.id,
+            microsoft_id=microsoft_id,
+            microsoft_email=microsoft_email,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_expires_at=token_expires_at,
+            microsoft_name=microsoft_name,
+            microsoft_avatar_url=microsoft_avatar_url,
+            scopes=scopes,
+        )
+
+        await self.db.refresh(developer, ["microsoft_connection"])
+        await self._dispatch_signup_handler(developer, "microsoft")
         return developer

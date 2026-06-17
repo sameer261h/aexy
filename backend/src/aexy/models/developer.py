@@ -117,6 +117,13 @@ class Developer(Base):
         "GoogleConnection",
         back_populates="developer",
         uselist=False,
+        cascade="all, delete-orphan",
+    )
+    microsoft_connection: Mapped["MicrosoftConnection | None"] = relationship(
+        "MicrosoftConnection",
+        back_populates="developer",
+        uselist=False,
+        cascade="all, delete-orphan",
     )
     commits: Mapped[list["Commit"]] = relationship(
         "Commit",
@@ -194,6 +201,51 @@ class Developer(Base):
         "NotificationPreference",
         back_populates="developer",
         cascade="all, delete-orphan",
+    )
+
+
+class DeveloperEmailAlias(Base):
+    """Secondary email a developer commits under.
+
+    Solves the "developer commits under `alt-email@example.com` but their
+    canonical email is `name@company.com`" problem — without this, the
+    commit-author resolver creates a pseudo-ghost Developer and those
+    commits never show up on their analytics.
+
+    Unique on `lower(email)` globally: one email cannot point at two
+    humans. (Enforced at DB level by the `uq_developer_email_aliases_email_lower`
+    index, defined in `migrate_developer_email_aliases.sql`.)
+    """
+
+    __tablename__ = "developer_email_aliases"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    developer_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("developers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    developer: Mapped["Developer"] = relationship(
+        "Developer",
+        backref="email_aliases",
     )
 
 
@@ -356,4 +408,53 @@ class GoogleConnection(Base):
     developer: Mapped["Developer"] = relationship(
         "Developer",
         back_populates="google_connection",
+    )
+
+
+class MicrosoftConnection(Base):
+    """Microsoft (Entra ID / Azure AD) OAuth connection for a developer."""
+
+    __tablename__ = "microsoft_connections"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    developer_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("developers.id", ondelete="CASCADE"),
+        unique=True,
+    )
+
+    # Microsoft user info (from Graph /me)
+    microsoft_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    microsoft_email: Mapped[str] = mapped_column(String(255), index=True)
+    microsoft_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    microsoft_avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # OAuth tokens
+    access_token: Mapped[str] = mapped_column(Text)
+    refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    # Scopes granted (e.g. User.Read, Mail.Read, Calendars.ReadWrite)
+    scopes: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    developer: Mapped["Developer"] = relationship(
+        "Developer",
+        back_populates="microsoft_connection",
     )

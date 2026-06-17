@@ -36,7 +36,7 @@ class AgentCreate(BaseModel):
     tools: list[str] = Field(default_factory=list)
 
     # LLM configuration
-    llm_provider: Literal["claude", "gemini", "ollama", "openrouter", "deepseek"] = "claude"
+    llm_provider: Literal["claude", "gemini", "ollama", "openrouter", "deepseek", "lmstudio"] = "claude"
     model: str = Field(default="claude-3-sonnet-20240229")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4096, ge=1, le=100000)
@@ -71,7 +71,7 @@ class AgentUpdate(BaseModel):
     tools: list[str] | None = None
 
     # LLM configuration
-    llm_provider: Literal["claude", "gemini", "ollama", "openrouter", "deepseek"] | None = None
+    llm_provider: Literal["claude", "gemini", "ollama", "openrouter", "deepseek", "lmstudio"] | None = None
     model: str | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, ge=1, le=100000)
@@ -287,6 +287,16 @@ class ToolCallInfo(BaseModel):
     args: dict
 
 
+class CitationInfo(BaseModel):
+    """One source the agent referenced. Loose by design — the LLM may
+    omit snippet/title; only url is conceptually required, and even
+    that we let through optional so partial citations don't crash."""
+
+    title: str | None = None
+    url: str | None = None
+    snippet: str | None = None
+
+
 class MessageResponse(BaseModel):
     """Schema for a conversation message."""
 
@@ -299,6 +309,10 @@ class MessageResponse(BaseModel):
     tool_name: str | None = None
     tool_output: dict | None = None
     message_index: int
+    citations: list[CitationInfo] | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -383,6 +397,9 @@ class InboxMessageResponse(BaseModel):
     workspace_id: str
     message_id: str
     thread_id: str | None
+    # RFC 5322 In-Reply-To header. Frontend uses this to render a
+    # "View parent" jump on the message detail.
+    in_reply_to_message_id: str | None = None
     from_email: str
     from_name: str | None
     to_email: str

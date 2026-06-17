@@ -15,8 +15,13 @@ def is_valid_uuid(value: str) -> bool:
     )
     return bool(uuid_pattern.match(value))
 
+from sqlalchemy import select
+
+from aexy.api.developers import get_current_developer
 from aexy.core.database import get_db
 from aexy.llm.gateway import get_llm_gateway
+from aexy.models.developer import Developer
+from aexy.models.workspace import WorkspaceMember
 from aexy.schemas.career import (
     LearningActivity,
     LearningMilestoneResponse,
@@ -29,24 +34,100 @@ from aexy.schemas.career import (
 )
 from aexy.services.developer_service import DeveloperService
 from aexy.services.learning_path import LearningPathService
+from aexy.services.workspace_service import WorkspaceService
 
 router = APIRouter(prefix="/learning")
+
+
+async def _require_developer_visibility(
+    db: AsyncSession,
+    caller_id: str,
+    target_developer_id: str,
+    required_role: str = "admin",
+) -> None:
+    """Self always allowed; otherwise caller must hold `required_role` in a
+    workspace the target is an active member of."""
+    if str(caller_id) == str(target_developer_id):
+        return
+    target_workspaces = (
+        await db.execute(
+            select(WorkspaceMember.workspace_id).where(
+                WorkspaceMember.developer_id == target_developer_id,
+                WorkspaceMember.status == "active",
+            )
+        )
+    ).scalars().all()
+    if not target_workspaces:
+        raise HTTPException(status_code=404, detail="Developer not found")
+    service = WorkspaceService(db)
+    for ws_id in target_workspaces:
+        if await service.check_permission(str(ws_id), str(caller_id), required_role):
+            return
+    raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+
+async def _require_path_access(
+    db: AsyncSession,
+    path_id: str,
+    caller_id: str,
+    owner_only: bool = False,
+):
+    """Load path, return it, and require the caller to be the path's developer
+    (or, when `owner_only` is False, an admin in a workspace the developer is
+    in). 404 on miss to avoid id-existence oracle."""
+    from aexy.models.career import LearningPath
+    path = (
+        await db.execute(select(LearningPath).where(LearningPath.id == path_id))
+    ).scalar_one_or_none()
+    if not path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Learning path not found",
+        )
+    if str(path.developer_id) == str(caller_id):
+        return path
+    if owner_only:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Learning path not found",
+        )
+    try:
+        await _require_developer_visibility(
+            db, caller_id, str(path.developer_id), "admin"
+        )
+    except HTTPException:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Learning path not found",
+        )
+    return path
+
+
+async def _require_team_workspace_member(
+    db: AsyncSession, team_id: str, caller_id: str, role: str = "viewer"
+):
+    """Load Team and require active membership in its workspace."""
+    from aexy.models.team import Team
+    team = (
+        await db.execute(select(Team).where(Team.id == team_id))
+    ).scalar_one_or_none()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    if not await WorkspaceService(db).check_permission(
+        str(team.workspace_id), caller_id, role
+    ):
+        raise HTTPException(status_code=403, detail="Not a member of team's workspace")
+    return team
 
 
 @router.get("/paths", response_model=list[LearningPathResponse])
 async def list_learning_paths(
     developer_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """List all learning paths for a developer.
-
-    Args:
-        developer_id: Developer UUID.
-        db: Database session.
-
-    Returns:
-        List of learning paths.
-    """
+    """List all learning paths for a developer. Self or admin-in-shared-workspace."""
+    await _require_developer_visibility(db, str(current_user.id), developer_id)
     llm_gateway = get_llm_gateway()
     service = LearningPathService(db, llm_gateway)
     paths = await service.get_developer_paths(developer_id)
@@ -83,17 +164,10 @@ async def generate_learning_path(
     data: LearningPathGenerate,
     developer_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Generate a new learning path for a developer.
-
-    Args:
-        data: Path generation parameters.
-        developer_id: Developer UUID.
-        db: Database session.
-
-    Returns:
-        Generated learning path.
-    """
+    """Generate a new learning path for a developer. Self or admin-in-shared-workspace."""
+    await _require_developer_visibility(db, str(current_user.id), developer_id)
     dev_service = DeveloperService(db)
     developer = await dev_service.get_by_id(developer_id)
 
@@ -156,16 +230,10 @@ async def generate_learning_path(
 async def get_learning_path(
     path_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get a learning path by ID.
-
-    Args:
-        path_id: Learning path UUID.
-        db: Database session.
-
-    Returns:
-        Learning path with milestones.
-    """
+    """Get a learning path by ID. Owner or admin-in-shared-workspace."""
+    await _require_path_access(db, path_id, str(current_user.id))
     llm_gateway = get_llm_gateway()
     service = LearningPathService(db, llm_gateway)
     path = await service.get_learning_path(path_id)
@@ -225,16 +293,10 @@ async def get_learning_path(
 async def regenerate_learning_path(
     path_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Regenerate a learning path with updated data.
-
-    Args:
-        path_id: Learning path UUID.
-        db: Database session.
-
-    Returns:
-        Updated learning path.
-    """
+    """Regenerate a learning path with updated data. Owner or admin-in-shared-workspace."""
+    await _require_path_access(db, path_id, str(current_user.id))
     llm_gateway = get_llm_gateway()
     service = LearningPathService(db, llm_gateway)
 
@@ -293,16 +355,10 @@ async def regenerate_learning_path(
 async def get_path_progress(
     path_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get progress summary for a learning path.
-
-    Args:
-        path_id: Learning path UUID.
-        db: Database session.
-
-    Returns:
-        Progress update summary.
-    """
+    """Get progress summary for a learning path. Owner or admin-in-shared-workspace."""
+    await _require_path_access(db, path_id, str(current_user.id))
     llm_gateway = get_llm_gateway()
     service = LearningPathService(db, llm_gateway)
 
@@ -346,16 +402,10 @@ async def get_path_progress(
 async def get_path_milestones(
     path_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get milestones for a learning path.
-
-    Args:
-        path_id: Learning path UUID.
-        db: Database session.
-
-    Returns:
-        List of milestones.
-    """
+    """Get milestones for a learning path. Owner or admin-in-shared-workspace."""
+    await _require_path_access(db, path_id, str(current_user.id))
     llm_gateway = get_llm_gateway()
     service = LearningPathService(db, llm_gateway)
 
@@ -393,16 +443,10 @@ async def get_path_milestones(
 async def get_recommended_activities(
     path_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get recommended activities for a learning path.
-
-    Args:
-        path_id: Learning path UUID.
-        db: Database session.
-
-    Returns:
-        List of recommended activities.
-    """
+    """Get recommended activities for a learning path. Owner or admin-in-shared-workspace."""
+    await _require_path_access(db, path_id, str(current_user.id))
     llm_gateway = get_llm_gateway()
     service = LearningPathService(db, llm_gateway)
 
@@ -432,16 +476,10 @@ async def get_recommended_activities(
 async def get_stretch_assignments(
     developer_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get stretch assignment recommendations for a developer.
-
-    Args:
-        developer_id: Developer UUID.
-        db: Database session.
-
-    Returns:
-        List of stretch assignments.
-    """
+    """Get stretch assignment recommendations for a developer. Self or admin-in-shared-workspace."""
+    await _require_developer_visibility(db, str(current_user.id), developer_id)
     dev_service = DeveloperService(db)
     developer = await dev_service.get_by_id(developer_id)
 
@@ -481,16 +519,10 @@ async def get_stretch_assignments(
 async def pause_learning_path(
     path_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Pause a learning path.
-
-    Args:
-        path_id: Learning path UUID.
-        db: Database session.
-
-    Returns:
-        Success status.
-    """
+    """Pause a learning path. Owner only."""
+    await _require_path_access(db, path_id, str(current_user.id), owner_only=True)
     llm_gateway = get_llm_gateway()
     service = LearningPathService(db, llm_gateway)
     success = await service.pause_path(path_id)
@@ -508,16 +540,10 @@ async def pause_learning_path(
 async def resume_learning_path(
     path_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Resume a paused learning path.
-
-    Args:
-        path_id: Learning path UUID.
-        db: Database session.
-
-    Returns:
-        Success status.
-    """
+    """Resume a paused learning path. Owner only."""
+    await _require_path_access(db, path_id, str(current_user.id), owner_only=True)
     llm_gateway = get_llm_gateway()
     service = LearningPathService(db, llm_gateway)
     success = await service.resume_path(path_id)
@@ -535,16 +561,10 @@ async def resume_learning_path(
 async def abandon_learning_path(
     path_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Abandon a learning path.
-
-    Args:
-        path_id: Learning path UUID.
-        db: Database session.
-
-    Returns:
-        Success status.
-    """
+    """Abandon a learning path. Owner only."""
+    await _require_path_access(db, path_id, str(current_user.id), owner_only=True)
     llm_gateway = get_llm_gateway()
     service = LearningPathService(db, llm_gateway)
     success = await service.abandon_path(path_id)
@@ -573,6 +593,7 @@ async def search_courses(
     skill: str,
     providers: str = "youtube",
     max_results: int = 10,
+    current_user: Developer = Depends(get_current_developer),
 ):
     """Search for external courses by skill.
 
@@ -603,19 +624,11 @@ async def search_courses(
 @router.post("/courses/import", status_code=status.HTTP_201_CREATED)
 async def import_course_as_activity(
     data: CourseImportRequest,
-    developer_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Import an external course as a learning activity.
-
-    Args:
-        data: Course import request with course details.
-        developer_id: Developer UUID.
-        db: Database session.
-
-    Returns:
-        Created activity.
-    """
+    """Import an external course as a learning activity. For the current user only."""
+    developer_id = str(current_user.id)
     course = data.course
 
     # Map provider to activity source
@@ -665,16 +678,10 @@ async def import_course_as_activity(
 async def get_recommended_courses(
     path_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get recommended courses based on learning path skill gaps.
-
-    Args:
-        path_id: Learning path UUID.
-        db: Database session.
-
-    Returns:
-        List of recommended courses for each skill gap.
-    """
+    """Get recommended courses based on learning path skill gaps. Owner or admin."""
+    await _require_path_access(db, path_id, str(current_user.id))
     llm_gateway = get_llm_gateway()
     path_service = LearningPathService(db, llm_gateway)
 
@@ -757,30 +764,16 @@ class TeamLearningRecommendations(BaseModel):
 async def get_team_learning_overview(
     team_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get learning status for all team members.
-
-    Args:
-        team_id: Team UUID.
-        db: Database session.
-
-    Returns:
-        Team learning overview with member statuses.
-    """
+    """Get learning status for all team members. Team-workspace member required."""
     if not is_valid_uuid(team_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid team ID",
         )
 
-    # Get team
-    team_result = await db.execute(select(Team).where(Team.id == team_id))
-    team = team_result.scalar_one_or_none()
-    if not team:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Team not found",
-        )
+    team = await _require_team_workspace_member(db, team_id, str(current_user.id))
 
     # Get team members with developer info
     members_result = await db.execute(
@@ -875,33 +868,16 @@ async def get_team_learning_overview(
 async def get_team_learning_recommendations(
     team_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: Developer = Depends(get_current_developer),
 ):
-    """Get recommended skills for team to develop.
-
-    Analyzes team's current skills and identifies gaps that would benefit
-    from learning initiatives.
-
-    Args:
-        team_id: Team UUID.
-        db: Database session.
-
-    Returns:
-        Prioritized skill recommendations for the team.
-    """
+    """Get recommended skills for team to develop. Team-workspace member required."""
     if not is_valid_uuid(team_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid team ID",
         )
 
-    # Get team
-    team_result = await db.execute(select(Team).where(Team.id == team_id))
-    team = team_result.scalar_one_or_none()
-    if not team:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Team not found",
-        )
+    team = await _require_team_workspace_member(db, team_id, str(current_user.id))
 
     # Get team members with developer info
     members_result = await db.execute(

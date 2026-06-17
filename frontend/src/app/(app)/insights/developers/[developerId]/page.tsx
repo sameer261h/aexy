@@ -27,6 +27,12 @@ import {
   useDeveloperTrends,
 } from "@/hooks/useInsights";
 import {
+  ClaimCommitsBanner,
+  DeveloperCommitsTable,
+  ReviewDigestCard,
+  WeeklyDigestCard,
+} from "@/components/code-insights";
+import {
   InsightsPeriodType,
   insightsApi,
   HealthScoreResponse,
@@ -56,11 +62,16 @@ const PERIOD_OPTIONS: { value: InsightsPeriodType; label: string }[] = [
 ];
 
 export default function DeveloperInsightsPage() {
-  const { isLoading: authLoading, isAuthenticated } = useAuth();
+  const { user, isLoading: authLoading, isAuthenticated } = useAuth();
   const { currentWorkspaceId } = useWorkspace();
   const params = useParams();
   const developerId = params.developerId as string;
   const [periodType, setPeriodType] = useState<InsightsPeriodType>("weekly");
+  const [activeTab, setActiveTab] = useState<"metrics" | "commits">("metrics");
+
+  // Only show the claim banner when the viewer is looking at their own
+  // profile — claiming is a self-only operation.
+  const viewingSelf = user?.id === developerId;
 
   const { insights, isLoading } = useDeveloperInsights(
     currentWorkspaceId,
@@ -150,6 +161,10 @@ export default function DeveloperInsightsPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
+      {/* When the user is looking at their own profile and we detect
+          orphan commits attributed elsewhere, prompt them to claim. */}
+      {viewingSelf && <ClaimCommitsBanner />}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
@@ -188,7 +203,40 @@ export default function DeveloperInsightsPage() {
         </div>
       </div>
 
-      {isLoading ? (
+      {/* View tabs — keep the rich metric view as the default and add a
+          drill-in for the raw commit rows that fed those metrics. */}
+      <div className="flex gap-1 border-b border-border">
+        {(
+          [
+            { value: "metrics", label: "Metrics" },
+            { value: "commits", label: "Synced commits" },
+          ] as const
+        ).map((tab) => (
+          <button
+            key={tab.value}
+            onClick={() => setActiveTab(tab.value)}
+            className={`px-3 py-2 text-sm font-medium border-b-2 transition ${
+              activeTab === tab.value
+                ? "border-indigo-500 text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "commits" && (
+        <DeveloperCommitsTable
+          workspaceId={currentWorkspaceId}
+          developerId={developerId}
+          startDate={insights?.period_start ?? null}
+          endDate={insights?.period_end ?? null}
+          periodType={periodType}
+        />
+      )}
+
+      {activeTab === "metrics" && (isLoading ? (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {Array.from({ length: 8 }).map((_, i) => (
             <div
@@ -206,6 +254,21 @@ export default function DeveloperInsightsPage() {
         </div>
       ) : (
         <>
+          {/* AI weekly digest — independent of the InsightsSnapshot timeline above,
+              this is the LLM-narrative rollup from compose_developer_digest. */}
+          <WeeklyDigestCard
+            developerId={developerId}
+            workspaceId={currentWorkspaceId}
+          />
+
+          {/* AI review summary — drives the weekly/monthly/quarterly/semi/yearly
+              performance-review narrative. Lazy by period; auto-generated when
+              a review cycle activates. */}
+          <ReviewDigestCard
+            developerId={developerId}
+            workspaceId={currentWorkspaceId}
+          />
+
           {/* Velocity Section */}
           <Section title="Velocity" icon={Zap} color="text-green-400">
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -667,7 +730,7 @@ export default function DeveloperInsightsPage() {
             </div>
           )}
         </>
-      )}
+      ))}
     </div>
   );
 }

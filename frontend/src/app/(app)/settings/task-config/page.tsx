@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   Check,
   ChevronDown,
@@ -23,8 +24,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useWorkspace, useWorkspaceMembers } from "@/hooks/useWorkspace";
-import { useTaskStatuses, useCustomFields } from "@/hooks/useTaskConfig";
+import { useTaskStatuses, useStatusCategories, useCustomFields } from "@/hooks/useTaskConfig";
+import { useProjects } from "@/hooks/useProjects";
 import { useAuth } from "@/hooks/useAuth";
+import { DeleteStatusModal } from "@/components/settings/DeleteStatusModal";
+import { SortableStatusItem } from "@/components/settings/SortableStatusItem";
+import { StatusModal } from "@/components/settings/StatusModal";
 import { TaskStatusConfig, CustomField, StatusCategory, CustomFieldType, CustomFieldOption } from "@/lib/api";
 import {
   DndContext,
@@ -82,105 +87,6 @@ function getCategoryBadgeColor(category: StatusCategory) {
 function getFieldTypeIcon(type: CustomFieldType) {
   const fieldType = FIELD_TYPES.find((f) => f.value === type);
   return fieldType?.icon || <Type className="h-4 w-4" />;
-}
-
-// Sortable Status Item
-interface SortableStatusItemProps {
-  status: TaskStatusConfig;
-  isAdmin: boolean;
-  onEdit: (status: TaskStatusConfig) => void;
-  onDelete: (statusId: string) => void;
-}
-
-function SortableStatusItem({ status, isAdmin, onEdit, onDelete }: SortableStatusItemProps) {
-  const [showMenu, setShowMenu] = useState(false);
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: status.id });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-  };
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className="bg-card rounded-lg p-3 flex items-center gap-3"
-    >
-      {isAdmin && (
-        <button
-          {...attributes}
-          {...listeners}
-          className="p-1 text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing"
-        >
-          <GripVertical className="h-4 w-4" />
-        </button>
-      )}
-      <div
-        className="w-4 h-4 rounded-full flex-shrink-0"
-        style={{ backgroundColor: status.color }}
-      />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-foreground font-medium">{status.name}</span>
-          <span className={`px-2 py-0.5 rounded text-xs ${getCategoryBadgeColor(status.category)}`}>
-            {status.category.replace("_", " ")}
-          </span>
-          {status.is_default && (
-            <span className="px-2 py-0.5 rounded text-xs bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-400">
-              Default
-            </span>
-          )}
-        </div>
-        <p className="text-muted-foreground text-xs">slug: {status.slug}</p>
-      </div>
-      {isAdmin && (
-        <div className="relative">
-          <button
-            onClick={() => setShowMenu(!showMenu)}
-            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition"
-          >
-            <MoreVertical className="h-4 w-4" />
-          </button>
-          {showMenu && (
-            <>
-              <div className="fixed inset-0 z-10" onClick={() => setShowMenu(false)} />
-              <div className="absolute right-0 top-full mt-1 w-36 bg-muted rounded-lg shadow-xl z-20 py-1">
-                <button
-                  onClick={() => {
-                    onEdit(status);
-                    setShowMenu(false);
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-accent flex items-center gap-2"
-                >
-                  <Edit2 className="h-4 w-4" />
-                  Edit
-                </button>
-                <button
-                  onClick={() => {
-                    onDelete(status.id);
-                    setShowMenu(false);
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-accent flex items-center gap-2"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Delete
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
 }
 
 // Sortable Field Item
@@ -277,160 +183,6 @@ function SortableFieldItem({ field, isAdmin, onEdit, onDelete }: SortableFieldIt
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-// Status Modal
-interface StatusModalProps {
-  status: TaskStatusConfig | null;
-  onClose: () => void;
-  onSave: (data: {
-    name: string;
-    category: StatusCategory;
-    color: string;
-    icon?: string;
-    is_default?: boolean;
-  }) => Promise<void>;
-  isSaving: boolean;
-}
-
-function StatusModal({ status, onClose, onSave, isSaving }: StatusModalProps) {
-  const [name, setName] = useState(status?.name || "");
-  const [category, setCategory] = useState<StatusCategory>(status?.category || "todo");
-  const [color, setColor] = useState(status?.color || "#6B7280");
-  const [isDefault, setIsDefault] = useState(status?.is_default || false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-
-    if (!name.trim()) {
-      setError("Status name is required");
-      return;
-    }
-
-    try {
-      await onSave({ name: name.trim(), category, color, is_default: isDefault });
-      onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save status");
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-card rounded-xl w-full max-w-md p-6">
-        <h3 className="text-xl font-semibold text-foreground mb-4">
-          {status ? "Edit Status" : "Create Status"}
-        </h3>
-        <form onSubmit={handleSubmit}>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm text-muted-foreground mb-1">Name</label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="In Review"
-                className="w-full px-4 py-2 bg-muted border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm text-muted-foreground mb-1">Category</label>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                {STATUS_CATEGORIES.map((cat) => (
-                  <button
-                    key={cat.value}
-                    type="button"
-                    onClick={() => setCategory(cat.value)}
-                    className={`p-2 rounded-lg border text-center transition ${
-                      category === cat.value
-                        ? "border-primary-500 bg-primary-900/20"
-                        : "border-border hover:border-border"
-                    }`}
-                  >
-                    <div className={`w-3 h-3 ${cat.color} rounded-full mx-auto mb-1`} />
-                    <span className="text-foreground text-sm">{cat.label}</span>
-                  </button>
-                ))}
-              </div>
-              <p className="text-muted-foreground text-xs mt-1">
-                Category affects burndown chart calculations
-              </p>
-            </div>
-
-            <div>
-              <label className="block text-sm text-muted-foreground mb-1">Color</label>
-              <div className="flex flex-wrap gap-2">
-                {PRESET_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => setColor(c)}
-                    className={`w-8 h-8 rounded-lg border-2 transition ${
-                      color === c ? "border-white" : "border-transparent"
-                    }`}
-                    style={{ backgroundColor: c }}
-                  />
-                ))}
-                <input
-                  type="color"
-                  value={color}
-                  onChange={(e) => setColor(e.target.value)}
-                  className="w-8 h-8 rounded-lg cursor-pointer"
-                />
-              </div>
-            </div>
-
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={isDefault}
-                onChange={(e) => setIsDefault(e.target.checked)}
-                className="w-4 h-4 rounded border-border bg-muted text-primary-500 focus:ring-primary-500"
-              />
-              <span className="text-foreground text-sm">Set as default status for new tasks</span>
-            </label>
-
-            {error && (
-              <div className="flex items-center gap-2 text-red-400 text-sm">
-                <AlertCircle className="h-4 w-4" />
-                {error}
-              </div>
-            )}
-          </div>
-
-          <div className="flex gap-3 mt-6">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 px-4 py-2 bg-muted hover:bg-accent text-foreground rounded-lg transition"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSaving}
-              className="flex-1 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              {isSaving ? (
-                <>
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Check className="h-4 w-4" />
-                  Save
-                </>
-              )}
-            </button>
-          </div>
-        </form>
-      </div>
     </div>
   );
 }
@@ -667,6 +419,31 @@ export default function TaskConfigPage() {
     hasWorkspaces,
   } = useWorkspace();
   const { members: workspaceMembers } = useWorkspaceMembers(currentWorkspaceId);
+  const { projects } = useProjects(currentWorkspaceId);
+
+  // Project picker for the Statuses tab. `null` = workspace defaults
+  // (legacy behavior); a project id = that project's status set, with the
+  // backend falling back to workspace defaults until the admin customizes.
+  // Hydrate from `?project=<id>` so deep links from the project board land
+  // pre-scoped to the right project.
+  const searchParams = useSearchParams();
+  const initialProjectFromUrl = searchParams.get("project");
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    initialProjectFromUrl,
+  );
+
+  // If the projects list arrives after mount and the URL-supplied id matches
+  // a real project, keep the selection. If it doesn't match, clear so the
+  // dropdown doesn't sit on a dangling value.
+  useEffect(() => {
+    if (initialProjectFromUrl && projects.length > 0) {
+      const exists = projects.some((p) => p.id === initialProjectFromUrl);
+      if (!exists) setSelectedProjectId(null);
+    }
+    // We only react to the projects list resolving — the URL param is
+    // captured once via initial state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects]);
 
   const {
     statuses,
@@ -675,9 +452,18 @@ export default function TaskConfigPage() {
     updateStatus,
     deleteStatus,
     reorderStatuses,
+    cloneFromWorkspace,
+    isUsingWorkspaceFallback,
+    isCloning,
     isCreating: isCreatingStatus,
     isUpdating: isUpdatingStatus,
-  } = useTaskStatuses(currentWorkspaceId);
+    isDeleting: isDeletingStatus,
+  } = useTaskStatuses(currentWorkspaceId, selectedProjectId);
+
+  const { categories: statusCategories } = useStatusCategories(
+    currentWorkspaceId,
+    selectedProjectId,
+  );
 
   const {
     fields,
@@ -695,6 +481,8 @@ export default function TaskConfigPage() {
   const [showFieldModal, setShowFieldModal] = useState(false);
   const [editingStatus, setEditingStatus] = useState<TaskStatusConfig | null>(null);
   const [editingField, setEditingField] = useState<CustomField | null>(null);
+  // The status the operator clicked Delete on — drives the confirm modal.
+  const [deletingStatus, setDeletingStatus] = useState<TaskStatusConfig | null>(null);
 
   const currentMember = workspaceMembers.find((m) => m.developer_id === user?.id);
   const isAdmin = currentMember?.role === "owner" || currentMember?.role === "admin";
@@ -728,15 +516,24 @@ export default function TaskConfigPage() {
     await reorderFields(newOrder.map((f) => f.id));
   };
 
-  const handleDeleteStatus = async (statusId: string) => {
-    if (confirm("Are you sure you want to delete this status? Tasks with this status will be moved to the default status.")) {
-      try {
-        await deleteStatus(statusId);
-        toast.success("Status deleted");
-      } catch (error) {
-        console.error("Failed to delete status:", error);
-        toast.error("Failed to delete status");
-      }
+  const handleDeleteStatus = (statusId: string) => {
+    const target = statuses.find((s) => s.id === statusId) ?? null;
+    setDeletingStatus(target);
+  };
+
+  const handleConfirmDelete = async (migrateTo: string | null) => {
+    if (!deletingStatus) return;
+    try {
+      await deleteStatus({
+        statusId: deletingStatus.id,
+        migrateTo: migrateTo ?? undefined,
+      });
+      toast.success("Status deleted");
+      setDeletingStatus(null);
+    } catch (error) {
+      console.error("Failed to delete status:", error);
+      const message = error instanceof Error ? error.message : "Failed to delete status";
+      toast.error(message);
     }
   };
 
@@ -865,19 +662,73 @@ export default function TaskConfigPage() {
                       Define the workflow statuses for tasks. Drag to reorder.
                     </p>
                   </div>
-                  {isAdmin && (
-                    <button
-                      onClick={() => {
-                        setEditingStatus(null);
-                        setShowStatusModal(true);
-                      }}
-                      className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition text-sm"
-                    >
-                      <Plus className="h-4 w-4" />
-                      Add Status
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {/* Scope picker — workspace defaults vs. per-project. The
+                        scope drives which rows the rest of this tab edits. */}
+                    {projects.length > 0 && (
+                      <select
+                        value={selectedProjectId ?? ""}
+                        onChange={(e) =>
+                          setSelectedProjectId(e.target.value || null)
+                        }
+                        className="px-3 py-2 bg-card border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary-500/40"
+                        aria-label="Status scope"
+                      >
+                        <option value="">Workspace defaults</option>
+                        {projects.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {isAdmin && (
+                      <button
+                        onClick={() => {
+                          setEditingStatus(null);
+                          setShowStatusModal(true);
+                        }}
+                        className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition text-sm"
+                      >
+                        <Plus className="h-4 w-4" />
+                        Add Status
+                      </button>
+                    )}
+                  </div>
                 </div>
+
+                {/* Per-project mode + fallback: prompt the admin to clone the
+                    workspace defaults into the project before customizing. */}
+                {selectedProjectId && isUsingWorkspaceFallback && isAdmin && (
+                  <div className="mb-4 flex items-start gap-3 rounded-lg border border-primary-500/30 bg-primary-500/5 p-4">
+                    <AlertCircle className="h-5 w-5 text-primary-400 mt-0.5" />
+                    <div className="flex-1">
+                      <h4 className="text-sm font-medium text-foreground">
+                        This project uses the workspace defaults
+                      </h4>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        Customizing here will fork the workspace statuses into a
+                        project-scoped copy. Other projects keep using the
+                        workspace defaults.
+                      </p>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await cloneFromWorkspace();
+                          toast.success("Statuses copied to project");
+                        } catch (err) {
+                          console.error(err);
+                          toast.error("Failed to copy statuses");
+                        }
+                      }}
+                      disabled={isCloning}
+                      className="px-3 py-1.5 bg-primary-600 hover:bg-primary-700 disabled:opacity-50 text-white rounded-md text-sm whitespace-nowrap"
+                    >
+                      {isCloning ? "Copying…" : "Customize for this project"}
+                    </button>
+                  </div>
+                )}
 
                 {statuses.length > 0 ? (
                   <DndContext
@@ -900,6 +751,9 @@ export default function TaskConfigPage() {
                               setShowStatusModal(true);
                             }}
                             onDelete={handleDeleteStatus}
+                            readOnly={
+                              !!selectedProjectId && isUsingWorkspaceFallback
+                            }
                           />
                         ))}
                       </div>
@@ -1043,6 +897,7 @@ export default function TaskConfigPage() {
       {showStatusModal && (
         <StatusModal
           status={editingStatus}
+          categories={statusCategories}
           onClose={() => {
             setShowStatusModal(false);
             setEditingStatus(null);
@@ -1061,6 +916,17 @@ export default function TaskConfigPage() {
           }}
           onSave={handleSaveField}
           isSaving={isCreatingField || isUpdatingField}
+        />
+      )}
+
+      {deletingStatus && currentWorkspaceId && (
+        <DeleteStatusModal
+          workspaceId={currentWorkspaceId}
+          status={deletingStatus}
+          candidates={statuses}
+          onClose={() => setDeletingStatus(null)}
+          onConfirm={handleConfirmDelete}
+          isDeleting={isDeletingStatus}
         />
       )}
     </div>

@@ -5,6 +5,7 @@ import { X, FileText, Code2, BookOpen, Layers, FileCode, Sparkles } from "lucide
 import { cn } from "@/lib/utils";
 import { TemplateListItem, TemplateCategory } from "@/lib/api";
 import { useTemplates } from "@/hooks/useDocuments";
+import { Spinner } from "@/components/ui/spinner";
 
 interface TemplateSelectorProps {
   workspaceId: string;
@@ -137,7 +138,7 @@ export function TemplateSelector({
           {/* Template Categories */}
           {isLoading ? (
             <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-500" />
+              <Spinner size="xs" />
             </div>
           ) : (
             <div>

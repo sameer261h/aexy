@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Bot, Loader2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { AgentMessage, CRMAgent } from "@/lib/api";
 import { MessageBubble } from "./MessageBubble";
@@ -14,6 +15,12 @@ interface ChatInterfaceProps {
   onSend: (message: string) => Promise<void>;
   isSending: boolean;
   isLoading?: boolean;
+  /** When streaming, surface this so the input morphs into a Stop
+   *  button (UX-CHAT-003). */
+  onStop?: () => void;
+  /** Live token + cost meter while a stream is in flight. */
+  streamingTokens?: { input?: number; output?: number } | null;
+  streamingCostUsd?: number | null;
 }
 
 export function ChatInterface({
@@ -22,7 +29,11 @@ export function ChatInterface({
   onSend,
   isSending,
   isLoading = false,
+  onStop,
+  streamingTokens,
+  streamingCostUsd,
 }: ChatInterfaceProps) {
+  const t = useTranslations("agents.chat");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
@@ -113,27 +124,65 @@ export function ChatInterface({
             </div>
           )}
 
-          {/* Messages */}
+          {/* Messages — pass onResend down so user messages get a
+              re-fire affordance. ChatInterface holds the canonical
+              send pipeline; MessageBubble doesn't need to know about
+              isSending — onResend itself is the same surface as the
+              chat input would call. */}
           {messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
+            <MessageBubble
+              key={message.id}
+              message={message}
+              onResend={message.role === "user" && !isSending ? handleSend : undefined}
+            />
           ))}
 
-          {/* Thinking indicator when sending */}
-          {isSending && (
-            <div className="flex justify-start">
-              <ThinkingIndicator />
-            </div>
-          )}
+          {/* Thinking indicator: visible while sending, hidden once a
+              text_delta has produced visible content in the in-flight
+              assistant message so we don't double up on the spinner +
+              the streamed reply. */}
+          {isSending &&
+            (() => {
+              const last = messages[messages.length - 1];
+              const streamingHasContent =
+                last && last.role === "assistant" && !!last.content;
+              return streamingHasContent ? null : (
+                <div className="flex justify-start">
+                  <ThinkingIndicator />
+                </div>
+              );
+            })()}
 
           {/* Scroll anchor */}
           <div ref={messagesEndRef} />
         </div>
       </div>
 
+      {/* UX-CHAT-009: live token + cost meter strip. Only renders
+          when a stream is in flight + the backend has started
+          emitting usage events. Tabular nums so digits don't jitter. */}
+      {isSending && (streamingTokens || streamingCostUsd != null) ? (
+        <div
+          aria-live="polite"
+          className="px-4 pt-2 text-[11px] text-muted-foreground/80 flex items-center gap-3 tabular-nums"
+        >
+          {streamingTokens?.input != null ? (
+            <span>{streamingTokens.input} {t("tokensIn")}</span>
+          ) : null}
+          {streamingTokens?.output != null ? (
+            <span>{streamingTokens.output} {t("tokensOut")}</span>
+          ) : null}
+          {streamingCostUsd != null ? (
+            <span>${streamingCostUsd.toFixed(4)}</span>
+          ) : null}
+        </div>
+      ) : null}
+
       {/* Input area */}
       <ChatInput
         onSend={handleSend}
         isSending={isSending}
+        onStop={onStop}
         disabled={!agent.is_active}
         placeholder={
           agent.is_active

@@ -30,7 +30,10 @@ export function useExecutionState(data: ExecutionStateData): ExecutionStateResul
   const hasError = data.hasError;
 
   const getStatusStyles = (baseColor: string, selectedStyle: string, defaultStyle: string) => {
-    if (isRunning) return "border-blue-400 shadow-blue-500/30 animate-pulse";
+    // motion-safe: gates the always-on pulse so users with
+    // prefers-reduced-motion don't get a per-node heartbeat during a
+    // run. UX-A11Y-005.
+    if (isRunning) return "border-blue-400 shadow-blue-500/30 motion-safe:animate-pulse";
     if (isSuccess) return `border-${baseColor}-400 shadow-${baseColor}-500/30`;
     if (isFailed) return "border-red-500 shadow-red-500/30";
     if (isSkipped) return "border-muted-foreground shadow-muted-foreground/20 opacity-60";
@@ -41,8 +44,8 @@ export function useExecutionState(data: ExecutionStateData): ExecutionStateResul
   const StatusIndicator = (
     <>
       {isRunning && (
-        <div className="absolute -top-2 -right-2 p-1 bg-blue-500 rounded-full animate-pulse z-10">
-          <Loader2 className="h-3 w-3 text-foreground animate-spin" />
+        <div className="absolute -top-2 -right-2 p-1 bg-blue-500 rounded-full motion-safe:animate-pulse z-10">
+          <Loader2 className="h-3 w-3 text-foreground motion-safe:animate-spin" />
         </div>
       )}
       {isSuccess && (

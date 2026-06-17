@@ -26,8 +26,60 @@ from aexy.schemas.dependency import (
 )
 from aexy.api.developers import get_current_developer
 from aexy.models.developer import Developer
+from aexy.services.workspace_service import WorkspaceService
 
 router = APIRouter(prefix="/dependencies")
+
+
+async def _require_member_of(
+    db: AsyncSession, workspace_id: str, developer_id: str, role: str = "member"
+) -> None:
+    if not await WorkspaceService(db).check_permission(workspace_id, developer_id, role):
+        raise HTTPException(status_code=403, detail="Workspace permission required")
+
+
+async def _load_story_dependency_authorized(
+    db: AsyncSession, dependency_id: str, current_user: Developer
+) -> StoryDependency:
+    """Load a story dependency and confirm the caller is a member of the
+    dependent story's workspace. 404 (not 403) to avoid existence oracles."""
+    dependency = await db.get(StoryDependency, dependency_id)
+    if not dependency:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dependency not found",
+        )
+    dependent_story = await db.get(UserStory, dependency.dependent_story_id)
+    if not dependent_story or not await WorkspaceService(db).check_permission(
+        str(dependent_story.workspace_id), str(current_user.id), "member"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dependency not found",
+        )
+    return dependency
+
+
+async def _load_task_dependency_authorized(
+    db: AsyncSession, dependency_id: str, current_user: Developer
+) -> TaskDependency:
+    """Load a task dependency and confirm the caller is a member of the
+    dependent task's workspace. 404 (not 403) to avoid existence oracles."""
+    dependency = await db.get(TaskDependency, dependency_id)
+    if not dependency:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dependency not found",
+        )
+    dependent_task = await db.get(SprintTask, dependency.dependent_task_id)
+    if not dependent_task or not await WorkspaceService(db).check_permission(
+        str(dependent_task.workspace_id), str(current_user.id), "member"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dependency not found",
+        )
+    return dependency
 
 
 # ============================================================================
@@ -54,6 +106,11 @@ async def create_story_dependency(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dependent story not found",
         )
+
+    # Caller must be a member of the dependent story's workspace. The
+    # blocking story can be cross-workspace (this is intentional — see the
+    # is_cross_project flag below).
+    await _require_member_of(db, str(dependent_story.workspace_id), str(current_user.id))
 
     # Validate blocking story exists
     blocking_story = await db.get(UserStory, data.blocking_story_id)
@@ -108,7 +165,7 @@ async def create_story_dependency(
         updated_at=datetime.now(timezone.utc),
     )
 
-    session.add(dependency)
+    db.add(dependency)
     await db.commit()
     await db.refresh(dependency)
 
@@ -131,6 +188,8 @@ async def list_story_dependencies(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Story not found",
         )
+
+    await _require_member_of(db, str(story.workspace_id), str(current_user.id), "viewer")
 
     # Build query based on direction
     conditions = []
@@ -166,12 +225,7 @@ async def update_story_dependency(
     db: AsyncSession = Depends(get_db),
 ):
     """Update a story dependency."""
-    dependency = await db.get(StoryDependency, dependency_id)
-    if not dependency:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Dependency not found",
-        )
+    dependency = await _load_story_dependency_authorized(db, dependency_id, current_user)
 
     update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
@@ -195,12 +249,7 @@ async def delete_story_dependency(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a story dependency."""
-    dependency = await db.get(StoryDependency, dependency_id)
-    if not dependency:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Dependency not found",
-        )
+    dependency = await _load_story_dependency_authorized(db, dependency_id, current_user)
 
     await db.delete(dependency)
     await db.commit()
@@ -216,12 +265,7 @@ async def resolve_story_dependency(
     db: AsyncSession = Depends(get_db),
 ):
     """Mark a story dependency as resolved."""
-    dependency = await db.get(StoryDependency, dependency_id)
-    if not dependency:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Dependency not found",
-        )
+    dependency = await _load_story_dependency_authorized(db, dependency_id, current_user)
 
     if dependency.status == "resolved":
         raise HTTPException(
@@ -264,6 +308,9 @@ async def create_task_dependency(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dependent task not found",
         )
+
+    # Caller must be a member of the dependent task's workspace.
+    await _require_member_of(db, str(dependent_task.workspace_id), str(current_user.id))
 
     # Validate blocking task exists
     blocking_task = await db.get(SprintTask, data.blocking_task_id)
@@ -316,7 +363,7 @@ async def create_task_dependency(
         updated_at=datetime.now(timezone.utc),
     )
 
-    session.add(dependency)
+    db.add(dependency)
     await db.commit()
     await db.refresh(dependency)
 
@@ -374,12 +421,7 @@ async def update_task_dependency(
     db: AsyncSession = Depends(get_db),
 ):
     """Update a task dependency."""
-    dependency = await db.get(TaskDependency, dependency_id)
-    if not dependency:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Dependency not found",
-        )
+    dependency = await _load_task_dependency_authorized(db, dependency_id, current_user)
 
     update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
@@ -403,12 +445,7 @@ async def delete_task_dependency(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a task dependency."""
-    dependency = await db.get(TaskDependency, dependency_id)
-    if not dependency:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Dependency not found",
-        )
+    dependency = await _load_task_dependency_authorized(db, dependency_id, current_user)
 
     await db.delete(dependency)
     await db.commit()
@@ -424,12 +461,7 @@ async def resolve_task_dependency(
     db: AsyncSession = Depends(get_db),
 ):
     """Mark a task dependency as resolved."""
-    dependency = await db.get(TaskDependency, dependency_id)
-    if not dependency:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Dependency not found",
-        )
+    dependency = await _load_task_dependency_authorized(db, dependency_id, current_user)
 
     if dependency.status == "resolved":
         raise HTTPException(

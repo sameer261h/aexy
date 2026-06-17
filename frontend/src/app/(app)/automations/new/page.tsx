@@ -1,203 +1,68 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
+import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, Sparkles } from "lucide-react";
+import { useTranslations } from "next-intl";
+import { ChevronLeft, Loader2, Sparkles } from "lucide-react";
 import { Node, Edge } from "@xyflow/react";
 
 import { useWorkspace } from "@/hooks/useWorkspace";
-import { WorkflowCanvas } from "@/components/workflow-builder";
-import { api, AutomationModule } from "@/lib/api";
+import { api, AutomationModule, GeneratedWorkflow } from "@/lib/api";
+import {
+  AUTOMATION_TEMPLATES,
+  AutomationTemplate,
+  defaultTriggerTypes,
+  getDefaultEdges,
+  getDefaultNodes,
+  moduleLabels,
+} from "@/lib/automationTemplates";
+import { TemplateGallery } from "@/components/automations/TemplateGallery";
 
-const moduleLabels: Record<AutomationModule, string> = {
-  crm: "CRM",
-  tickets: "Tickets",
-  hiring: "Hiring",
-  email_marketing: "Email Marketing",
-  uptime: "Uptime",
-  sprints: "Sprints",
-  forms: "Forms",
-  booking: "Booking",
-  tracking: "Tracking",
-  compliance: "Compliance",
-};
-
-// Default trigger types per module
-const defaultTriggerTypes: Record<string, { type: string; label: string }> = {
-  crm: { type: "record.created", label: "Record Created" },
-  tickets: { type: "ticket.created", label: "Ticket Created" },
-  hiring: { type: "candidate.created", label: "Candidate Created" },
-  email_marketing: { type: "campaign.sent", label: "Campaign Sent" },
-  uptime: { type: "monitor.created", label: "Monitor Created" },
-  sprints: { type: "task.created", label: "Task Created" },
-  forms: { type: "form.submitted", label: "Form Submitted" },
-  booking: { type: "booking.created", label: "Booking Created" },
-  tracking: { type: "standup.submitted", label: "Standup Submitted" },
-  compliance: { type: "training.assigned", label: "Training Assigned" },
-};
-
-// Template definitions for pre-filling automation from /templates page
-interface AutomationTemplate {
-  name: string;
-  description: string;
-  module: AutomationModule;
-  triggerType: string;
-  triggerLabel: string;
-  actions: { type: string; label: string; config: Record<string, unknown> }[];
-}
-
-const AUTOMATION_TEMPLATES: Record<string, AutomationTemplate> = {
-  "missed-standup": {
-    name: "Missed Standup Follow-up",
-    description: "When a team member misses their standup, create a follow-up task and send a reminder.",
-    module: "tracking",
-    triggerType: "standup.missed",
-    triggerLabel: "Standup Missed",
-    actions: [
-      { type: "create_task", label: "Create Follow-up Task", config: { title: "Missed standup follow-up", priority: "medium" } },
-      { type: "send_notification", label: "Send Reminder", config: { channel: "slack" } },
-    ],
+// WorkflowCanvas drags in @xyflow/react + 7 node components (~150 KB). It
+// only matters when the user actually opens the canvas — both the
+// template gallery first-run path AND the early `if (!workspaceId)`
+// skeleton avoid loading it. Lazy-import via dynamic() so the bundle
+// only ships when we're sure we need it.
+const WorkflowCanvas = dynamic(
+  () => import("@/components/workflow-builder").then((m) => m.WorkflowCanvas),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-full flex items-center justify-center text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin mr-2" />
+        Loading canvas...
+      </div>
+    ),
   },
-  "blocker-escalation": {
-    name: "Blocker Auto-Escalation",
-    description: "Escalate blockers that remain unresolved for more than 2 days to the engineering manager.",
-    module: "tracking",
-    triggerType: "blocker.unresolved",
-    triggerLabel: "Blocker Unresolved",
-    actions: [
-      { type: "send_notification", label: "Notify Manager", config: { channel: "slack", recipient: "manager" } },
-      { type: "update_priority", label: "Increase Priority", config: { priority: "high" } },
-    ],
-  },
-  "velocity-alert": {
-    name: "Sprint Velocity Alert",
-    description: "Notify when sprint burndown deviates more than 20% from the ideal trajectory.",
-    module: "sprints",
-    triggerType: "sprint.velocity_deviation",
-    triggerLabel: "Velocity Deviation",
-    actions: [
-      { type: "send_notification", label: "Alert Team", config: { channel: "slack", threshold: 20 } },
-    ],
-  },
-  "lead-followup": {
-    name: "Lead Follow-up Sequence",
-    description: "Send follow-up emails to new CRM leads after 1, 3, and 7 days.",
-    module: "crm",
-    triggerType: "record.created",
-    triggerLabel: "Lead Created",
-    actions: [
-      { type: "send_email", label: "Day 1 Follow-up", config: { delay_days: 1 } },
-      { type: "send_email", label: "Day 3 Follow-up", config: { delay_days: 3 } },
-      { type: "send_email", label: "Day 7 Follow-up", config: { delay_days: 7 } },
-    ],
-  },
-  "welcome-sequence": {
-    name: "Welcome Email Sequence",
-    description: "Send onboarding emails when a new contact is added to CRM.",
-    module: "crm",
-    triggerType: "record.created",
-    triggerLabel: "Contact Created",
-    actions: [
-      { type: "send_email", label: "Welcome Email", config: { delay_days: 0 } },
-      { type: "send_email", label: "Getting Started", config: { delay_days: 2 } },
-      { type: "send_email", label: "Tips & Resources", config: { delay_days: 5 } },
-    ],
-  },
-  "compliance-alert": {
-    name: "Compliance Due Date Alert",
-    description: "Alert team members 7 days before compliance deadlines and escalate overdue items.",
-    module: "compliance",
-    triggerType: "compliance.deadline_approaching",
-    triggerLabel: "Deadline Approaching",
-    actions: [
-      { type: "send_notification", label: "7-Day Warning", config: { days_before: 7 } },
-      { type: "send_notification", label: "Escalate Overdue", config: { on_overdue: true } },
-    ],
-  },
-  "ai-triage": {
-    name: "AI Ticket Triage",
-    description: "Use AI to classify and route incoming tickets by priority and department.",
-    module: "tickets",
-    triggerType: "ticket.created",
-    triggerLabel: "Ticket Created",
-    actions: [
-      { type: "ai_classify", label: "AI Classification", config: { model: "auto" } },
-      { type: "assign_ticket", label: "Route to Team", config: { based_on: "classification" } },
-    ],
-  },
-  "deal-stage-alert": {
-    name: "Deal Stage Notification",
-    description: "Notify the sales team when a deal moves to a new pipeline stage.",
-    module: "crm",
-    triggerType: "deal.stage_changed",
-    triggerLabel: "Deal Stage Changed",
-    actions: [
-      { type: "send_notification", label: "Notify Sales Team", config: { channel: "slack" } },
-    ],
-  },
-};
-
-const getDefaultNodes = (module: string, tmpl?: AutomationTemplate | null): Node[] => {
-  const trigger = tmpl
-    ? { type: tmpl.triggerType, label: tmpl.triggerLabel }
-    : defaultTriggerTypes[module] || defaultTriggerTypes.crm;
-
-  const nodes: Node[] = [
-    {
-      id: "trigger-1",
-      type: "trigger",
-      position: { x: 250, y: 50 },
-      data: {
-        label: trigger.label,
-        trigger_type: trigger.type,
-      },
-    },
-  ];
-
-  // Add action nodes from template
-  if (tmpl?.actions) {
-    tmpl.actions.forEach((action, i) => {
-      nodes.push({
-        id: `action-${i + 1}`,
-        type: "action",
-        position: { x: 250, y: 200 + i * 150 },
-        data: {
-          label: action.label,
-          action_type: action.type,
-          config: action.config,
-        },
-      });
-    });
-  }
-
-  return nodes;
-};
-
-const getDefaultEdges = (tmpl?: AutomationTemplate | null): Edge[] => {
-  if (!tmpl?.actions?.length) return [];
-
-  const edges: Edge[] = [
-    { id: "e-trigger-action-1", source: "trigger-1", target: "action-1" },
-  ];
-  for (let i = 1; i < tmpl.actions.length; i++) {
-    edges.push({
-      id: `e-action-${i}-action-${i + 1}`,
-      source: `action-${i}`,
-      target: `action-${i + 1}`,
-    });
-  }
-  return edges;
-};
+);
 
 export default function NewAutomationPage() {
+  const t = useTranslations("automations");
   const router = useRouter();
   const searchParams = useSearchParams();
   const { currentWorkspace } = useWorkspace();
 
-  // Get module and template from URL query params
+  // Get module and template from URL query params.
   const moduleParam = searchParams.get("module") as AutomationModule | null;
   const templateParam = searchParams.get("template");
+  const startBlank = searchParams.get("blank") === "1";
   const template = templateParam ? AUTOMATION_TEMPLATES[templateParam] : null;
+
+  // UX-DEF-004: LLM-generated workflow lives in component state (not
+  // URL, since the payload can be large). When the gallery's generate
+  // dialog succeeds, we stash the workflow here + flip into canvas
+  // mode. The canvas reads from `generatedWorkflow` to seed initial
+  // nodes/edges, identical to the template path.
+  const [generatedWorkflow, setGeneratedWorkflow] = useState<GeneratedWorkflow | null>(null);
+
+  // Decide whether to show the gallery or the canvas. The audit flagged
+  // the blank-canvas cold-start as a major UX cliff; we now route
+  // first-time creators through a template picker unless they
+  // explicitly opted to skip (?blank=1), arrived with a template
+  // already picked, or generated one from a prompt.
+  const showCanvas = !!template || startBlank || !!generatedWorkflow;
 
   const [module, setModule] = useState<AutomationModule>(
     template?.module || moduleParam || "crm"
@@ -207,6 +72,46 @@ export default function NewAutomationPage() {
   const [isCreating, setIsCreating] = useState(false);
   const [automationId, setAutomationId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Synchronous mirror of `automationId` so handlers that fire
+  // RIGHT AFTER an auto-create (e.g. canvas's handleTest → onSave
+  // → onTest) can read the freshly minted id without waiting for
+  // React's re-render to update closures. setAutomationId triggers
+  // a re-render but the `onTest` closure already captured by the
+  // canvas still sees the old null value — the ref bypasses that.
+  const automationIdRef = useRef<string | null>(null);
+  const updateAutomationId = useCallback((id: string | null) => {
+    automationIdRef.current = id;
+    setAutomationId(id);
+  }, []);
+
+  const handleUseTemplate = (picked: AutomationTemplate) => {
+    const params = new URLSearchParams();
+    params.set("template", picked.id);
+    if (moduleParam && moduleParam !== picked.module) {
+      // Keep the originating module-filter on the URL so the back button
+      // returns to that filtered list.
+      params.set("module", moduleParam);
+    }
+    router.replace(`/automations/new?${params.toString()}`);
+  };
+
+  const handleStartBlank = () => {
+    const params = new URLSearchParams();
+    params.set("blank", "1");
+    if (moduleParam) params.set("module", moduleParam);
+    router.replace(`/automations/new?${params.toString()}`);
+  };
+
+  const handleUseGenerated = (workflow: GeneratedWorkflow) => {
+    // Generated workflows always start as drafts in the user's
+    // chosen module (or "crm" by default). The user can rename +
+    // tweak before save, same as templates.
+    const generatedModule = (workflow._meta?.module as AutomationModule) || moduleParam || "crm";
+    setModule(generatedModule);
+    setName("Generated Automation");
+    setDescription("");
+    setGeneratedWorkflow(workflow);
+  };
 
   const workspaceId = currentWorkspace?.id;
 
@@ -227,7 +132,7 @@ export default function NewAutomationPage() {
         trigger_config: {},
         actions: [], // Start with empty actions, user will add via workflow canvas
       });
-      setAutomationId(response.data.id);
+      updateAutomationId(response.data.id);
       return response.data.id;
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "Failed to create automation";
@@ -308,18 +213,22 @@ export default function NewAutomationPage() {
 
   const handleTest = useCallback(
     async (recordId?: string) => {
-      if (!workspaceId || !automationId) return;
+      // Read from the ref so we pick up an id minted by a just-
+      // completed handleSave in the same await chain. The state-
+      // backed `automationId` would still be the old value at this
+      // closure capture — see updateAutomationId for the rationale.
+      const id = automationIdRef.current ?? automationId;
+      if (!workspaceId || !id) return;
 
       try {
         const response = await api.post(
-          `/workspaces/${workspaceId}/crm/automations/${automationId}/workflow/execute`,
+          `/workspaces/${workspaceId}/crm/automations/${id}/workflow/execute`,
           {
             dry_run: true,
             // Only include record_id if provided and non-empty
             ...(recordId?.trim() ? { record_id: recordId.trim() } : {}),
           }
         );
-        console.log("Test execution result:", response.data);
         return response.data;
       } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : "Failed to test workflow";
@@ -372,6 +281,20 @@ export default function NewAutomationPage() {
     );
   }
 
+  // Gallery mode — no template + user hasn't explicitly opted to skip.
+  if (!showCanvas) {
+    return (
+      <TemplateGallery
+        initialModule={moduleParam}
+        workspaceId={workspaceId ?? null}
+        onUseTemplate={handleUseTemplate}
+        onStartBlank={handleStartBlank}
+        onUseGenerated={handleUseGenerated}
+        onBack={handleBack}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <div className="h-[calc(100vh-64px)] flex flex-col">
@@ -390,13 +313,13 @@ export default function NewAutomationPage() {
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="text-lg font-semibold text-foreground bg-transparent border-none focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-2 py-1 -ml-2"
-                  placeholder="Automation name"
+                  className="text-lg font-semibold text-foreground bg-transparent border-none focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded px-2 py-1 -ml-2"
+                  placeholder={t("builder.namePlaceholder")}
                 />
                 <select
                   value={module}
                   onChange={(e) => setModule(e.target.value as AutomationModule)}
-                  className="text-sm bg-accent border border-border rounded-lg px-3 py-1 text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="text-sm bg-accent border border-border rounded-lg px-3 py-1 text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
                   {Object.entries(moduleLabels).map(([value, label]) => (
                     <option key={value} value={value}>
@@ -409,8 +332,8 @@ export default function NewAutomationPage() {
                 type="text"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                className="block text-sm text-muted-foreground bg-transparent border-none focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-2 py-0.5 -ml-2 w-full max-w-md"
-                placeholder="Add a description..."
+                className="block text-sm text-muted-foreground bg-transparent border-none focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded px-2 py-0.5 -ml-2 w-full max-w-md"
+                placeholder={t("builder.descriptionPlaceholder")}
               />
             </div>
           </div>
@@ -422,26 +345,52 @@ export default function NewAutomationPage() {
           )}
         </div>
 
-        {/* Template Banner */}
+        {/* Template Banner — anchors the canvas to the template the user
+            just picked, with a one-click escape back to the gallery in
+            case they want to try a different starting point. */}
         {template && (
           <div className="flex items-center gap-2 px-4 py-2 bg-primary/5 border-b border-primary/20 text-sm">
             <Sparkles className="h-4 w-4 text-primary shrink-0" />
-            <span className="text-muted-foreground">
-              Pre-filled from template: <span className="text-foreground font-medium">{template.name}</span>
-              {" "}&mdash; customize the workflow below, then save.
+            <span className="text-muted-foreground flex-1">
+              {t("builder.fromTemplate")}
+              {" "}
+              <span className="text-foreground font-medium">{template.name}</span>
+              {" "}
+              {t("builder.fromTemplateTail")}
             </span>
+            <Link
+              href={moduleParam ? `/automations/new?module=${moduleParam}` : "/automations/new"}
+              className="text-primary hover:underline text-xs font-medium"
+            >
+              {t("builder.pickAnotherTemplate")}
+            </Link>
           </div>
         )}
 
         {/* Workflow Canvas */}
         <div className="flex-1">
           <WorkflowCanvas
-            key={module}  // Force re-render when module changes
+            // Force-remount when the seed source changes so initial
+            // nodes/edges are re-read. Generated workflows get their
+            // own key so editing one and then generating another
+            // doesn't bleed nodes from the first into the second.
+            key={generatedWorkflow ? "generated" : module}
             automationId={automationId || "new"}
             workspaceId={workspaceId}
             module={module}
-            initialNodes={getDefaultNodes(module, template)}
-            initialEdges={getDefaultEdges(template)}
+            // Generated workflows seed nodes/edges directly. The
+            // generator already validated the shape; the canvas
+            // applies its usual validation rules on top.
+            initialNodes={
+              generatedWorkflow
+                ? (generatedWorkflow.nodes as unknown as Node[])
+                : getDefaultNodes(module, template)
+            }
+            initialEdges={
+              generatedWorkflow
+                ? (generatedWorkflow.edges as unknown as Edge[])
+                : getDefaultEdges(template)
+            }
             onSave={handleSave}
             onPublish={handlePublish}
             onUnpublish={handleUnpublish}

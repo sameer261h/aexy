@@ -26,8 +26,11 @@ import {
   Organization,
   Repository,
   InstallationStatus,
+  workspaceRepositoriesApi,
+  WorkspaceRepositoryItem,
 } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
+import { useWorkspace } from "@/hooks/useWorkspace";
 import { useSubscription } from "@/hooks/useSubscription";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
 
@@ -70,9 +73,10 @@ interface RepoItemProps {
   onRepoToggle: (repoId: string, enabled: boolean) => Promise<void>;
   onStartSync: (repoId: string) => Promise<void>;
   showOwner?: boolean;
+  isSyncing?: boolean;
 }
 
-function RepoItem({ repo, onRepoToggle, onStartSync, showOwner }: RepoItemProps) {
+function RepoItem({ repo, onRepoToggle, onStartSync, showOwner, isSyncing }: RepoItemProps) {
   return (
     <div className="p-3 px-4 flex items-start justify-between hover:bg-accent/30 gap-4">
       <div className="flex items-start gap-3 flex-1 min-w-0">
@@ -118,10 +122,22 @@ function RepoItem({ repo, onRepoToggle, onStartSync, showOwner }: RepoItemProps)
              
               <button
                 onClick={() => onStartSync(repo.id)}
-                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition"
-                title="Start sync"
+                disabled={isSyncing || repo.sync_status === "syncing"}
+                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition disabled:opacity-50 disabled:cursor-not-allowed"
+                title={
+                  repo.sync_status === "syncing"
+                    ? "Sync already in progress"
+                    : "Sync now"
+                }
+                aria-label="Sync now"
               >
-                <RefreshCw className="h-4 w-4" />
+                <RefreshCw
+                  className={`h-4 w-4 ${
+                    isSyncing || repo.sync_status === "syncing"
+                      ? "animate-spin"
+                      : ""
+                  }`}
+                />
               </button>
             
           </>
@@ -193,8 +209,90 @@ function CollapsibleSection({
   );
 }
 
+function ReclaimBanner({
+  workspaceId,
+  catalog,
+  onReclaimed,
+}: {
+  workspaceId: string | null;
+  catalog: WorkspaceRepositoryItem[];
+  onReclaimed: (updated: WorkspaceRepositoryItem) => void;
+}) {
+  const needsReclaim = catalog.filter((c) => !c.adopter_active);
+  const [pending, setPending] = useState<Record<string, boolean>>({});
+
+  if (!workspaceId || needsReclaim.length === 0) {
+    return null;
+  }
+
+  const handleReclaim = async (workspaceRepoId: string) => {
+    setPending((p) => ({ ...p, [workspaceRepoId]: true }));
+    try {
+      const updated = await workspaceRepositoriesApi.reclaim(
+        workspaceId,
+        workspaceRepoId,
+      );
+      onReclaimed(updated);
+      toast.success("Repository reclaimed — sync will resume on the next cycle");
+    } catch (error: unknown) {
+      const detail =
+        (error as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail;
+      toast.error(detail ?? "Failed to reclaim repository");
+    } finally {
+      setPending((p) => ({ ...p, [workspaceRepoId]: false }));
+    }
+  };
+
+  return (
+    <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4">
+      <div className="flex items-start gap-3">
+        <AlertCircle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+        <div className="flex-1">
+          <p className="text-amber-500 font-medium text-sm">
+            {needsReclaim.length} repositor
+            {needsReclaim.length === 1 ? "y needs" : "ies need"} reclaiming
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            The original adopter is no longer an active workspace member.
+            Sync is paused until someone with GitHub access reclaims the
+            repo with their installation.
+          </p>
+          <ul className="mt-3 space-y-2">
+            {needsReclaim.map((wr) => (
+              <li
+                key={wr.id}
+                className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg bg-background/40 px-3 py-2"
+              >
+                <div className="text-sm">
+                  <span className="text-foreground font-medium">
+                    {wr.repository.full_name}
+                  </span>
+                  {wr.adopted_by_name && (
+                    <span className="text-muted-foreground text-xs ml-2">
+                      adopted by {wr.adopted_by_name}
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleReclaim(wr.id)}
+                  disabled={pending[wr.id]}
+                  className="text-xs px-3 py-1.5 rounded-md bg-primary-600 hover:bg-primary-700 text-white font-medium disabled:opacity-50"
+                >
+                  {pending[wr.id] ? "Reclaiming…" : "Reclaim"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function RepositorySettingsPage() {
   const { user } = useAuth();
+  const { currentWorkspaceId } = useWorkspace();
   const { isFree, maxRepos } = useSubscription();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -203,6 +301,12 @@ export default function RepositorySettingsPage() {
   const [installationStatus, setInstallationStatus] = useState<InstallationStatus | null>(null);
   const [autoSyncEnabled, setAutoSyncEnabled] = useState(false);
   const [autoSyncFrequency, setAutoSyncFrequency] = useState("1h");
+  const [workspaceCatalog, setWorkspaceCatalog] = useState<WorkspaceRepositoryItem[]>([]);
+  // Per-repo "manual sync request in flight" tracker — keyed by repo.id.
+  // Persists between the click and the next fetch finishing so the button
+  // can render disabled + spinning without depending on backend status
+  // catching up first.
+  const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set());
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchData = useCallback(async (isPolling = false) => {
@@ -211,12 +315,22 @@ export default function RepositorySettingsPage() {
       setInstallationStatus(instStatus);
 
       if (instStatus.has_installation) {
-        const [orgs, repos] = await Promise.all([
+        const [orgs, repos, catalog] = await Promise.all([
           repositoriesApi.listOrganizations(),
           repositoriesApi.listRepositories(),
+          currentWorkspaceId
+            ? workspaceRepositoriesApi.list(currentWorkspaceId)
+            : Promise.resolve([] as WorkspaceRepositoryItem[]),
         ]);
         setOrganizations(orgs);
-        setRepositories(repos);
+        // Overlay workspace adoption state onto the per-developer repo
+        // discovery list. A repo is "enabled" iff it's in the workspace
+        // catalog — that's the post-0.7.72 source of truth.
+        const adoptedRepoIds = new Set(catalog.map((wr) => wr.repository.id));
+        setWorkspaceCatalog(catalog);
+        setRepositories(
+          repos.map((r) => ({ ...r, is_enabled: adoptedRepoIds.has(r.id) }))
+        );
       }
     } catch (error) {
       console.error("Failed to fetch data:", error);
@@ -225,7 +339,7 @@ export default function RepositorySettingsPage() {
         setLoading(false);
       }
     }
-  }, []);
+  }, [currentWorkspaceId]);
 
   // Initial fetch
   useEffect(() => {
@@ -305,11 +419,22 @@ export default function RepositorySettingsPage() {
   };
 
   const handleRepoToggle = async (repoId: string, enabled: boolean) => {
+    if (!currentWorkspaceId) {
+      toast.error("Select a workspace before adopting repositories");
+      return;
+    }
     try {
       if (enabled) {
-        await repositoriesApi.enableRepository(repoId);
+        const wr = await workspaceRepositoriesApi.adopt(currentWorkspaceId, repoId);
+        setWorkspaceCatalog((prev) => [
+          ...prev.filter((c) => c.repository.id !== repoId),
+          wr,
+        ]);
       } else {
-        await repositoriesApi.disableRepository(repoId);
+        await workspaceRepositoriesApi.unadopt(currentWorkspaceId, repoId);
+        setWorkspaceCatalog((prev) =>
+          prev.filter((c) => c.repository.id !== repoId),
+        );
       }
 
       setRepositories(repos =>
@@ -317,13 +442,25 @@ export default function RepositorySettingsPage() {
           repo.id === repoId ? { ...repo, is_enabled: enabled } : repo
         )
       );
-    } catch (error) {
+    } catch (error: unknown) {
       console.error("Failed to toggle repo:", error);
-      toast.error("Failed to update repository");
+      const detail =
+        (error as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail;
+      toast.error(detail ?? "Failed to update repository");
     }
   };
 
   const handleStartSync = async (repoId: string) => {
+    // Guard against double-clicks: dispatch is fire-and-forget on the
+    // backend, but a second call would re-trigger the workflow.
+    if (syncingIds.has(repoId)) return;
+    setSyncingIds((prev) => {
+      const next = new Set(prev);
+      next.add(repoId);
+      return next;
+    });
+    const repo = repositories.find((r) => r.id === repoId);
     try {
       await repositoriesApi.startSync(repoId);
       setRepositories(repos =>
@@ -331,9 +468,23 @@ export default function RepositorySettingsPage() {
           repo.id === repoId ? { ...repo, sync_status: "syncing" } : repo
         )
       );
-    } catch (error) {
+      toast.success(
+        repo
+          ? `Sync started for ${repo.owner_login}/${repo.name}`
+          : "Sync started"
+      );
+    } catch (error: unknown) {
       console.error("Failed to start sync:", error);
-      toast.error("Failed to start sync");
+      const detail =
+        (error as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail;
+      toast.error(detail ?? "Failed to start sync");
+    } finally {
+      setSyncingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(repoId);
+        return next;
+      });
     }
   };
 
@@ -431,6 +582,17 @@ export default function RepositorySettingsPage() {
         />
       )}
 
+      <ReclaimBanner
+        workspaceId={currentWorkspaceId}
+        catalog={workspaceCatalog}
+        onReclaimed={(updated) =>
+          setWorkspaceCatalog((prev) =>
+            prev.map((c) => (c.id === updated.id ? updated : c)),
+          )
+        }
+      />
+
+
       {user?.github_connection?.auth_status === "error" && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -507,6 +669,7 @@ export default function RepositorySettingsPage() {
                   onRepoToggle={handleRepoToggle}
                   onStartSync={handleStartSync}
                   showOwner={true}
+                  isSyncing={syncingIds.has(repo.id)}
                 />
               ))}
             </CollapsibleSection>
@@ -528,6 +691,7 @@ export default function RepositorySettingsPage() {
                   repo={repo}
                   onRepoToggle={handleRepoToggle}
                   onStartSync={handleStartSync}
+                  isSyncing={syncingIds.has(repo.id)}
                 />
               ))}
             </CollapsibleSection>
@@ -574,6 +738,7 @@ export default function RepositorySettingsPage() {
                       repo={repo}
                       onRepoToggle={handleRepoToggle}
                       onStartSync={handleStartSync}
+                      isSyncing={syncingIds.has(repo.id)}
                     />
                   ))}
                 </CollapsibleSection>
@@ -701,10 +866,20 @@ export default function RepositorySettingsPage() {
                       await handleStartSync(repo.id);
                     }
                   }}
-                  disabled={enabledRepos.some(r => r.sync_status === "syncing")}
+                  disabled={
+                    enabledRepos.some((r) => r.sync_status === "syncing") ||
+                    enabledRepos.some((r) => syncingIds.has(r.id))
+                  }
                   className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition disabled:opacity-50"
                 >
-                  <RefreshCw className={`h-4 w-4 ${enabledRepos.some(r => r.sync_status === "syncing") ? "animate-spin" : ""}`} />
+                  <RefreshCw
+                    className={`h-4 w-4 ${
+                      enabledRepos.some((r) => r.sync_status === "syncing") ||
+                      enabledRepos.some((r) => syncingIds.has(r.id))
+                        ? "animate-spin"
+                        : ""
+                    }`}
+                  />
                   Sync all
                 </button>
               </div>

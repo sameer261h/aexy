@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState, useMemo } from "react";
+import { use, useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import {
@@ -49,7 +49,7 @@ import { useSprints } from "@/hooks/useSprints";
 import { SprintTask, TaskStatus, TaskPriority, AssignmentSuggestion, EpicListItem, TaskActivity } from "@/lib/api";
 import { TASK_STATUS_COLORS, PRIORITY_COLORS } from "@/lib/statusColors";
 import { ImportTasksModal } from "@/components/planning/ImportTasksModal";
-import { redirect } from "next/navigation";
+import { redirect, useRouter, useSearchParams, usePathname } from "next/navigation";
 
 const COLUMN_CONFIG: Record<TaskStatus, { label: string; color: string; bgColor: string }> = {
   backlog: { label: "Backlog", color: TASK_STATUS_COLORS.backlog.text, bgColor: TASK_STATUS_COLORS.backlog.bg },
@@ -260,7 +260,9 @@ interface ColumnConfig {
   color: string;
   bgColor: string;
   customColor: string | null;
-  category: "todo" | "in_progress" | "done";
+  // Free-form category slug — workspaces define their own; the canonical
+  // six are backlog/todo/in_progress/in_review/done/cancelled.
+  category: string;
 }
 
 interface KanbanColumnProps {
@@ -503,14 +505,16 @@ function ActivityItem({ activity }: { activity: TaskActivity }) {
   };
 
   const getActivityText = () => {
+    const oldStr = activity.old_value ?? "—";
+    const newStr = activity.new_value ?? "—";
     switch (activity.action) {
       case "comment":
         return null; // Comment text is shown separately
       case "status_changed":
         return (
           <span>
-            changed status from <span className="text-foreground">{activity.old_value}</span> to{" "}
-            <span className="text-foreground">{activity.new_value}</span>
+            changed status from <span className="text-foreground">{oldStr}</span> to{" "}
+            <span className="text-foreground">{newStr}</span>
           </span>
         );
       case "assigned":
@@ -524,15 +528,15 @@ function ActivityItem({ activity }: { activity: TaskActivity }) {
       case "priority_changed":
         return (
           <span>
-            changed priority from <span className="text-foreground">{activity.old_value}</span> to{" "}
-            <span className="text-foreground">{activity.new_value}</span>
+            changed priority from <span className="text-foreground">{oldStr}</span> to{" "}
+            <span className="text-foreground">{newStr}</span>
           </span>
         );
       case "points_changed":
         return (
           <span>
             changed story points from <span className="text-foreground">{activity.old_value || "none"}</span> to{" "}
-            <span className="text-foreground">{activity.new_value}</span>
+            <span className="text-foreground">{newStr}</span>
           </span>
         );
       case "epic_changed":
@@ -543,12 +547,61 @@ function ActivityItem({ activity }: { activity: TaskActivity }) {
               : "removed from epic"}
           </span>
         );
+      case "title_changed":
+        return <span>renamed to <span className="text-foreground">{newStr}</span></span>;
+      case "description_changed":
+        return <span>updated the description</span>;
+      case "labels_changed":
+        return <span>updated labels</span>;
+      case "start_date_changed":
+        return (
+          <span>
+            {activity.new_value
+              ? <>set start date to <span className="text-foreground">{newStr}</span></>
+              : <>cleared start date</>}
+          </span>
+        );
+      case "end_date_changed":
+        return (
+          <span>
+            {activity.new_value
+              ? <>set due date to <span className="text-foreground">{newStr}</span></>
+              : <>cleared due date</>}
+          </span>
+        );
+      case "estimated_hours_changed":
+        return (
+          <span>
+            {activity.new_value
+              ? <>set estimate to <span className="text-foreground">{newStr}h</span></>
+              : <>cleared estimate</>}
+          </span>
+        );
       case "created":
         return <span>created this task</span>;
+      case "attachment_added":
+        return (
+          <span>attached <span className="text-foreground">{newStr}</span></span>
+        );
+      case "attachment_removed":
+        return (
+          <span>removed attachment <span className="text-foreground">{oldStr}</span></span>
+        );
+      case "archived":
+        return <span>archived this task</span>;
+      case "unarchived":
+        return <span>restored this task</span>;
+      case "sprint_changed":
+        return activity.new_value
+          ? <span>moved into sprint <span className="text-foreground">{newStr}</span></span>
+          : <span>moved to backlog</span>;
       default:
         return (
           <span>
-            updated {activity.field_name}: {activity.new_value}
+            updated {activity.field_name ?? activity.action}
+            {activity.old_value || activity.new_value
+              ? <>: <span className="text-foreground">{oldStr}</span> → <span className="text-foreground">{newStr}</span></>
+              : null}
           </span>
         );
     }
@@ -1050,6 +1103,25 @@ export default function SprintBoardPage({
   const [showImportTasks, setShowImportTasks] = useState(false);
   const [selectedTask, setSelectedTask] = useState<SprintTask | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+
+  // Open the task drawer when navigated here from a /t/[slug]/[key] short
+  // link (which redirects to this page with ?task=<uuid>). The query
+  // param is cleared once consumed so refresh doesn't keep re-opening.
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
+  const taskFromUrl = searchParams.get("task");
+  useEffect(() => {
+    if (!taskFromUrl || !tasks?.length) return;
+    const found = tasks.find((t) => t.id === taskFromUrl);
+    if (found) {
+      setSelectedTask(found);
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("task");
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    }
+  }, [taskFromUrl, tasks, pathname, router, searchParams]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {

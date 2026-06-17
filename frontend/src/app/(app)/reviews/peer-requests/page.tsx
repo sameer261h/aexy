@@ -11,22 +11,45 @@ import {
   CheckCircle,
   XCircle,
   ChevronRight,
-  User,
   Calendar,
 } from "lucide-react";
 import { usePeerRequests } from "@/hooks/useReviews";
 import { ReviewRequest } from "@/lib/api";
+import { formatDate } from "@/lib/datetime";
+import { ErrorPanel } from "@/components/ui/error-panel";
 
-const statusConfig: Record<string, { label: string; color: string; bg: string; icon: React.ElementType }> = {
-  pending: { label: "Pending", color: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500/10", icon: Clock },
-  accepted: { label: "Accepted", color: "text-blue-600 dark:text-blue-400", bg: "bg-blue-500/10", icon: CheckCircle },
-  declined: { label: "Declined", color: "text-red-600 dark:text-red-400", bg: "bg-red-500/10", icon: XCircle },
-  completed: { label: "Completed", color: "text-green-600 dark:text-green-400", bg: "bg-green-500/10", icon: CheckCircle },
+// Status pill visual config — colors + icon stay in the page since
+// they're presentational. The localized label is resolved at render
+// time from `reviews.peerRequests.status.*` so en/hi stay in sync.
+const statusVisual: Record<string, { color: string; bg: string; icon: React.ElementType }> = {
+  pending: { color: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500/10", icon: Clock },
+  accepted: { color: "text-blue-600 dark:text-blue-400", bg: "bg-blue-500/10", icon: CheckCircle },
+  declined: { color: "text-red-600 dark:text-red-400", bg: "bg-red-500/10", icon: XCircle },
+  completed: { color: "text-green-600 dark:text-green-400", bg: "bg-green-500/10", icon: CheckCircle },
 };
 
+type PeerRequestsT = ReturnType<typeof useTranslations<"reviews.peerRequests">>;
+
+function statusLabel(t: PeerRequestsT, status: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const has = (t as any).has?.(`status.${status}`);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return has ? (t as any)(`status.${status}`) : status;
+}
+
+function sourceLabel(t: PeerRequestsT, source: string | null | undefined): string {
+  if (!source) return "—";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const has = (t as any).has?.(`source.${source}`);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if (has) return (t as any)(`source.${source}`);
+  return source.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
+
 function RequestCard({ request }: { request: ReviewRequest }) {
-  const status = statusConfig[request.status] || statusConfig.pending;
-  const StatusIcon = status.icon;
+  const t = useTranslations("reviews.peerRequests");
+  const visual = statusVisual[request.status] || statusVisual.pending;
+  const StatusIcon = visual.icon;
 
   return (
     <Link
@@ -47,15 +70,15 @@ function RequestCard({ request }: { request: ReviewRequest }) {
             </p>
           </div>
         </div>
-        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${status.color} ${status.bg}`}>
+        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${visual.color} ${visual.bg}`}>
           <StatusIcon className="h-3.5 w-3.5" />
-          {status.label}
+          {statusLabel(t, request.status)}
         </span>
       </div>
 
       {request.message && (
         <p className="text-muted-foreground text-sm mb-3 line-clamp-2">
-          &quot;{request.message}&quot;
+          &ldquo;{request.message}&rdquo;
         </p>
       )}
 
@@ -63,13 +86,9 @@ function RequestCard({ request }: { request: ReviewRequest }) {
         <div className="flex items-center gap-4">
           <span className="flex items-center gap-1">
             <Calendar className="h-3.5 w-3.5" />
-            {new Date(request.created_at).toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            })}
+            {formatDate(request.created_at)}
           </span>
-          <span className="capitalize">{request.request_source}</span>
+          <span>{sourceLabel(t, request.request_source)}</span>
         </div>
         <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-muted-foreground transition" />
       </div>
@@ -107,7 +126,7 @@ export default function PeerRequestsPage() {
 
   return (
     <div className="min-h-screen bg-background">
-<main className="max-w-4xl mx-auto px-4 py-8">
+      <main className="max-w-4xl mx-auto px-4 py-8">
         {/* Breadcrumb */}
         <Breadcrumb
           items={[
@@ -162,15 +181,11 @@ export default function PeerRequestsPage() {
             <div className="animate-spin rounded-full h-8 w-8 border-4 border-primary-500/20 border-t-primary-500"></div>
           </div>
         ) : error ? (
-          <div className="text-center py-12">
-            <p className="text-red-400">Failed to load peer requests</p>
-            <button
-              onClick={refetch}
-              className="mt-4 text-amber-400 hover:text-amber-300"
-            >
-              Try again
-            </button>
-          </div>
+          <ErrorPanel
+            error={error}
+            title={t("errors.failedToLoad")}
+            onRetry={refetch}
+          />
         ) : requests.length === 0 ? (
           <div className="text-center py-16">
             <div className="w-20 h-20 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
@@ -188,7 +203,7 @@ export default function PeerRequestsPage() {
               <div>
                 <h2 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
                   <Clock className="h-5 w-5 text-amber-400" />
-                  Pending Requests ({pendingRequests.length})
+                  {t("sections.pendingHeader", { count: pendingRequests.length })}
                 </h2>
                 <div className="space-y-3">
                   {pendingRequests.map((request) => (
@@ -203,7 +218,7 @@ export default function PeerRequestsPage() {
               <div>
                 <h2 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
                   <CheckCircle className="h-5 w-5 text-green-400" />
-                  Completed ({completedRequests.length})
+                  {t("sections.completedHeader", { count: completedRequests.length })}
                 </h2>
                 <div className="space-y-3">
                   {completedRequests.map((request) => (

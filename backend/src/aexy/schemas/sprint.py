@@ -7,23 +7,41 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # Sprint Status Types
 SprintStatus = Literal["planning", "active", "review", "retrospective", "completed"]
-TaskStatus = Literal["backlog", "todo", "in_progress", "review", "done"]
+# Free-form status slug — workspaces define their own via
+# workspace_task_statuses (with optional per-project overrides). The
+# canonical five (backlog, todo, in_progress, review, done) are the seed
+# defaults; validation that a slug is known happens at write time against
+# the workspace's status set, not at schema parsing.
+TaskStatus = str
 TaskPriority = Literal["critical", "high", "medium", "low"]
 TaskSourceType = Literal["github_issue", "jira", "linear", "manual", "ticket", "automation"]
-StatusCategory = Literal["todo", "in_progress", "done"]
+# Status category is a free-form slug validated at write time against the
+# workspace's `workspace_status_categories` rows (with project fallback).
+# Six canonical categories are seeded per workspace: backlog, todo,
+# in_progress, in_review, done, cancelled. Admins can add more.
+StatusCategory = str
+
+# Burndown/velocity branch on this — every category row carries a semantics
+# label, so business logic stays independent of the user-facing slug.
+CategorySemantics = Literal["open", "active", "done", "cancelled"]
 CustomFieldType = Literal["text", "number", "select", "multiselect", "date", "url"]
 
 
 # ==================== Custom Task Status Schemas ====================
 
 class TaskStatusCreate(BaseModel):
-    """Schema for creating a custom task status."""
+    """Schema for creating a custom task status.
+
+    `project_id` scopes the status to a single project; omit it (the default)
+    to create a workspace-wide default.
+    """
 
     name: str = Field(..., min_length=1, max_length=100)
     category: StatusCategory = "todo"
     color: str = Field(default="#6B7280", max_length=20)
     icon: str | None = Field(default=None, max_length=50)
     is_default: bool = False
+    project_id: str | None = None
 
 
 class TaskStatusUpdate(BaseModel):
@@ -43,6 +61,7 @@ class TaskStatusResponse(BaseModel):
 
     id: str
     workspace_id: str
+    project_id: str | None = None
     name: str
     slug: str
     category: StatusCategory
@@ -59,6 +78,52 @@ class TaskStatusReorder(BaseModel):
     """Schema for reordering statuses."""
 
     status_ids: list[str] = Field(..., min_length=1)
+
+
+# ==================== Status Category Schemas ====================
+
+class StatusCategoryCreate(BaseModel):
+    """Schema for creating a status category."""
+
+    slug: str = Field(..., min_length=1, max_length=50)
+    label: str = Field(..., min_length=1, max_length=100)
+    color: str = Field(default="#6B7280", max_length=20)
+    semantics: CategorySemantics = "open"
+    is_default: bool = False
+    project_id: str | None = None
+
+
+class StatusCategoryUpdate(BaseModel):
+    """Schema for updating a status category."""
+
+    label: str | None = Field(default=None, min_length=1, max_length=100)
+    color: str | None = Field(default=None, max_length=20)
+    semantics: CategorySemantics | None = None
+    is_default: bool | None = None
+
+
+class StatusCategoryResponse(BaseModel):
+    """Schema for status category response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    workspace_id: str
+    project_id: str | None = None
+    slug: str
+    label: str
+    color: str
+    semantics: CategorySemantics
+    position: int
+    is_default: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class StatusCategoryReorder(BaseModel):
+    """Schema for reordering categories."""
+
+    category_ids: list[str] = Field(..., min_length=1)
 
 
 # ==================== Custom Field Schemas ====================
@@ -224,6 +289,9 @@ class SprintTaskCreate(BaseModel):
     parent_task_id: str | None = None
     mentioned_user_ids: list[str] = Field(default_factory=list)  # @mentions
     mentioned_file_paths: list[str] = Field(default_factory=list)  # #mentions
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+    estimated_hours: float | None = Field(None, ge=0)
 
 
 class ProjectTaskCreate(BaseModel):
@@ -241,6 +309,37 @@ class ProjectTaskCreate(BaseModel):
     sprint_id: str | None = None  # Optional - can assign to sprint later
     mentioned_user_ids: list[str] = Field(default_factory=list)  # @mentions
     mentioned_file_paths: list[str] = Field(default_factory=list)  # #mentions
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+    estimated_hours: float | None = Field(None, ge=0)
+
+
+class WorkspaceTaskCreate(BaseModel):
+    """Schema for creating a task from the workspace All-Tasks Kanban.
+
+    Unlike SprintTaskCreate (which is scoped under /sprints/{sprint_id}/tasks)
+    this payload accepts a project + optional sprint at the body level so the
+    caller can pick from the workspace-wide view.
+    """
+
+    title: str = Field(..., min_length=1, max_length=500)
+    project_id: str = Field(..., description="Project the task belongs to")
+    sprint_id: str | None = None  # null = backlog
+    description: str | None = None
+    description_json: dict | None = None
+    story_points: int | None = Field(None, ge=0)
+    priority: TaskPriority = "medium"
+    labels: list[str] = Field(default_factory=list)
+    assignee_id: str | None = None
+    status: TaskStatus = "backlog"
+    status_id: str | None = None  # custom project/workspace status id
+    epic_id: str | None = None
+    parent_task_id: str | None = None
+    mentioned_user_ids: list[str] = Field(default_factory=list)
+    mentioned_file_paths: list[str] = Field(default_factory=list)
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+    estimated_hours: float | None = Field(None, ge=0)
 
 
 class SprintTaskUpdate(BaseModel):
@@ -259,6 +358,9 @@ class SprintTaskUpdate(BaseModel):
     contributes_to_goal: bool | None = None  # Sprint goal contribution
     mentioned_user_ids: list[str] | None = None  # @mentions
     mentioned_file_paths: list[str] | None = None  # #mentions
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+    estimated_hours: float | None = Field(None, ge=0)
 
 
 class SprintTaskStatusUpdate(BaseModel):
@@ -319,6 +421,38 @@ class SprintTaskReorder(BaseModel):
     )
 
 
+class TaskAttachmentResponse(BaseModel):
+    """Schema for a task file attachment."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    task_id: str
+    file_name: str
+    file_url: str
+    file_size: int | None = None
+    content_type: str | None = None
+    uploaded_by_id: str | None = None
+    uploaded_at: datetime
+    # Polymorphic AI metadata; resolved at response-build time. Always present
+    # so the frontend doesn't have to special-case files that haven't been
+    # processed yet — those just carry ai_status="pending".
+    ai: "FileAIMetadata | None" = None
+
+
+# Late import to avoid a circular dependency at module-load time. The Pydantic
+# model has already been built by the time `model_rebuild` runs at app start.
+from aexy.schemas.file_metadata import FileAIMetadata  # noqa: E402
+
+TaskAttachmentResponse.model_rebuild()
+
+
+class TaskAttachmentListResponse(BaseModel):
+    """Wrapper for a list of attachments."""
+
+    attachments: list[TaskAttachmentResponse]
+
+
 class SprintTaskResponse(BaseModel):
     """Schema for sprint task response."""
 
@@ -358,8 +492,21 @@ class SprintTaskResponse(BaseModel):
     mentioned_user_ids: list[str] = Field(default_factory=list)
     mentioned_file_paths: list[str] = Field(default_factory=list)
     is_archived: bool = False
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+    estimated_hours: float | None = None
+    attachments: list[TaskAttachmentResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+    # Shareable identifier. task_key is the per-workspace sequential
+    # number; identifier is the bracketed form rendered as `[slug:N]`
+    # used in copy buttons and GitHub PR/issue title auto-linking;
+    # public_url is the short shareable link.
+    task_key: int | None = None
+    workspace_slug: str | None = None
+    identifier: str | None = None
+    public_url: str | None = None
 
 
 class SubtaskResponse(BaseModel):
@@ -559,9 +706,33 @@ class CarryOverResponse(BaseModel):
 
 
 # Task Activity Schemas
+# Keep this in lockstep with the frontend `TaskActivityAction` union in
+# `frontend/src/lib/api.ts`. New per-task event types added in the service
+# (`SprintTaskService.update_task` _record calls, attachment add/delete,
+# archive/unarchive, sprint moves, etc.) MUST be listed here or the
+# response schema will reject them with a Pydantic literal_error and the
+# History tab returns 500.
 TaskActivityAction = Literal[
-    "created", "updated", "status_changed", "assigned", "unassigned",
-    "comment", "priority_changed", "points_changed", "epic_changed"
+    "created",
+    "updated",
+    "status_changed",
+    "assigned",
+    "unassigned",
+    "comment",
+    "priority_changed",
+    "points_changed",
+    "epic_changed",
+    "title_changed",
+    "description_changed",
+    "labels_changed",
+    "start_date_changed",
+    "end_date_changed",
+    "estimated_hours_changed",
+    "attachment_added",
+    "attachment_removed",
+    "archived",
+    "unarchived",
+    "sprint_changed",
 ]
 
 
@@ -672,5 +843,47 @@ class TaskFromTemplateCreate(BaseModel):
     override_story_points: int | None = None
     additional_labels: list[str] = Field(default_factory=list)
     create_subtasks: bool = True
+
+
+# ==================== Cross-project Move Schemas ====================
+
+# "Move" semantics: a new task is created in the target project linked
+# back to the source as a "duplicates" dependency. The source is either
+# archived or marked done at the operator's choice. See
+# SprintTaskService.move_to_project for the contract.
+
+SourceAction = Literal["archive", "mark_done"]
+SubtaskStrategy = Literal["block", "cascade", "orphan"]
+
+
+class TaskMoveToProjectRequest(BaseModel):
+    """Move a single task to another project in the same workspace."""
+
+    target_project_id: str
+    source_action: SourceAction
+    subtask_strategy: SubtaskStrategy = "block"
+    target_status_slug: str | None = None
+
+
+class TaskBulkMoveToProjectRequest(BaseModel):
+    """Move many tasks to another project. Lenient — per-task failures
+    are reported in the response rather than aborting the batch."""
+
+    task_ids: list[str] = Field(..., min_length=1)
+    target_project_id: str
+    source_action: SourceAction
+    subtask_strategy: SubtaskStrategy = "block"
+    target_status_slug: str | None = None
+
+
+class BulkMoveResult(BaseModel):
+    task_id: str
+    status: Literal["moved", "skipped"]
+    new_task_id: str | None = None
+    error_code: str | None = None
+
+
+class BulkMoveResponse(BaseModel):
+    results: list[BulkMoveResult]
 
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useLocale } from "next-intl";
 import { MessageSquare, Plus, Trash2, MoreVertical, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AgentConversation } from "@/lib/api";
@@ -14,23 +15,27 @@ interface ConversationSidebarProps {
   isLoading?: boolean;
 }
 
-function formatDate(dateString: string): string {
+// UX-CPY-002: honor the user's locale instead of hardcoding en-US.
+// Hindi users were seeing "Mon" / "Tue" headers in an otherwise
+// Hindi-localized sidebar. Intl.DateTimeFormat picks up the locale
+// passed from next-intl's useLocale().
+function formatDate(dateString: string, locale: string): string {
   const date = new Date(dateString);
   const now = new Date();
   const diff = now.getTime() - date.getTime();
   const days = Math.floor(diff / (1000 * 60 * 60 * 24));
 
   if (days === 0) {
-    return date.toLocaleTimeString("en-US", {
+    return date.toLocaleTimeString(locale, {
       hour: "2-digit",
       minute: "2-digit",
     });
   } else if (days === 1) {
     return "Yesterday";
   } else if (days < 7) {
-    return date.toLocaleDateString("en-US", { weekday: "short" });
+    return date.toLocaleDateString(locale, { weekday: "short" });
   } else {
-    return date.toLocaleDateString("en-US", {
+    return date.toLocaleDateString(locale, {
       month: "short",
       day: "numeric",
     });
@@ -79,6 +84,7 @@ interface ConversationItemProps {
 
 function ConversationItem({ conversation, isSelected, onSelect, onDelete }: ConversationItemProps) {
   const [showMenu, setShowMenu] = useState(false);
+  const locale = useLocale();
 
   return (
     <button
@@ -109,7 +115,7 @@ function ConversationItem({ conversation, isSelected, onSelect, onDelete }: Conv
             </span>
             <span className="text-xs text-muted-foreground">-</span>
             <span className="text-xs text-muted-foreground">
-              {formatDate(conversation.updated_at)}
+              {formatDate(conversation.updated_at, locale)}
             </span>
           </div>
         </div>
@@ -141,7 +147,7 @@ function ConversationItem({ conversation, isSelected, onSelect, onDelete }: Conv
                       onDelete();
                       setShowMenu(false);
                     }}
-                    className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-muted flex items-center gap-2"
+                    className="w-full px-3 py-2 text-left text-sm text-red-600 dark:text-red-400 hover:bg-muted flex items-center gap-2"
                   >
                     <Trash2 className="h-4 w-4" />
                     Delete
@@ -183,7 +189,7 @@ export function ConversationSidebar({
       <div className="flex-1 overflow-y-auto p-3 space-y-4">
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
-            <Clock className="h-5 w-5 text-muted-foreground animate-pulse" />
+            <Clock className="h-5 w-5 text-muted-foreground motion-safe:animate-pulse" />
           </div>
         ) : conversations.length === 0 ? (
           <div className="text-center py-8">

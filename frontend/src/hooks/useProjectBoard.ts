@@ -150,12 +150,33 @@ export function useProjectBoard(
       }
       throw new Error("Either sprintId or projectId is required");
     },
-    onSuccess: () => {
+    // Optimistic update: drag-and-drop relies on the task being in its new
+    // column the instant the drop completes. Without this, dnd-kit animates
+    // the card back to its original slot before the network response, which
+    // produces a "snap back, then move" flicker.
+    onMutate: async ({ taskId, status }) => {
+      const projectKey = ["projectTasks", workspaceId, projectId];
+      const sprintKey = ["sprintTasks"];
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: projectKey }),
+        queryClient.cancelQueries({ queryKey: sprintKey }),
+      ]);
+      const projectSnapshots = queryClient.getQueriesData<TaskWithSprint[]>({ queryKey: projectKey });
+      const sprintSnapshots = queryClient.getQueriesData<SprintTask[]>({ queryKey: sprintKey });
+      const apply = <T extends { id: string; status: TaskStatus }>(arr: T[] | undefined) =>
+        arr?.map((t) => (t.id === taskId ? { ...t, status } : t));
+      projectSnapshots.forEach(([key, data]) => queryClient.setQueryData(key, apply(data)));
+      sprintSnapshots.forEach(([key, data]) => queryClient.setQueryData(key, apply(data)));
+      return { projectSnapshots, sprintSnapshots };
+    },
+    onError: (_err, _vars, context) => {
+      context?.projectSnapshots.forEach(([key, data]) => queryClient.setQueryData(key, data));
+      context?.sprintSnapshots.forEach(([key, data]) => queryClient.setQueryData(key, data));
+      toast.error("Failed to update task status");
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["projectTasks", workspaceId, projectId] });
       queryClient.invalidateQueries({ queryKey: ["sprintTasks"] });
-    },
-    onError: () => {
-      toast.error("Failed to update task status");
     },
   });
 
@@ -174,6 +195,12 @@ export function useProjectBoard(
         labels?: string[];
         epic_id?: string | null;
         assignee_id?: string | null;
+        contributes_to_goal?: boolean;
+        mentioned_user_ids?: string[];
+        mentioned_file_paths?: string[];
+        start_date?: string | null;
+        end_date?: string | null;
+        estimated_hours?: number | null;
       };
     }) => {
       if (!sprintId && projectId) {
@@ -213,6 +240,9 @@ export function useProjectBoard(
         assignee_id?: string;
         mentioned_user_ids?: string[];
         mentioned_file_paths?: string[];
+        start_date?: string | null;
+        end_date?: string | null;
+        estimated_hours?: number | null;
       };
     }) => {
       if (!sprintId) {
@@ -232,6 +262,9 @@ export function useProjectBoard(
           assignee_id: task.assignee_id,
           mentioned_user_ids: task.mentioned_user_ids,
           mentioned_file_paths: task.mentioned_file_paths,
+          start_date: task.start_date,
+          end_date: task.end_date,
+          estimated_hours: task.estimated_hours,
         });
       }
       return sprintApi.addTask(sprintId, task);
@@ -375,23 +408,15 @@ export function useProjectBoard(
     return grouped;
   }, [filteredTasks, sprints]);
 
-  // Group tasks by status (for status view)
+  // Group tasks by status slug. Key is `task.status` so custom project
+  // statuses (e.g. "design_review") are bucketed alongside the canonical
+  // five. Consumers iterate the dynamic key set rather than a fixed Literal.
   const tasksByStatus = useMemo(() => {
-    const statuses: TaskStatus[] = ["backlog", "todo", "in_progress", "review", "done"];
-    const grouped: Record<TaskStatus, TaskWithSprint[]> = {
-      backlog: [],
-      todo: [],
-      in_progress: [],
-      review: [],
-      done: [],
-    };
-
+    const grouped: Record<string, TaskWithSprint[]> = {};
     filteredTasks.forEach((task) => {
-      if (grouped[task.status]) {
-        grouped[task.status].push(task);
-      }
+      const key = task.status as string;
+      (grouped[key] ??= []).push(task);
     });
-
     return grouped;
   }, [filteredTasks]);
 

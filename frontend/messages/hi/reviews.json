@@ -16,7 +16,25 @@
       "autoLinkedPRs": "स्वचालित-लिंक्ड PR"
     },
     "dashboard": {
+      "activeReviewBanner": {
+        "heading": "आपकी सक्रिय समीक्षा",
+        "selfNotStarted": "स्वयं समीक्षा शुरू नहीं हुई — शुरू करने के लिए खोलें",
+        "managerCompleted": "प्रबंधक समीक्षा पूर्ण — समाप्त करने के लिए स्वीकार करें",
+        "inProgress": "स्वयं समीक्षा, सहकर्मी नामांकन और फीडबैक ट्रैक करें",
+        "cta": "अपनी समीक्षा खोलें"
+      },
       "myGoals": "मेरे लक्ष्य",
+      "peerReviewRequestFallback": "सहकर्मी समीक्षा अनुरोध",
+      "noContributionData": "अभी कोई योगदान डेटा नहीं",
+      "noContributionDataHint": "अपनी GitHub गतिविधि का विश्लेषण करने के लिए \"सारांश बनाएं\" पर क्लिक करें",
+      "exampleGoal": {
+        "title": "API रिस्पॉन्स टाइम 50% बेहतर करें",
+        "type": "प्रदर्शन",
+        "keyResults": "{count, plural, one {# Key Result} other {# Key Results}}",
+        "prsLinked": "{count, plural, one {# PR लिंक्ड} other {# PRs लिंक्ड}}",
+        "percentComplete": "{percent}% पूर्ण",
+        "createCta": "अपना पहला लक्ष्य बनाएं"
+      },
       "reviewCycle": "समीक्षा चक्र",
       "feedbackRequests": "फीडबैक अनुरोध",
       "noActiveReviewCycle": "कोई सक्रिय समीक्षा चक्र नहीं",
@@ -52,6 +70,17 @@
       "deleteConfirmMessage": "क्या आप वाकई इस लक्ष्य को हटाना चाहते हैं? यह क्रिया पूर्ववत नहीं की जा सकती।",
       "goalCreated": "लक्ष्य सफलतापूर्वक बनाया गया",
       "goalDeleted": "लक्ष्य हटाया गया",
+      "detail": {
+        "updateProgressFailed": "प्रगति अपडेट करने में विफल",
+        "autoLinkFailed": "योगदान को ऑटो-लिंक करने में विफल",
+        "completeFailed": "लक्ष्य पूर्ण करने में विफल",
+        "confirmComplete": {
+          "title": "इस लक्ष्य को पूरा करें?",
+          "description": "इस लक्ष्य को पूरा के रूप में चिह्नित किया जाएगा और आगे अपडेट से लॉक कर दिया जाएगा.",
+          "descriptionNamed": "\"{name}\" को पूरा के रूप में चिह्नित किया जाएगा और आगे अपडेट से लॉक कर दिया जाएगा.",
+          "confirmLabel": "पूरा के रूप में चिह्नित करें"
+        }
+      },
       "goalDeleteFailed": "लक्ष्य हटाने में विफल",
       "noGoals": "अभी कोई लक्ष्य नहीं",
       "noGoalsDescription": "प्रगति ट्रैक करने और टीम के उद्देश्यों को कंपनी की प्राथमिकताओं से संरेखित करने के लिए लक्ष्य निर्धारित करें।",
@@ -79,6 +108,26 @@
           "project": "प्रोजेक्ट - फीचर और माइलस्टोन लक्ष्य",
           "leadership": "नेतृत्व - मेंटरिंग और टीम पर प्रभाव",
           "teamContribution": "टीम योगदान - सहयोग और सहायता"
+        },
+        "typeLabel": {
+          "performance": "प्रदर्शन",
+          "skill_development": "कौशल विकास",
+          "project": "प्रोजेक्ट",
+          "leadership": "नेतृत्व",
+          "team_contribution": "टीम योगदान"
+        },
+        "typeDescription": {
+          "performance": "डिलीवरी और गुणवत्ता लक्ष्य",
+          "skill_development": "नई तकनीकें सीखना",
+          "project": "फीचर और माइलस्टोन लक्ष्य",
+          "leadership": "मेंटरिंग और टीम पर प्रभाव",
+          "team_contribution": "सहयोग और सहायता"
+        },
+        "priority": {
+          "critical": "क्रिटिकल",
+          "high": "उच्च",
+          "medium": "मध्यम",
+          "low": "निम्न"
         },
         "smart": {
           "title": "SMART फ्रेमवर्क",
@@ -110,6 +159,84 @@
         "preview": "प्रीव्यू"
       }
     },
+    "myReview": {
+      "loading": "समीक्षा लोड हो रही है...",
+      "notFoundTitle": "समीक्षा नहीं मिली",
+      "notFoundBody": "हम यह समीक्षा लोड नहीं कर सके। यह हटा दी गई हो सकती है, या आपकी पहुंच नहीं है।",
+      "backToReviews": "समीक्षा पर वापस जाएं",
+      "phaseLabel": "चरण",
+      "managerLabel": "प्रबंधक",
+      "deadlines": {
+        "selfReview": "स्वयं समीक्षा",
+        "peerReview": "सहकर्मी समीक्षा",
+        "managerReview": "प्रबंधक समीक्षा",
+        "openEnded": "खुला-अंत",
+        "noDeadlineTooltip": "इस चरण के लिए कोई समय सीमा कॉन्फ़िगर नहीं"
+      },
+      "phaseLabels": {
+        "draft": "ड्राफ्ट",
+        "active": "सक्रिय",
+        "self_review": "स्वयं समीक्षा",
+        "peer_review": "सहकर्मी समीक्षा",
+        "manager_review": "प्रबंधक समीक्षा",
+        "completed": "पूर्ण",
+        "pending": "लंबित",
+        "self_review_submitted": "स्व-समीक्षा सबमिट",
+        "peer_review_in_progress": "Peer review प्रगति में",
+        "manager_review_in_progress": "Manager review प्रगति में",
+        "acknowledged": "स्वीकृत"
+      },
+      "requestStatus": {
+        "pending": "प्रतिक्रिया प्रतीक्षित",
+        "accepted": "स्वीकृत",
+        "completed": "सबमिट किया",
+        "declined": "अस्वीकृत"
+      },
+      "selfReviewSection": {
+        "heading": "आपकी स्वयं समीक्षा",
+        "submittedNote": "सबमिट हो गई — आपके प्रबंधक इसे चक्र खोलने पर देखेंगे।",
+        "pendingNote": "इस चक्र में अपनी जीतों और विकास पर विचार करें। प्रबंधक-अंतिम चरण इसी पर आधारित होता है।",
+        "badgeSubmitted": "सबमिट किया",
+        "badgeNotStarted": "शुरू नहीं किया"
+      },
+      "form": {
+        "strengthsLabel": "क्या अच्छा रहा",
+        "strengthsPlaceholder": "जैसे, auth migration को end-to-end चलाया और मोबाइल टीम को unblock किया।",
+        "growthLabel": "विकास के क्षेत्र",
+        "growthPlaceholder": "जैसे, आर्किटेक्चरल trade-offs पर और स्पष्ट होना चाहता हूं।",
+        "noteLabel": "और कुछ",
+        "notePlaceholder": "ऊपर फिट नहीं होने वाले मुक्त-पाठ नोट्स।",
+        "submit": "स्वयं समीक्षा सबमिट करें",
+        "validationError": "कम से कम एक ताकत, विकास क्षेत्र, या नोट जोड़ें",
+        "submittedToast": "स्वयं समीक्षा सबमिट हुई",
+        "submitFailed": "स्वयं समीक्षा सबमिट करने में विफल"
+      },
+      "summary": {
+        "strengths": "ताकतें",
+        "growthAreas": "विकास के क्षेत्र",
+        "notes": "नोट्स",
+        "emptyNote": "आपके सबमिशन में मुक्त-पाठ प्रतिक्रियाएं नहीं थीं।"
+      },
+      "peerSection": {
+        "heading": "सहकर्मी समीक्षक",
+        "nominate": "समीक्षक नामांकित करें",
+        "noneNominate": "अभी कोई समीक्षक नहीं। ऊपर से साथियों को आमंत्रित करें।",
+        "noneAssigned": "अभी कोई समीक्षक नियुक्त नहीं।",
+        "explanationManagerAssigned": "आपके प्रबंधक इस चक्र के लिए सहकर्मी समीक्षक नियुक्त करते हैं।",
+        "explanationEmployeeChoice": "उन साथियों को चुनें जिनसे आप समीक्षा चाहते हैं।",
+        "explanationBoth": "आप और आपके प्रबंधक दोनों समीक्षक नामांकित कर सकते हैं।",
+        "activeCount": "{activeRequestCount} सक्रिय",
+        "needAtLeast": "कम से कम {min} चाहिए",
+        "max": "अधिकतम {max}"
+      },
+      "acknowledge": {
+        "heading": "आपके प्रबंधक ने यह समीक्षा पूर्ण कर दी है।",
+        "cta": "स्वीकार करें",
+        "submitting": "स्वीकार किया जा रहा है…",
+        "successToast": "समीक्षा स्वीकार की गई",
+        "failedToast": "स्वीकार करने में विफल"
+      }
+    },
     "cycles": {
       "title": "समीक्षा चक्र",
       "description": "अपने वर्कस्पेस के लिए प्रदर्शन समीक्षा चक्र प्रबंधित करें",
@@ -118,9 +245,126 @@
       "noCyclesDescription": "अपनी टीम से 360° फीडबैक एकत्र करना शुरू करने के लिए अपना पहला समीक्षा चक्र बनाएं।",
       "cycleCreated": "समीक्षा चक्र सफलतापूर्वक बनाया गया",
       "backToReviews": "समीक्षा पर वापस जाएं",
+      "statusLabels": {
+        "draft": "ड्राफ्ट",
+        "active": "सक्रिय",
+        "self_review": "स्वयं समीक्षा",
+        "peer_review": "सहकर्मी समीक्षा",
+        "manager_review": "प्रबंधक समीक्षा",
+        "completed": "पूर्ण"
+      },
+      "cycleTypeLabels": {
+        "annual": "वार्षिक",
+        "semi_annual": "अर्धवार्षिक",
+        "quarterly": "त्रैमासिक",
+        "custom": "अनुकूलित"
+      },
+      "cycleCount": "{count, plural, one {# चक्र} other {# चक्र}}",
+      "detail": {
+        "loading": "समीक्षा चक्र लोड हो रहा है...",
+        "notFoundTitle": "समीक्षा चक्र नहीं मिला",
+        "notFoundBody": "जो समीक्षा चक्र आप ढूंढ रहे हैं वह मौजूद नहीं है या आपकी पहुंच नहीं है।",
+        "notSet": "सेट नहीं",
+        "completionProgress": "पूर्णता प्रगति",
+        "cycleCompletionAriaLabel": "चक्र पूर्णता प्रगति",
+        "stats": {
+          "totalReviews": "कुल समीक्षाएं",
+          "completed": "पूर्ण",
+          "pendingSelf": "स्वयं लंबित",
+          "pendingPeer": "सहकर्मी लंबित",
+          "pendingManager": "प्रबंधक लंबित"
+        },
+        "headings": {
+          "phaseDeadlines": "चरण की समय सीमा",
+          "participants": "प्रतिभागी",
+          "settings": "सेटिंग्स",
+          "info": "जानकारी"
+        },
+        "phaseLabels": {
+          "selfReview": "स्वयं समीक्षा",
+          "peerReview": "सहकर्मी समीक्षा",
+          "managerReview": "प्रबंधक समीक्षा"
+        },
+        "participants": {
+          "noneEnrolled": "अभी कोई प्रतिभागी नामांकित नहीं।",
+          "noneInCycle": "इस चक्र में कोई प्रतिभागी नहीं।"
+        },
+        "settings": {
+          "selfReview": "स्वयं समीक्षा",
+          "peerReview": "सहकर्मी समीक्षा",
+          "managerReview": "प्रबंधक समीक्षा",
+          "anonymousPeer": "अनाम सहकर्मी",
+          "githubMetrics": "GitHub मेट्रिक्स",
+          "peerReviewers": "सहकर्मी समीक्षक",
+          "enabled": "सक्षम",
+          "disabled": "अक्षम",
+          "yes": "हां",
+          "no": "नहीं",
+          "included": "शामिल",
+          "notIncluded": "शामिल नहीं",
+          "none": "कोई सेटिंग कॉन्फ़िगर नहीं।"
+        },
+        "info": {
+          "created": "बनाया गया",
+          "lastUpdated": "अंतिम अपडेट"
+        },
+        "notify": {
+          "buttonLabel": "सूचित करें",
+          "buttonTitle": "प्रतिभागियों को चक्र सूचना पुनः भेजें",
+          "menuLabel": "सूचना पुनः भेजें",
+          "activation": "चक्र शुरू — सभी नामांकित",
+          "deadline": "समय सीमा अनुस्मारक — केवल लंबित",
+          "phaseChange": "चरण परिवर्तन — सभी नामांकित",
+          "sending": "भेजा जा रहा है…"
+        },
+        "actions": {
+          "startCycle": "चक्र शुरू करें",
+          "advancePhase": "चरण आगे बढ़ाएं",
+          "openYourReview": "अपनी समीक्षा खोलें"
+        },
+        "confirm": {
+          "startTitle": "समीक्षा चक्र शुरू करें?",
+          "startDescription": "यह चक्र को सक्रिय करेगा और आपके वर्कस्पेस के सभी टीम सदस्यों को स्वचालित रूप से नामांकित करेगा। प्रत्येक प्रतिभागी के लिए अलग समीक्षाएं बनेंगी।",
+          "advanceTitle": "अगले चरण पर जाएं?",
+          "advanceDescriptionTemplate": "इस चक्र को {from} → {to} पर ले जाता है। प्रतिभागियों को सूचित किया जाएगा और संबंधित सबमिशन फॉर्म खुलेंगे / बंद होंगे।",
+          "advanceFallbackNext": "अगला चरण"
+        },
+        "toasts": {
+          "sentNotifications": "{sent} {kind} {sent, plural, one {सूचना} other {सूचनाएं}} भेजी",
+          "noNotificationsWithReason": "कोई सूचना नहीं भेजी — {reason}",
+          "noEligibleRecipients": "इस सूचना के लिए कोई पात्र प्राप्तकर्ता नहीं",
+          "failedToResend": "सूचनाएं पुनः भेजने में विफल",
+          "failedToStart": "चक्र शुरू करने में विफल",
+          "advancedSuccess": "चक्र अगले चरण पर बढ़ा",
+          "failedToAdvance": "चरण आगे बढ़ाने में विफल"
+        },
+        "kindLabels": {
+          "activation": "सक्रियण",
+          "deadline": "समय सीमा अनुस्मारक",
+          "phase_change": "चरण-परिवर्तन"
+        }
+      },
+      "noWorkspace": {
+        "title": "कोई वर्कस्पेस चयनित नहीं",
+        "description": "समीक्षा चक्र वर्कस्पेस-विशिष्ट हैं। कृपया पहले एक वर्कस्पेस बनाएं या चुनें।",
+        "cta": "वर्कस्पेस प्रबंधित करें"
+      },
+      "table": {
+        "cycle": "चक्र",
+        "status": "स्थिति",
+        "period": "अवधि",
+        "deadlines": "समय सीमा",
+        "actions": "क्रियाएं",
+        "view": "देखें",
+        "viewDetails": "विवरण देखें",
+        "activateCycleEllipsis": "चक्र सक्रिय करें…",
+        "advancePhaseEllipsis": "चरण आगे बढ़ाएं…",
+        "moreActions": "अधिक क्रियाएं"
+      },
       "form": {
         "title": "समीक्षा चक्र बनाएं",
         "subtitle": "अपनी टीम के लिए एक नया प्रदर्शन समीक्षा चक्र सेट करें",
+        "basicInformation": "मूल जानकारी",
         "cycleName": "चक्र का नाम",
         "cycleNamePlaceholder": "जैसे, Q1 2024 प्रदर्शन समीक्षा",
         "cycleType": "चक्र प्रकार",
@@ -185,6 +429,32 @@
         "peerReview": "सहकर्मी समीक्षा",
         "managerReview": "मैनेजर समीक्षा",
         "completed": "पूर्ण"
+      },
+      "breadcrumb": {
+        "reviews": "रिव्यू",
+        "cycles": "साइकल"
+      },
+      "statusFilter": {
+        "label": "स्टेटस के अनुसार साइकल फ़िल्टर करें",
+        "all": "सभी स्टेटस"
+      },
+      "errors": {
+        "failedToLoad": "रिव्यू साइकल लोड नहीं हो सके"
+      },
+      "confirm": {
+        "activateTitle": "\"{name}\" को सक्रिय करें?",
+        "activateDescription": "यह साइकल को खोलता है और हर एनरोल किए गए डेवलपर को ईमेल करता है कि उनका रिव्यू लाइव है. नोटिफिकेशन वापस नहीं लिए जा सकते.",
+        "activateLabel": "सक्रिय करें",
+        "advanceTitle": "\"{name}\" को अगले फ़ेज़ में आगे बढ़ाएँ?",
+        "advanceDescription": "<strong>{from}</strong> से <strong>{to}</strong> पर ले जाता है. प्रतिभागियों को सूचित किया जाएगा और संबंधित सबमिशन फॉर्म खुलेंगे / बंद होंगे.",
+        "advanceFallbackNext": "अगला फ़ेज़",
+        "advanceLabel": "आगे बढ़ाएँ"
+      },
+      "toasts": {
+        "activated": "\"{name}\" सक्रिय किया गया",
+        "advanced": "\"{name}\" को अगले फ़ेज़ में आगे बढ़ाया गया",
+        "failedToActivate": "साइकल सक्रिय नहीं हो सका",
+        "failedToAdvance": "फ़ेज़ आगे नहीं बढ़ सका"
       }
     },
     "peerRequests": {
@@ -194,6 +464,101 @@
       "pending": "लंबित",
       "inProgress": "प्रगति में",
       "completed": "पूर्ण",
+      "status": {
+        "pending": "लंबित",
+        "accepted": "स्वीकृत",
+        "declined": "अस्वीकृत",
+        "completed": "पूर्ण"
+      },
+      "source": {
+        "employee": "स्वयं-नामित",
+        "manager": "प्रबंधक-निर्दिष्ट"
+      },
+      "sections": {
+        "pendingHeader": "लंबित अनुरोध ({count})",
+        "completedHeader": "पूर्ण ({count})"
+      },
+      "detail": {
+        "loading": "अनुरोध लोड हो रहा है...",
+        "notFoundTitle": "अनुरोध नहीं मिला",
+        "backLink": "सहकर्मी अनुरोधों पर वापस जाएं",
+        "heading": "सहकर्मी समीक्षा अनुरोध",
+        "from": "की ओर से",
+        "unknownRequester": "अज्ञात",
+        "source": "स्रोत",
+        "message": "संदेश",
+        "readOnly": "यह अनुरोध किसी अन्य समीक्षक के लिए है। आप इसे देख सकते हैं लेकिन कार्य नहीं कर सकते।",
+        "readOnlyExternal": "यह अनुरोध एक बाहरी समीक्षक को भेजा गया था जो workspace में नहीं है, इसलिए यहां से कार्य करने को कुछ नहीं है।",
+        "statusBadges": {
+          "pending": "आपके निर्णय की प्रतीक्षा",
+          "accepted": "स्वीकृत — अपना फीडबैक सबमिट करें",
+          "completed": "पूर्ण",
+          "declined": "अस्वीकृत"
+        },
+        "pendingActions": {
+          "prompt": "फीडबैक लिखने के लिए स्वीकार करें, या एक छोटे कारण के साथ अस्वीकार करें।",
+          "decline": "अस्वीकार करें",
+          "accept": "स्वीकार करें"
+        },
+        "decline": {
+          "title": "आप क्यों अस्वीकार कर रहे हैं?",
+          "subtitle": "यह requester के साथ साझा किया जाता है ताकि वे जान सकें कि पुनः नियुक्त करना है या follow up।",
+          "placeholder": "जैसे, मैंने इस चक्र में इस व्यक्ति के साथ निकटता से काम नहीं किया।",
+          "cancel": "रद्द करें",
+          "submit": "अनुरोध अस्वीकार करें",
+          "missingReason": "एक छोटा कारण जोड़ें ताकि requester को पता चले कि क्यों"
+        },
+        "form": {
+          "heading": "अपना फीडबैक लिखें",
+          "subtitle": "ठोस उदाहरण जोड़ें। पहले ताकतें, फिर विकास के क्षेत्र — दोनों प्रबंधक की अंतिम समीक्षा में दिखेंगे।",
+          "strengthsLabel": "ताकतें",
+          "strengthsPlaceholder": "जैसे, auth migration को end-to-end चलाया और मोबाइल टीम को unblock किया।",
+          "growthLabel": "विकास के क्षेत्र",
+          "growthPlaceholder": "जैसे, बड़े दायरे की PRs में design rationale को पहले साझा कर सकते थे।",
+          "noteLabel": "और कुछ संदर्भ के लिए",
+          "notePlaceholder": "ऊपर फिट नहीं होने वाले मुक्त-पाठ नोट्स।",
+          "submit": "सहकर्मी समीक्षा सबमिट करें",
+          "validationError": "सबमिट करने से पहले कम से कम एक ताकत, विकास क्षेत्र, या नोट जोड़ें"
+        },
+        "toasts": {
+          "loadFailed": "अनुरोध लोड करने में विफल",
+          "accepted": "स्वीकार किया — नीचे अपना फीडबैक लिखें",
+          "acceptFailed": "अनुरोध स्वीकार करने में विफल",
+          "declined": "अनुरोध अस्वीकृत",
+          "declineFailed": "अनुरोध अस्वीकार करने में विफल",
+          "submitted": "सहकर्मी समीक्षा सबमिट हुई — फीडबैक के लिए धन्यवाद",
+          "submitFailed": "समीक्षा सबमिट करने में विफल"
+        },
+        "completedNote": "धन्यवाद — आपका फीडबैक सबमिट हो गया है।",
+        "declinedNote": "आपने यह अनुरोध अस्वीकार किया।"
+      },
+      "inviteModal": {
+        "selfNominate": {
+          "title": "सहकर्मी समीक्षक नामांकित करें",
+          "subtitle": "इस चक्र में अपनी समीक्षा करने वाले साथियों को चुनें। प्रत्येक को सूचना मिलेगी और वे स्वीकार या अस्वीकार कर सकते हैं।",
+          "submit": "अनुरोध भेजें",
+          "messagePlaceholder": "जैसे, इस तिमाही हमने auth migration पर सहयोग किया — आपका दृष्टिकोण जानना अच्छा होगा।"
+        },
+        "managerAssign": {
+          "title": "सहकर्मी समीक्षक आमंत्रित करें",
+          "subtitle": "{min}–{max} साथी चुनें। प्रत्येक को सूचना मिलेगी और वे स्वीकार या अस्वीकार कर सकते हैं।",
+          "submit": "आमंत्रित करें",
+          "messagePlaceholder": "जैसे, इस चक्र में क्रॉस-टीम सहयोग पर ध्यान दें।"
+        },
+        "searchPlaceholder": "नाम, ईमेल या भूमिका से खोजें",
+        "selectionSummary": "{selected} चयनित · {filtered} में से {eligible} {eligible, plural, one {वर्कस्पेस सदस्य} other {वर्कस्पेस सदस्य}}",
+        "loadingExistingInvites": "मौजूदा आमंत्रण लोड हो रहे हैं…",
+        "noMatching": "कोई मेल खाते वर्कस्पेस सदस्य नहीं।",
+        "messageLabel": "सभी चयनित समीक्षकों के लिए संदेश (वैकल्पिक)",
+        "submitWithCount": "{action} {count, plural, one {# समीक्षक} other {# समीक्षक}}",
+        "submitNoCount": "{action} समीक्षक",
+        "pickAtLeast": "कम से कम {count, plural, one {# समीक्षक} other {# समीक्षक}} चुनें",
+        "invited": "{count, plural, one {# समीक्षक} other {# समीक्षक}} आमंत्रित किए",
+        "invitedWithFailures": "{count, plural, one {# समीक्षक} other {# समीक्षक}} आमंत्रित किए — {failed} विफल",
+        "failedToSend": "आमंत्रण भेजने में विफल",
+        "alreadyInvited": "पहले से ही {status} — पुनः आमंत्रित नहीं किया जा सकता",
+        "maxReached": "प्रति चक्र अधिकतम {count} समीक्षक"
+      },
       "noPeerRequests": "अभी कोई सहकर्मी अनुरोध नहीं",
       "noPeerRequestsDescription": "जब सहकर्मी अपनी प्रदर्शन समीक्षा के लिए आपका फीडबैक मांगेंगे, तो वे यहां दिखाई देंगे।",
       "aboutTitle": "सहकर्मी समीक्षा के बारे में",
@@ -207,6 +572,9 @@
         "impactDesc": "टीम/प्रोजेक्ट पर असर",
         "nextSteps": "अगले कदम",
         "nextStepsDesc": "कार्रवाई योग्य सिफारिशें"
+      },
+      "errors": {
+        "failedToLoad": "Peer requests लोड नहीं हो सके"
       }
     },
     "manage": {
@@ -219,6 +587,134 @@
       "inProgress": "प्रगति में",
       "actionNeeded": "कार्रवाई आवश्यक",
       "suggestions": "सुझाव",
+      "actionable": {
+        "banner": "कार्रवाई आवश्यक",
+        "bannerDescription": "{count, plural, one {समीक्षा चक्र को पटरी पर रखने के लिए # आइटम पर आपका ध्यान चाहिए} other {समीक्षा चक्र को पटरी पर रखने के लिए # आइटम्स पर आपका ध्यान चाहिए}}",
+        "highPriority": "उच्च प्राथमिकता",
+        "due": "देय: {date}",
+        "view": "देखें",
+        "startReview": "समीक्षा शुरू करें"
+      },
+      "suggestionList": {
+        "activeHeader": "सक्रिय सुझाव ({count})",
+        "noneActive": "कोई सक्रिय सुझाव नहीं",
+        "allDiscarded": "सभी सुझाव खारिज। बहाल करने के लिए नीचे का अनुभाग देखें।",
+        "confidence": "{percent}% confidence",
+        "trackingKeywords": "ट्रैकिंग कीवर्ड:",
+        "discardedHeader": "खारिज ({count})",
+        "restore": "बहाल करें"
+      },
+      "reviewStatus": {
+        "pending": "लंबित",
+        "self_review_submitted": "स्वयं समीक्षा पूर्ण",
+        "peer_review_in_progress": "सहकर्मी समीक्षा",
+        "manager_review_in_progress": "प्रबंधक समीक्षा",
+        "completed": "पूर्ण",
+        "acknowledged": "स्वीकार किया गया"
+      },
+      "detail": {
+        "notFoundTitle": "समीक्षा नहीं मिली",
+        "notFoundBody": "जो समीक्षा आप ढूंढ रहे हैं वह मौजूद नहीं है या आपकी पहुंच नहीं है।",
+        "header": {
+          "managerLabel": "प्रबंधक",
+          "joinedPrefix": "जुड़े",
+          "skills": "कौशल"
+        },
+        "stats": {
+          "activeGoals": "सक्रिय लक्ष्य",
+          "completed": "पूर्ण",
+          "commits": "कमिट्स",
+          "prs": "PRs",
+          "reviews": "समीक्षाएं"
+        },
+        "tabs": {
+          "overview": "अवलोकन",
+          "goals": "लक्ष्य",
+          "contributions": "योगदान",
+          "feedback": "फीडबैक"
+        },
+        "goals": {
+          "dueLabel": "देय:",
+          "progressLabel": "प्रगति",
+          "keyResults": "Key Results",
+          "suggestedGoal": "सुझाया गया लक्ष्य:",
+          "allGoals": "सभी लक्ष्य"
+        },
+        "contributions": {
+          "commits": "कमिट्स",
+          "pullRequests": "Pull Requests",
+          "codeReviews": "Code Reviews",
+          "linesChanged": "लाइन्स बदलीं",
+          "linesAdded": "लाइन्स जोड़ीं",
+          "linesRemoved": "लाइन्स हटाईं",
+          "netChange": "शुद्ध परिवर्तन",
+          "skillsDemonstrated": "प्रदर्शित कौशल"
+        },
+        "feedback": {
+          "selfReview": "स्वयं समीक्षा",
+          "context": "संदर्भ",
+          "keyAccomplishments": "प्रमुख उपलब्धियां",
+          "strengths": "ताकतें",
+          "growthAreas": "विकास के क्षेत्र",
+          "selfNotSubmitted": "स्वयं समीक्षा अभी सबमिट नहीं",
+          "peerReviews": "सहकर्मी समीक्षाएं",
+          "noPeerReviews": "अभी कोई सहकर्मी समीक्षा प्राप्त नहीं",
+          "impact": "प्रभाव",
+          "suggestedNextSteps": "सुझाए गए अगले कदम"
+        },
+        "quickActions": "त्वरित क्रियाएं",
+        "backToReviews": "रिव्यू पर वापस",
+        "invitePeerReviewersCta": "Peer Reviewers को आमंत्रित करें"
+      },
+      "composer": {
+        "heading": "प्रबंधक समीक्षा",
+        "subheading": "ऊपर की स्वयं + सहकर्मी प्रतिक्रियाओं को अपने अंतिम लेखन में संश्लेषित करें। काम करते समय ड्राफ्ट सेव करें; सबमिट करने से इस सदस्य का चक्र अंतिम हो जाता है।",
+        "strengthsLabel": "ताकतें",
+        "strengthsPlaceholder": "जैसे, auth migration को end-to-end चलाया। एक स्पष्ट दिशा रखी और जब API contract बदला तो मोबाइल टीम को unblock किया।",
+        "growthLabel": "विकास के क्षेत्र",
+        "growthPlaceholder": "जैसे, design review में architectural trade-offs को पहले उठा सकते थे।",
+        "narrativeLabel": "समग्र विवरण",
+        "narrativePlaceholder": "एक छोटा पैराग्राफ जो developer पढ़ेगा। ऊपर की ताकतों और विकास क्षेत्रों के विशिष्ट व्यवहारों को रेटिंग से जोड़ें।",
+        "rating": {
+          "overallLabel": "समग्र रेटिंग",
+          "overallAriaLabel": "समग्र प्रदर्शन रेटिंग",
+          "tier1": "अपेक्षाओं से नीचे",
+          "tier2": "कुछ अपेक्षाएं पूरी",
+          "tier3": "अपेक्षाएं पूरी",
+          "tier4": "अपेक्षाओं से अधिक",
+          "tier5": "उल्लेखनीय रूप से अधिक",
+          "axis": {
+            "execution": "निष्पादन",
+            "collaboration": "सहयोग",
+            "communication": "संवाद",
+            "growth": "विकास"
+          }
+        },
+        "saveDraft": "ड्राफ्ट सेव करें",
+        "submitFinalize": "सबमिट और अंतिम करें",
+        "validation": {
+          "empty": "कम से कम एक ताकत, विकास क्षेत्र, या विवरण नोट जोड़ें",
+          "ratingRequired": "अंतिम करने से पहले एक समग्र रेटिंग चुनें"
+        },
+        "toasts": {
+          "draftSaved": "ड्राफ्ट सेव हुआ",
+          "saveFailed": "ड्राफ्ट सेव करने में विफल",
+          "finalized": "समीक्षा अंतिम हुई — developer को सूचित किया जाएगा",
+          "finalizeFailed": "समीक्षा अंतिम करने में विफल"
+        },
+        "confirmFinalize": {
+          "title": "इस समीक्षा को अंतिम करें?",
+          "description": "अंतिम होने के बाद, developer को सूचित किया जाएगा और manager-review row लॉक हो जाएगी। जब तक एडमिन चक्र को फिर से नहीं खोलते, आप संपादित नहीं कर पाएंगे।"
+        },
+        "readOnly": {
+          "heading": "प्रबंधक समीक्षा सबमिट हुई",
+          "submittedNote": "आपकी समीक्षा लॉक है। Developer को सूचित कर दिया गया है और वे ऊपर ताकतें, विकास क्षेत्र, और समग्र रेटिंग देखेंगे।"
+        },
+        "locked": {
+          "heading": "प्रबंधक समीक्षा manager-review चरण में खुलती है",
+          "note": "स्वयं + सहकर्मी समीक्षाएं पूरी होने और चक्र आगे बढ़ने का इंतज़ार करें। आपकी बारी आने पर composer यहां दिखेगा।"
+        }
+      },
       "teamOverview": "टीम अवलोकन",
       "actionables": "कार्रवाई योग्य",
       "githubSuggestions": "GitHub सुझाव",
@@ -233,7 +729,11 @@
       "aiSuggestionsDesc": "GitHub गतिविधि, PR पैटर्न और प्रोजेक्ट प्रबंधन डेटा पर आधारित। लक्ष्य में बदलें या हटाएं।",
       "convertToGoal": "लक्ष्य में बदलें",
       "viewMember": "सदस्य देखें",
-      "discard": "हटाएं"
+      "discard": "हटाएं",
+      "statusFilter": {
+        "label": "रिव्यू स्टेटस के अनुसार टीम सदस्य फ़िल्टर करें",
+        "all": "सभी स्टेटस"
+      }
     }
   }
 }

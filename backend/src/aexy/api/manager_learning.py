@@ -67,6 +67,16 @@ async def create_learning_goal(
             detail="No workspace selected",
         )
 
+    # WS-055: verify the target developer is actually an active member of
+    # the current workspace before stamping a goal at them. The prior code
+    # accepted any developer id in the request body.
+    from aexy.core.workspace_auth import assert_active_member
+    await assert_active_member(
+        db,
+        str(current_user.current_workspace_id),
+        str(data.developer_id),
+    )
+
     service = LearningManagementService(db)
     goal = await service.create_learning_goal(
         workspace_id=current_user.current_workspace_id,

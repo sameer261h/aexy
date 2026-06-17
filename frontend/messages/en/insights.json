@@ -153,6 +153,58 @@
     "repositories": {
       "title": "Repositories",
       "description": "Repository-level insights and activity metrics"
+    },
+
+    "details": {
+      "evidenceFor": "Evidence for {metric}",
+      "evidenceForDeveloper": "Evidence for {metric}, {name}.",
+      "tabs": {
+        "summary": "Summary",
+        "sources": "Sources",
+        "commits": "Commits",
+        "raw": "Raw"
+      },
+      "summary": {
+        "metric": "Metric",
+        "value": "Value",
+        "period": "Period",
+        "range": "Range",
+        "serverDefault": "Server default",
+        "developerId": "Developer ID"
+      },
+      "raw": {
+        "adminOnly": "Raw data is workspace admin only."
+      },
+      "sources": {
+        "loading": "Loading sources...",
+        "empty": "No repository sources found.",
+        "columns": {
+          "repository": "Repository",
+          "commits": "Commits",
+          "prs": "PRs",
+          "reviews": "Reviews",
+          "lines": "Lines"
+        }
+      },
+      "commits": {
+        "selectDeveloper": "Select a developer row to inspect commit-level evidence.",
+        "loading": "Loading commits...",
+        "empty": "No commits found for this period.",
+        "columns": {
+          "commit": "Commit",
+          "repository": "Repository",
+          "delta": "+/-",
+          "author": "Author"
+        },
+        "unknownAuthor": "Unknown"
+      }
+    },
+
+    "page": {
+      "stillLoadingToast": "Analytics still loading - try again in a moment.",
+      "sourcesButton": "Sources",
+      "profileButton": "Profile →",
+      "showInactive": "Show inactive"
     }
   }
 }

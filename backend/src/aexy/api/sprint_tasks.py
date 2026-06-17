@@ -1,11 +1,17 @@
 """Sprint Tasks API endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import logging
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.core.database import get_db
 from aexy.api.developers import get_current_developer
+from aexy.models.activity import PullRequest
 from aexy.models.developer import Developer
+from aexy.models.sprint import SprintTask, TaskGitHubLink
 from aexy.schemas.sprint import (
     SprintTaskCreate,
     SprintTaskUpdate,
@@ -16,6 +22,7 @@ from aexy.schemas.sprint import (
     SprintTaskBulkMove,
     SprintTaskReorder,
     SprintTaskResponse,
+    TaskAttachmentListResponse,
     TaskImportRequest,
     TaskImportResponse,
     TaskActivityCreate,
@@ -24,54 +31,92 @@ from aexy.schemas.sprint import (
     WipLimitsConfig,
 )
 from aexy.services.sprint_service import SprintService
-from aexy.services.sprint_task_service import SprintTaskService
+from aexy.services.sprint_task_service import SprintTaskService, TaskValidationError
+from aexy.services.github_task_sync_service import GitHubTaskSyncService
 from aexy.services.workspace_service import WorkspaceService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sprints/{sprint_id}/tasks", tags=["Sprint Tasks"])
 
 
-def task_to_response(task) -> SprintTaskResponse:
-    """Convert SprintTask model to response schema."""
-    assignee = task.assignee
-    subtasks_count = len(task.subtasks) if task.subtasks else 0
-    return SprintTaskResponse(
-        id=str(task.id),
-        sprint_id=str(task.sprint_id) if task.sprint_id else None,
-        team_id=str(task.team_id) if task.team_id else None,
-        workspace_id=str(task.workspace_id) if task.workspace_id else None,
-        source_type=task.source_type,
-        source_id=task.source_id,
-        source_url=task.source_url,
-        title=task.title,
-        description=task.description,
-        description_json=task.description_json,
-        story_points=task.story_points,
-        priority=task.priority,
-        labels=task.labels or [],
-        assignee_id=str(task.assignee_id) if task.assignee_id else None,
-        assignee_name=assignee.name if assignee else None,
-        assignee_avatar_url=assignee.avatar_url if assignee else None,
-        assignment_reason=task.assignment_reason,
-        assignment_confidence=task.assignment_confidence,
-        status=task.status,
-        status_id=str(task.status_id) if task.status_id else None,
-        custom_fields=task.custom_fields or {},
-        epic_id=str(task.epic_id) if task.epic_id else None,
-        parent_task_id=str(task.parent_task_id) if task.parent_task_id else None,
-        subtasks_count=subtasks_count,
-        started_at=task.started_at,
-        completed_at=task.completed_at,
-        work_started_at=task.work_started_at,
-        cycle_time_hours=task.cycle_time_hours,
-        lead_time_hours=task.lead_time_hours,
-        contributes_to_goal=task.contributes_to_goal,
-        carried_over_from_sprint_id=str(task.carried_over_from_sprint_id) if task.carried_over_from_sprint_id else None,
-        mentioned_user_ids=task.mentioned_user_ids or [],
-        mentioned_file_paths=task.mentioned_file_paths or [],
-        is_archived=task.is_archived,
-        created_at=task.created_at,
-        updated_at=task.updated_at,
+class PullRequestSummary(BaseModel):
+    """Compact pull request summary for task linking."""
+
+    id: str
+    github_id: int
+    number: int
+    repository: str
+    title: str
+    state: str
+    url: str | None = None
+
+
+class GitHubIssueSummary(BaseModel):
+    """Compact GitHub issue summary for task linking."""
+
+    repository: str
+    number: int
+    title: str | None = None
+    state: str | None = None
+    url: str
+
+
+class TaskGitHubLinkResponse(BaseModel):
+    """Task GitHub link with optional pull request details."""
+
+    id: str
+    link_type: str
+    is_auto_linked: bool
+    created_at: str
+    pull_request: PullRequestSummary | None = None
+    github_issue: GitHubIssueSummary | None = None
+
+
+def pull_request_url(pr: PullRequest) -> str | None:
+    """Build a GitHub PR URL from stored repository and number when possible."""
+    if not pr.repository or "/" not in pr.repository or not pr.number:
+        return None
+    return f"https://github.com/{pr.repository}/pull/{pr.number}"
+
+
+def pull_request_to_summary(pr: PullRequest) -> PullRequestSummary:
+    """Convert a PullRequest model to a compact API response."""
+    return PullRequestSummary(
+        id=str(pr.id),
+        github_id=pr.github_id,
+        number=pr.number,
+        repository=pr.repository,
+        title=pr.title,
+        state=pr.state,
+        url=pull_request_url(pr),
     )
+
+
+def github_link_to_response(link: TaskGitHubLink) -> TaskGitHubLinkResponse:
+    """Convert a TaskGitHubLink model to an API response."""
+    github_issue = None
+    if link.github_issue_repository and link.github_issue_number:
+        github_issue = GitHubIssueSummary(
+            repository=link.github_issue_repository,
+            number=link.github_issue_number,
+            title=link.github_issue_title,
+            state=link.github_issue_state,
+            url=link.github_issue_url
+            or GitHubTaskSyncService.issue_url(link.github_issue_repository, link.github_issue_number),
+        )
+
+    return TaskGitHubLinkResponse(
+        id=str(link.id),
+        link_type=link.link_type,
+        is_auto_linked=link.is_auto_linked,
+        created_at=link.created_at.isoformat(),
+        pull_request=pull_request_to_summary(link.pull_request) if link.pull_request else None,
+        github_issue=github_issue,
+    )
+
+
+from aexy.services.sprint_task_response import task_to_response  # noqa: E402,F401
 
 
 async def get_sprint_and_check_permission(
@@ -80,7 +125,8 @@ async def get_sprint_and_check_permission(
     db: AsyncSession,
     required_role: str = "member",
 ):
-    """Get sprint and check workspace permission."""
+    """Get sprint and check workspace permission. Returns the sprint so callers
+    can scope follow-up queries to `sprint.workspace_id`."""
     sprint_service = SprintService(db)
     workspace_service = WorkspaceService(db)
 
@@ -100,6 +146,28 @@ async def get_sprint_and_check_permission(
         )
 
     return sprint
+
+
+async def _filter_task_ids_to_workspace(
+    db: AsyncSession, task_ids: list[str], workspace_id: str
+) -> None:
+    """Reject the entire bulk op if any task id is outside this workspace."""
+    if not task_ids:
+        return
+    from aexy.models.sprint import SprintTask
+    valid = (
+        await db.execute(
+            select(SprintTask.id).where(
+                SprintTask.id.in_(task_ids),
+                SprintTask.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().all()
+    if len(valid) != len(set(task_ids)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="One or more tasks do not belong to this workspace",
+        )
 
 
 # Task CRUD
@@ -149,6 +217,10 @@ async def create_task(
         status=data.status,
         epic_id=data.epic_id,
         parent_task_id=data.parent_task_id,
+        start_date=data.start_date,
+        end_date=data.end_date,
+        estimated_hours=data.estimated_hours,
+        actor_id=str(current_user.id),
     )
 
     await db.commit()
@@ -166,7 +238,9 @@ async def bulk_assign_tasks(
     db: AsyncSession = Depends(get_db),
 ):
     """Bulk assign multiple tasks."""
-    await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+    sprint = await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+    task_ids = [a.get("task_id") for a in data.assignments if a.get("task_id")]
+    await _filter_task_ids_to_workspace(db, task_ids, str(sprint.workspace_id))
 
     task_service = SprintTaskService(db)
     tasks = await task_service.bulk_assign_tasks(data.assignments)
@@ -183,10 +257,13 @@ async def bulk_update_status(
     db: AsyncSession = Depends(get_db),
 ):
     """Bulk update status for multiple tasks."""
-    await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+    sprint = await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+    await _filter_task_ids_to_workspace(db, data.task_ids, str(sprint.workspace_id))
 
     task_service = SprintTaskService(db)
-    tasks = await task_service.bulk_update_status(data.task_ids, data.status)
+    tasks = await task_service.bulk_update_status(
+        data.task_ids, data.status, actor_id=str(current_user.id)
+    )
 
     await db.commit()
     return [task_to_response(t) for t in tasks]
@@ -200,10 +277,23 @@ async def bulk_move_tasks(
     db: AsyncSession = Depends(get_db),
 ):
     """Bulk move tasks to another sprint."""
-    await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+    sprint = await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+    await _filter_task_ids_to_workspace(db, data.task_ids, str(sprint.workspace_id))
+    # Target sprint must also be in the same workspace.
+    from aexy.models.sprint import Sprint
+    target_check = await db.execute(
+        select(Sprint.id).where(
+            Sprint.id == data.target_sprint_id,
+            Sprint.workspace_id == sprint.workspace_id,
+        )
+    )
+    if target_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Target sprint not found")
 
     task_service = SprintTaskService(db)
-    tasks = await task_service.bulk_move_to_sprint(data.task_ids, data.target_sprint_id)
+    tasks = await task_service.bulk_move_to_sprint(
+        data.task_ids, data.target_sprint_id, actor_id=str(current_user.id)
+    )
 
     await db.commit()
     return [task_to_response(t) for t in tasks]
@@ -553,6 +643,73 @@ async def auto_assign_sprint(
     }
 
 
+# ============================================================================
+# GitHub Link Endpoints (must be before /{task_id} routes)
+# ============================================================================
+
+
+@router.get("/{task_id}/github-links", response_model=list[TaskGitHubLinkResponse])
+async def list_task_github_links(
+    sprint_id: str,
+    task_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """List GitHub links for a task."""
+    await get_sprint_and_check_permission(sprint_id, current_user, db, "viewer")
+
+    task = await db.get(SprintTask, task_id)
+    if not task or str(task.sprint_id) != sprint_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    service = GitHubTaskSyncService(db)
+    links = await service.get_task_links(task_id)
+    return [
+        github_link_to_response(link)
+        for link in links
+        if link.link_type in ("pull_request", "github_issue")
+    ]
+
+
+@router.delete("/{task_id}/github-links/{link_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def unlink_github_link_from_task(
+    sprint_id: str,
+    task_id: str,
+    link_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a manual or auto-detected GitHub link from a task."""
+    await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+
+    link = await db.get(TaskGitHubLink, link_id)
+    if not link or str(link.task_id) != task_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="GitHub link not found",
+        )
+
+    task = await db.get(SprintTask, task_id)
+    if not task or str(task.sprint_id) != sprint_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    service = GitHubTaskSyncService(db)
+    removed = await service.remove_link(link_id)
+    if not removed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="GitHub link not found",
+        )
+
+    await db.commit()
+
+
 # Task CRUD with path parameters (must come after specific routes)
 @router.get("/{task_id}", response_model=SprintTaskResponse)
 async def get_task(
@@ -598,18 +755,35 @@ async def update_task(
         "priority": data.priority,
         "status": data.status,
         "labels": data.labels,
+        "actor_id": str(current_user.id),
     }
+    # description_json is the rich-text representation; pass through only when
+    # the caller explicitly set it so we don't clobber it on partial updates.
+    if "description_json" in data.model_fields_set:
+        update_kwargs["description_json"] = data.description_json
     # Only pass epic_id if it was explicitly provided in the request
     if data.epic_id is not None or "epic_id" in data.model_fields_set:
         update_kwargs["epic_id"] = data.epic_id
     # Only pass assignee_id if it was explicitly provided in the request
     if data.assignee_id is not None or "assignee_id" in data.model_fields_set:
         update_kwargs["assignee_id"] = data.assignee_id
-    # Only pass contributes_to_goal if it was explicitly provided
+    # contributes_to_goal is a non-nullable bool on the model — only apply
+    # when the caller explicitly set true/false.
     if data.contributes_to_goal is not None:
         update_kwargs["contributes_to_goal"] = data.contributes_to_goal
+    # Pass scheduled-timeline fields only if explicitly set so callers can
+    # clear the dates by sending null and not just leave them unspecified.
+    if "start_date" in data.model_fields_set:
+        update_kwargs["start_date"] = data.start_date
+    if "end_date" in data.model_fields_set:
+        update_kwargs["end_date"] = data.end_date
+    if "estimated_hours" in data.model_fields_set:
+        update_kwargs["estimated_hours"] = data.estimated_hours
 
-    task = await task_service.update_task(**update_kwargs)
+    try:
+        task = await task_service.update_task(**update_kwargs)
+    except TaskValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.code)
 
     if not task or task.sprint_id != sprint_id:
         raise HTTPException(
@@ -641,7 +815,7 @@ async def delete_task(
             detail="Task not found",
         )
 
-    await task_service.archive_task(task_id)
+    await task_service.archive_task(task_id, actor_id=str(current_user.id))
     await db.commit()
 
 
@@ -664,7 +838,7 @@ async def unarchive_task(
             detail="Task not found",
         )
 
-    restored = await task_service.unarchive_task(task_id)
+    restored = await task_service.unarchive_task(task_id, actor_id=str(current_user.id))
     await db.commit()
     return task_to_response(restored)
 
@@ -705,7 +879,9 @@ async def update_task_status(
     await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
 
     task_service = SprintTaskService(db)
-    task = await task_service.update_task_status(task_id, data.status)
+    task = await task_service.update_task_status(
+        task_id, data.status, actor_id=str(current_user.id)
+    )
 
     if not task or task.sprint_id != sprint_id:
         raise HTTPException(
@@ -735,6 +911,7 @@ async def assign_task(
         developer_id=data.developer_id,
         reason=data.reason,
         confidence=data.confidence,
+        actor_id=str(current_user.id),
     )
 
     if not task or task.sprint_id != sprint_id:
@@ -758,7 +935,7 @@ async def unassign_task(
     await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
 
     task_service = SprintTaskService(db)
-    task = await task_service.unassign_task(task_id)
+    task = await task_service.unassign_task(task_id, actor_id=str(current_user.id))
 
     if not task or task.sprint_id != sprint_id:
         raise HTTPException(
@@ -1008,3 +1185,86 @@ async def export_sprint_tasks(
         media_type=content_types[format],
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ─── Attachments ────────────────────────────────────────────────────────────
+@router.post(
+    "/{task_id}/attachments",
+    response_model=TaskAttachmentListResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_task_attachments(
+    sprint_id: str,
+    task_id: str,
+    files: list[UploadFile] = File(...),
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload one or more file attachments to a task."""
+    from aexy.services.task_attachment_service import upload_attachments_for_task
+
+    await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+
+    task_service = SprintTaskService(db)
+    task = await task_service.get_task(task_id)
+    if not task or task.sprint_id != sprint_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    return await upload_attachments_for_task(db, task, files, current_user)
+
+
+@router.get(
+    "/{task_id}/attachments",
+    response_model=TaskAttachmentListResponse,
+)
+async def list_task_attachments(
+    sprint_id: str,
+    task_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """List attachments on a task."""
+    from aexy.services.task_attachment_service import list_attachments_for_task
+
+    await get_sprint_and_check_permission(sprint_id, current_user, db, "viewer")
+
+    task_service = SprintTaskService(db)
+    task = await task_service.get_task(task_id)
+    if not task or task.sprint_id != sprint_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    return await list_attachments_for_task(db, task)
+
+
+@router.delete(
+    "/{task_id}/attachments/{attachment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_task_attachment(
+    sprint_id: str,
+    task_id: str,
+    attachment_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a task attachment."""
+    from aexy.services.task_attachment_service import delete_attachment_for_task
+
+    await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+
+    task_service = SprintTaskService(db)
+    task = await task_service.get_task(task_id)
+    if not task or task.sprint_id != sprint_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    await delete_attachment_for_task(db, task, attachment_id, actor_id=str(current_user.id))
+    return None

@@ -650,6 +650,13 @@ class BookingService:
         if not attendee:
             raise BookingNotFoundError("RSVP token not found or invalid")
 
+        # WS-076: tokens are single-shot — once the attendee has already
+        # responded (accepted or declined), refuse further updates via the
+        # same token. This stops a stale token leaked from logs / forwarded
+        # email being replayed to flip the response later.
+        if attendee.responded_at is not None:
+            raise InvalidBookingStateError("This RSVP has already been responded to")
+
         # Get the associated booking
         booking = await self.get_booking(attendee.booking_id)
         if not booking:
@@ -664,6 +671,12 @@ class BookingService:
         # Update attendee status
         attendee.status = AttendeeStatus.CONFIRMED.value if accept else AttendeeStatus.DECLINED.value
         attendee.responded_at = datetime.now(ZoneInfo("UTC"))
+
+        # Rotate the token so the URL in the original invite email stops
+        # working after first use. Attendees can still see their status in
+        # the standard booking UI; we don't need an idempotent retry on the
+        # one-shot accept/decline action.
+        attendee.response_token = secrets.token_urlsafe(32)
 
         await self.db.flush()
         await self.db.refresh(attendee)

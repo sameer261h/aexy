@@ -115,7 +115,7 @@ export function BasicInfoStep({
             value={name}
             onChange={(e) => handleNameChange(e.target.value)}
             placeholder="e.g., Support Bot, Sales Assistant"
-            className="w-full px-4 py-3 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500"
+            className="w-full px-4 py-3 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
             autoFocus
           />
           <p className="mt-1 text-sm text-muted-foreground">
@@ -136,12 +136,12 @@ export function BasicInfoStep({
               onChange={(e) => onMentionHandleChange(e.target.value.toLowerCase())}
               placeholder="support-bot"
               className={cn(
-                "w-full pl-10 pr-10 py-3 bg-accent border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2",
+                "w-full pl-10 pr-10 py-3 bg-accent border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus-visible:ring-2",
                 handleError
-                  ? "border-red-500 focus:ring-red-500"
+                  ? "border-red-500 focus-visible:ring-red-500"
                   : handleAvailable
-                  ? "border-green-500 focus:ring-green-500"
-                  : "border-border focus:ring-purple-500"
+                  ? "border-green-500 focus-visible:ring-green-500"
+                  : "border-border focus-visible:ring-purple-500"
               )}
             />
             {/* Status indicator */}
@@ -176,7 +176,7 @@ export function BasicInfoStep({
             onChange={(e) => onDescriptionChange(e.target.value)}
             placeholder="Describe what this agent does..."
             rows={3}
-            className="w-full px-4 py-3 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"
+            className="w-full px-4 py-3 bg-accent border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 resize-none"
           />
           <p className="mt-1 text-sm text-muted-foreground">
             Optional description to help you remember this agent's purpose
@@ -260,7 +260,7 @@ export function BasicInfoStep({
                           )
                         }
                         placeholder="support"
-                        className="w-full px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm placeholder-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
                       />
                     </div>
 
@@ -274,7 +274,7 @@ export function BasicInfoStep({
                         <select
                           value={emailDomain || defaultDomain}
                           onChange={(e) => onEmailDomainChange?.(e.target.value)}
-                          className="w-full pl-8 pr-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 appearance-none"
+                          className="w-full pl-8 pr-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 appearance-none"
                         >
                           {domains.map((d) => (
                             <option key={d.domain} value={d.domain}>

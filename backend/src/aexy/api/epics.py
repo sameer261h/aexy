@@ -349,6 +349,25 @@ async def add_tasks_to_epic(
             detail="Epic not found",
         )
 
+    # Constrain task ids to this workspace so an epic can't be linked to tasks
+    # from another workspace via forged ids.
+    if data.task_ids:
+        from sqlalchemy import select
+        from aexy.models.sprint import SprintTask
+        valid = (
+            await db.execute(
+                select(SprintTask.id).where(
+                    SprintTask.id.in_(data.task_ids),
+                    SprintTask.workspace_id == workspace_id,
+                )
+            )
+        ).scalars().all()
+        if len(valid) != len(set(data.task_ids)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="One or more tasks do not belong to this workspace",
+            )
+
     result = await service.add_tasks_to_epic(epic_id, data.task_ids)
 
     if "error" in result:

@@ -1,13 +1,32 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
+import { Check, Loader2, AlertCircle } from "lucide-react";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Node, Edge } from "@xyflow/react";
 
 import { useWorkspace } from "@/hooks/useWorkspace";
-import { WorkflowCanvas } from "@/components/workflow-builder";
 import { api, AutomationModule } from "@/lib/api";
+
+// WorkflowCanvas + @xyflow/react together are ~150 KB. Defer the load
+// so the detail page's metadata (name / description / module) renders
+// without paying that cost upfront. Matches the dynamic-import in
+// automations/new/page.tsx.
+const WorkflowCanvas = dynamic(
+  () => import("@/components/workflow-builder").then((m) => m.WorkflowCanvas),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-full flex items-center justify-center text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin mr-2" />
+        Loading canvas...
+      </div>
+    ),
+  },
+);
 
 const moduleLabels: Record<AutomationModule, string> = {
   crm: "CRM",
@@ -40,7 +59,10 @@ interface Automation {
   is_active: boolean;
 }
 
+type SaveState = "idle" | "saving" | "saved" | "error";
+
 export default function EditAutomationPage() {
+  const t = useTranslations("automations");
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
@@ -53,6 +75,7 @@ export default function EditAutomationPage() {
   const [description, setDescription] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
 
   const workspaceId = currentWorkspace?.id;
 
@@ -94,21 +117,29 @@ export default function EditAutomationPage() {
     loadData();
   }, [workspaceId, automationId]);
 
-  // Update automation name/description when changed
+  // Update automation name/description when changed. Debounced — surfaces
+  // the save state so users can tell whether their edit landed.
   useEffect(() => {
     if (!workspaceId || !automationId || !automation) return;
+    if (name === automation.name && description === (automation.description || "")) {
+      return;
+    }
 
     const updateAutomation = async () => {
-      if (name !== automation.name || description !== (automation.description || "")) {
-        try {
-          await api.patch(`/workspaces/${workspaceId}/automations/${automationId}`, {
-            name,
-            description,
-          });
-          setAutomation((prev) => (prev ? { ...prev, name, description } : prev));
-        } catch (err) {
-          console.error("Failed to update automation:", err);
-        }
+      setSaveState("saving");
+      try {
+        await api.patch(`/workspaces/${workspaceId}/automations/${automationId}`, {
+          name,
+          description,
+        });
+        setAutomation((prev) => (prev ? { ...prev, name, description } : prev));
+        setSaveState("saved");
+        // Fade back to idle after a beat so the indicator doesn't stick.
+        const idleTimer = setTimeout(() => setSaveState("idle"), 1500);
+        return () => clearTimeout(idleTimer);
+      } catch (err) {
+        console.error("Failed to update automation:", err);
+        setSaveState("error");
       }
     };
 
@@ -179,7 +210,6 @@ export default function EditAutomationPage() {
             ...(recordId?.trim() ? { record_id: recordId.trim() } : {}),
           }
         );
-        console.log("Test execution result:", response.data);
         return response.data;
       } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : "Failed to test workflow";
@@ -267,12 +297,45 @@ export default function EditAutomationPage() {
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="text-lg font-semibold text-foreground bg-transparent border-none focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-2 py-1 -ml-2"
-                  placeholder="Automation name"
+                  className="text-lg font-semibold text-foreground bg-transparent border-none focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded px-2 py-1 -ml-2"
+                  placeholder={t("builder.namePlaceholder")}
                 />
                 {automation?.module && (
                   <span className="text-sm text-muted-foreground bg-accent px-2 py-0.5 rounded">
                     {moduleLabels[automation.module] || automation.module}
+                  </span>
+                )}
+                {/* Live save state — visible feedback for the 1s-debounced
+                    PATCH so users aren't left guessing whether their edit
+                    landed. */}
+                {saveState !== "idle" && (
+                  <span
+                    className="flex items-center gap-1.5 text-xs"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {saveState === "saving" && (
+                      <>
+                        <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                        <span className="text-muted-foreground">{t("save.saving")}</span>
+                      </>
+                    )}
+                    {saveState === "saved" && (
+                      <>
+                        <Check className="h-3 w-3 text-emerald-500" />
+                        <span className="text-emerald-600 dark:text-emerald-400">
+                          {t("save.saved")}
+                        </span>
+                      </>
+                    )}
+                    {saveState === "error" && (
+                      <>
+                        <AlertCircle className="h-3 w-3 text-red-500" />
+                        <span className="text-red-600 dark:text-red-400">
+                          {t("save.error")}
+                        </span>
+                      </>
+                    )}
                   </span>
                 )}
               </div>
@@ -280,7 +343,7 @@ export default function EditAutomationPage() {
                 type="text"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                className="block text-sm text-muted-foreground bg-transparent border-none focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-2 py-0.5 -ml-2 w-full max-w-md"
+                className="block text-sm text-muted-foreground bg-transparent border-none focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded px-2 py-0.5 -ml-2 w-full max-w-md"
                 placeholder="Add a description..."
               />
             </div>

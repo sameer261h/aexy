@@ -22,7 +22,10 @@ import {
   PlayCircle,
   Eye,
   CheckCircle2,
+  Link2,
+  Hash,
 } from "lucide-react";
+import { toast } from "sonner";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { SprintTask, TaskPriority, TaskStatus } from "@/lib/api";
@@ -92,6 +95,19 @@ export function TaskCardPremium({
   const [showQuickStatus, setShowQuickStatus] = useState(false);
   const priorityConfig = PRIORITY_CONFIG[task.priority];
 
+  const copyToClipboard = async (value: string | null, successLabel: string) => {
+    if (!value) {
+      toast.error("Not available yet — task is missing its shareable id");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(value);
+      toast.success(successLabel);
+    } catch {
+      toast.error("Couldn't copy to clipboard");
+    }
+  };
+
   const {
     attributes,
     listeners,
@@ -126,10 +142,46 @@ export function TaskCardPremium({
     onSelect?.(task.id);
   };
 
+  // Whole card uses dnd-kit listeners on its root; child controls must stop
+  // pointerdown propagation so clicks on them don't initiate a drag.
+  const stopDrag = {
+    onPointerDown: (e: React.PointerEvent) => e.stopPropagation(),
+  };
+
+  // Overdue: scheduled end has passed and the task isn't done.
+  const isOverdue = Boolean(
+    task.end_date && task.status !== "done" && new Date(task.end_date) < new Date()
+  );
+
+  // Over estimate: task is done and actual cycle time exceeded estimate.
+  // Prefer cycle_time_hours (already computed by the backend on completion);
+  // fall back to (completed_at − work_started_at|started_at) for in-flight data.
+  let actualHours: number | null = null;
+  if (task.cycle_time_hours != null) {
+    actualHours = task.cycle_time_hours;
+  } else if (task.completed_at) {
+    const startedAt = task.work_started_at ?? task.started_at;
+    if (startedAt) {
+      actualHours =
+        (new Date(task.completed_at).getTime() - new Date(startedAt).getTime()) / 3_600_000;
+    }
+  }
+  const isOverEstimate = Boolean(
+    task.estimated_hours && actualHours != null && actualHours > task.estimated_hours
+  );
+
+  // Whole card is draggable. Interactive children (menu, checkbox, status
+  // pills) call e.stopPropagation() on pointer events below so dnd-kit
+  // doesn't treat clicks on them as the start of a drag.
   return (
     <motion.div
       ref={setNodeRef}
       style={style}
+      data-testid="task-card"
+      data-task-id={task.id}
+      data-task-status={task.status}
+      {...attributes}
+      {...listeners}
       initial={{ opacity: 0, y: 10 }}
       animate={{
         opacity: isSortableDragging || isDragging ? 0.5 : 1,
@@ -147,14 +199,13 @@ export function TaskCardPremium({
           ? "border-primary-500 ring-2 ring-primary-500/30"
           : "border-border/50",
         suggestion && "ring-1 ring-primary-500/30",
-        "cursor-pointer"
+        "cursor-grab active:cursor-grabbing"
       )}
     >
-      {/* Drag handle (visible on hover) */}
+      {/* Drag affordance icon — purely visual; the whole card is draggable */}
       <div
-        {...attributes}
-        {...listeners}
-        className="absolute -left-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing p-1"
+        aria-hidden="true"
+        className="absolute -left-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 pointer-events-none"
       >
         <GripVertical className="h-4 w-4 text-muted-foreground" />
       </div>
@@ -162,6 +213,7 @@ export function TaskCardPremium({
       {/* Selection checkbox */}
       {onSelect && (
         <div
+          {...stopDrag}
           onClick={handleCheckboxClick}
           className={cn(
             "absolute -left-0.5 top-3 opacity-0 group-hover:opacity-100 transition-opacity",
@@ -198,6 +250,16 @@ export function TaskCardPremium({
           <Badge variant={priorityConfig.variant} size="sm">
             {priorityConfig.label}
           </Badge>
+          {isOverdue && (
+            <Badge variant="error" size="sm" data-testid="overdue-badge">
+              Overdue
+            </Badge>
+          )}
+          {isOverEstimate && (
+            <Badge variant="warning" size="sm" data-testid="over-estimate-badge">
+              Over estimate
+            </Badge>
+          )}
           {task.story_points && (
             <Badge variant="outline" size="sm">
               {task.story_points} SP
@@ -216,8 +278,9 @@ export function TaskCardPremium({
         </div>
 
         {/* Menu */}
-        <div className="relative">
+        <div className="relative" {...stopDrag}>
           <button
+            {...stopDrag}
             onClick={(e) => {
               e.stopPropagation();
               setShowMenu(!showMenu);
@@ -300,8 +363,16 @@ export function TaskCardPremium({
         </div>
       </div>
 
-      {/* Title */}
+      {/* Title + per-workspace identifier (e.g. [aexy:42]) */}
       <h4 className="text-sm font-medium text-foreground mb-2 line-clamp-2 leading-snug">
+        {task.identifier && (
+          <span
+            className="mr-1.5 font-mono text-[11px] text-muted-foreground/70 align-baseline"
+            title={task.identifier}
+          >
+            {task.identifier}
+          </span>
+        )}
         {task.title}
       </h4>
 
@@ -393,10 +464,42 @@ export function TaskCardPremium({
       )}
 
       {/* Quick Actions Bar - appears on hover */}
-      <div className="absolute -bottom-1 left-0 right-0 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-1/2 pointer-events-none group-hover:pointer-events-auto z-10">
+      <div
+        {...stopDrag}
+        className="absolute -bottom-1 left-0 right-0 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-1/2 pointer-events-none group-hover:pointer-events-auto z-10"
+      >
         <div className="flex items-center gap-0.5 bg-accent/95 backdrop-blur-sm rounded-full px-1.5 py-1 shadow-lg border border-border">
+          {/* Copy shareable link (full URL on hover) */}
+          <button
+            {...stopDrag}
+            onClick={(e) => {
+              e.stopPropagation();
+              copyToClipboard(task.public_url, "Link copied");
+            }}
+            disabled={!task.public_url}
+            className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-full transition disabled:opacity-30 disabled:cursor-not-allowed"
+            title={task.public_url || "Shareable link not available"}
+          >
+            <Link2 className="h-3 w-3" />
+          </button>
+
+          {/* Copy identifier [slug:N] for GitHub PR/issue titles */}
+          <button
+            {...stopDrag}
+            onClick={(e) => {
+              e.stopPropagation();
+              copyToClipboard(task.identifier, "Identifier copied");
+            }}
+            disabled={!task.identifier}
+            className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-full transition disabled:opacity-30 disabled:cursor-not-allowed"
+            title={task.identifier || "Identifier not available"}
+          >
+            <Hash className="h-3 w-3" />
+          </button>
+
           {/* Quick Edit */}
           <button
+            {...stopDrag}
             onClick={(e) => {
               e.stopPropagation();
               onClick?.(task);
@@ -411,6 +514,7 @@ export function TaskCardPremium({
           {onStatusChange && (
             <div className="relative">
               <button
+                {...stopDrag}
                 onClick={(e) => {
                   e.stopPropagation();
                   setShowQuickStatus(!showQuickStatus);
@@ -467,6 +571,7 @@ export function TaskCardPremium({
           {/* Archive */}
           {onDelete && (
             <button
+              {...stopDrag}
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete(task.id);

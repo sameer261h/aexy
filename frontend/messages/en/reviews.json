@@ -5,7 +5,6 @@
     "newGoal": "New Goal",
     "managementView": "Management View",
     "manageCycles": "Manage Cycles",
-
     "stats": {
       "activeGoals": "Active Goals",
       "completed": "Completed",
@@ -16,9 +15,26 @@
       "pendingRequests": "Pending requests",
       "autoLinkedPRs": "Auto-linked PRs"
     },
-
     "dashboard": {
+      "activeReviewBanner": {
+        "heading": "Your active review",
+        "selfNotStarted": "Self-review not started — open to get started",
+        "managerCompleted": "Manager review complete — acknowledge to close out",
+        "inProgress": "Track self-review, peer nominations, and feedback",
+        "cta": "Open your review"
+      },
       "myGoals": "My Goals",
+      "peerReviewRequestFallback": "Peer review request",
+      "noContributionData": "No contribution data yet",
+      "noContributionDataHint": "Click \"Generate Summary\" to analyze your GitHub activity",
+      "exampleGoal": {
+        "title": "Improve API response times by 50%",
+        "type": "Performance",
+        "keyResults": "{count, plural, one {# key result} other {# key results}}",
+        "prsLinked": "{count, plural, one {# PR linked} other {# PRs linked}}",
+        "percentComplete": "{percent}% complete",
+        "createCta": "Create Your First Goal"
+      },
       "reviewCycle": "Review Cycle",
       "feedbackRequests": "Feedback Requests",
       "noActiveReviewCycle": "No active review cycle",
@@ -34,7 +50,6 @@
       "aiInsightPreview": "Connect your GitHub account to unlock AI-generated contribution narratives that synthesize your commits, PRs, and code reviews into compelling summaries.",
       "aiInsightPreviewLabel": "AI Insight Preview"
     },
-
     "features": {
       "smartGoals": "SMART Goals",
       "smartGoalsDesc": "Set Specific, Measurable, Achievable, Relevant, and Time-bound goals with key results tracking.",
@@ -43,7 +58,6 @@
       "aiSummaries": "AI Summaries",
       "aiSummariesDesc": "Auto-generate contribution narratives from your GitHub commits, PRs, and code reviews."
     },
-
     "goals": {
       "title": "My Goals",
       "description": "Track your SMART goals and key results",
@@ -56,6 +70,17 @@
       "deleteConfirmMessage": "Are you sure you want to delete this goal? This action cannot be undone.",
       "goalCreated": "Goal created successfully",
       "goalDeleted": "Goal deleted",
+      "detail": {
+        "updateProgressFailed": "Failed to update progress",
+        "autoLinkFailed": "Failed to auto-link contributions",
+        "completeFailed": "Failed to complete goal",
+        "confirmComplete": {
+          "title": "Complete this goal?",
+          "description": "This goal will be marked as completed and locked from further updates.",
+          "descriptionNamed": "\"{name}\" will be marked as completed and locked from further updates.",
+          "confirmLabel": "Mark as completed"
+        }
+      },
       "goalDeleteFailed": "Failed to delete goal",
       "noGoals": "No goals yet",
       "noGoalsDescription": "Set goals to track progress and align team objectives with company priorities.",
@@ -65,7 +90,6 @@
       "all": "All",
       "active": "Active",
       "completed": "Completed",
-
       "form": {
         "title": "Create SMART Goal",
         "subtitle": "Define specific, measurable objectives with key results",
@@ -78,7 +102,6 @@
         "targetDate": "Target Date",
         "privateGoal": "Private goal (only visible to you and manager)",
         "disabledTooltip": "Fill in goal title and target date to create",
-
         "types": {
           "performance": "Performance - Delivery & quality targets",
           "skillDevelopment": "Skill Development - Learning new technologies",
@@ -86,7 +109,26 @@
           "leadership": "Leadership - Mentoring & team impact",
           "teamContribution": "Team Contribution - Collaboration & support"
         },
-
+        "typeLabel": {
+          "performance": "Performance",
+          "skill_development": "Skill Development",
+          "project": "Project",
+          "leadership": "Leadership",
+          "team_contribution": "Team Contribution"
+        },
+        "typeDescription": {
+          "performance": "Delivery & quality targets",
+          "skill_development": "Learning new technologies",
+          "project": "Feature & milestone goals",
+          "leadership": "Mentoring & team impact",
+          "team_contribution": "Collaboration & support"
+        },
+        "priority": {
+          "critical": "Critical",
+          "high": "High",
+          "medium": "Medium",
+          "low": "Low"
+        },
         "smart": {
           "title": "SMART Framework",
           "recommended": "Recommended",
@@ -100,14 +142,12 @@
           "relevant": "Relevant - Why does this matter?",
           "relevantPlaceholder": "e.g., Improves user experience and reduces server costs by 20%"
         },
-
         "keyResults": {
           "title": "Key Results (OKRs)",
           "subtitle": "Define measurable outcomes that indicate goal completion",
           "addKeyResult": "Add Key Result",
           "keyResultNumber": "Key Result #{number}"
         },
-
         "autoLink": {
           "title": "Auto-Link GitHub Activity",
           "beta": "Beta",
@@ -116,11 +156,87 @@
           "keywordsPlaceholder": "e.g., performance, api-optimization, response-time",
           "keywordsTip": "Tip: Use project codes, feature names, or issue numbers for better matching"
         },
-
         "preview": "Preview"
       }
     },
-
+    "myReview": {
+      "loading": "Loading review...",
+      "notFoundTitle": "Review not found",
+      "notFoundBody": "We couldn't load this review. It may have been removed, or you don't have access.",
+      "backToReviews": "Back to Reviews",
+      "phaseLabel": "Phase",
+      "managerLabel": "Manager",
+      "deadlines": {
+        "selfReview": "Self review",
+        "peerReview": "Peer review",
+        "managerReview": "Manager review",
+        "openEnded": "Open-ended",
+        "noDeadlineTooltip": "No deadline configured for this phase"
+      },
+      "phaseLabels": {
+        "draft": "Draft",
+        "active": "Active",
+        "self_review": "Self review",
+        "peer_review": "Peer review",
+        "manager_review": "Manager review",
+        "completed": "Completed",
+        "pending": "Pending",
+        "self_review_submitted": "Self review submitted",
+        "peer_review_in_progress": "Peer review in progress",
+        "manager_review_in_progress": "Manager review in progress",
+        "acknowledged": "Acknowledged"
+      },
+      "requestStatus": {
+        "pending": "Awaiting response",
+        "accepted": "Accepted",
+        "completed": "Submitted",
+        "declined": "Declined"
+      },
+      "selfReviewSection": {
+        "heading": "Your self review",
+        "submittedNote": "Submitted — your manager will see this when they open the cycle.",
+        "pendingNote": "Reflect on your wins and growth this cycle. The manager-finalize step builds on what you write here.",
+        "badgeSubmitted": "Submitted",
+        "badgeNotStarted": "Not started"
+      },
+      "form": {
+        "strengthsLabel": "What went well",
+        "strengthsPlaceholder": "e.g. Owned the auth migration end-to-end and unblocked mobile.",
+        "growthLabel": "Areas to grow",
+        "growthPlaceholder": "e.g. Want to get sharper on architectural trade-offs.",
+        "noteLabel": "Anything else",
+        "notePlaceholder": "Free-text notes that don't fit above.",
+        "submit": "Submit self-review",
+        "validationError": "Add at least one strength, growth area, or note",
+        "submittedToast": "Self-review submitted",
+        "submitFailed": "Failed to submit self review"
+      },
+      "summary": {
+        "strengths": "Strengths",
+        "growthAreas": "Growth areas",
+        "notes": "Notes",
+        "emptyNote": "Your submission didn't include free-text responses."
+      },
+      "peerSection": {
+        "heading": "Peer reviewers",
+        "nominate": "Nominate reviewers",
+        "noneNominate": "No reviewers yet. Pick teammates above to invite.",
+        "noneAssigned": "No reviewers assigned yet.",
+        "explanationManagerAssigned": "Your manager assigns peer reviewers for this cycle.",
+        "explanationEmployeeChoice": "Pick the teammates you'd like to review you.",
+        "explanationBoth": "You and your manager can both nominate reviewers.",
+        "activeCount": "{activeRequestCount} active",
+        "needAtLeast": "need at least {min}",
+        "max": "max {max}"
+      },
+      "acknowledge": {
+        "heading": "Your manager has completed this review.",
+        "cta": "Acknowledge",
+        "submitting": "Acknowledging…",
+        "successToast": "Review acknowledged",
+        "failedToast": "Failed to acknowledge"
+      }
+    },
     "cycles": {
       "title": "Review Cycles",
       "description": "Manage performance review cycles for your workspace",
@@ -129,10 +245,126 @@
       "noCyclesDescription": "Create your first review cycle to start collecting 360° feedback from your team.",
       "cycleCreated": "Review cycle created successfully",
       "backToReviews": "Back to Reviews",
-
+      "statusLabels": {
+        "draft": "Draft",
+        "active": "Active",
+        "self_review": "Self Review",
+        "peer_review": "Peer Review",
+        "manager_review": "Manager Review",
+        "completed": "Completed"
+      },
+      "cycleTypeLabels": {
+        "annual": "Annual",
+        "semi_annual": "Semi-Annual",
+        "quarterly": "Quarterly",
+        "custom": "Custom"
+      },
+      "cycleCount": "{count, plural, one {# cycle} other {# cycles}}",
+      "detail": {
+        "loading": "Loading review cycle...",
+        "notFoundTitle": "Review cycle not found",
+        "notFoundBody": "The review cycle you're looking for doesn't exist or you don't have access.",
+        "notSet": "Not set",
+        "completionProgress": "Completion Progress",
+        "cycleCompletionAriaLabel": "Cycle completion progress",
+        "stats": {
+          "totalReviews": "Total Reviews",
+          "completed": "Completed",
+          "pendingSelf": "Pending Self",
+          "pendingPeer": "Pending Peer",
+          "pendingManager": "Pending Manager"
+        },
+        "headings": {
+          "phaseDeadlines": "Phase Deadlines",
+          "participants": "Participants",
+          "settings": "Settings",
+          "info": "Info"
+        },
+        "phaseLabels": {
+          "selfReview": "Self Review",
+          "peerReview": "Peer Review",
+          "managerReview": "Manager Review"
+        },
+        "participants": {
+          "noneEnrolled": "No participants enrolled yet.",
+          "noneInCycle": "No participants in this cycle."
+        },
+        "settings": {
+          "selfReview": "Self Review",
+          "peerReview": "Peer Review",
+          "managerReview": "Manager Review",
+          "anonymousPeer": "Anonymous Peer",
+          "githubMetrics": "GitHub Metrics",
+          "peerReviewers": "Peer Reviewers",
+          "enabled": "Enabled",
+          "disabled": "Disabled",
+          "yes": "Yes",
+          "no": "No",
+          "included": "Included",
+          "notIncluded": "Not included",
+          "none": "No settings configured."
+        },
+        "info": {
+          "created": "Created",
+          "lastUpdated": "Last Updated"
+        },
+        "notify": {
+          "buttonLabel": "Notify",
+          "buttonTitle": "Resend a cycle notification to participants",
+          "menuLabel": "Resend notification",
+          "activation": "Cycle started — all enrolled",
+          "deadline": "Deadline reminder — pending only",
+          "phaseChange": "Phase change — all enrolled",
+          "sending": "sending…"
+        },
+        "actions": {
+          "startCycle": "Start Cycle",
+          "advancePhase": "Advance Phase",
+          "openYourReview": "Open your review"
+        },
+        "confirm": {
+          "startTitle": "Start Review Cycle?",
+          "startDescription": "This will activate the cycle and automatically enroll all team members from your workspace. Individual reviews will be created for each participant.",
+          "advanceTitle": "Advance to next phase?",
+          "advanceDescriptionTemplate": "Moves this cycle from {from} → {to}. Participants will be notified and the relevant submission forms will open / close.",
+          "advanceFallbackNext": "next phase"
+        },
+        "toasts": {
+          "sentNotifications": "Sent {sent} {kind} {sent, plural, one {notification} other {notifications}}",
+          "noNotificationsWithReason": "No notifications sent — {reason}",
+          "noEligibleRecipients": "No eligible recipients for this notification",
+          "failedToResend": "Failed to resend notifications",
+          "failedToStart": "Failed to start cycle",
+          "advancedSuccess": "Cycle advanced to the next phase",
+          "failedToAdvance": "Failed to advance phase"
+        },
+        "kindLabels": {
+          "activation": "activation",
+          "deadline": "deadline reminder",
+          "phase_change": "phase-change"
+        }
+      },
+      "noWorkspace": {
+        "title": "No Workspace Selected",
+        "description": "Review cycles are workspace-specific. Please create or select a workspace first.",
+        "cta": "Manage Workspaces"
+      },
+      "table": {
+        "cycle": "Cycle",
+        "status": "Status",
+        "period": "Period",
+        "deadlines": "Deadlines",
+        "actions": "Actions",
+        "view": "View",
+        "viewDetails": "View Details",
+        "activateCycleEllipsis": "Activate Cycle…",
+        "advancePhaseEllipsis": "Advance Phase…",
+        "moreActions": "More actions"
+      },
       "form": {
         "title": "Create Review Cycle",
         "subtitle": "Set up a new performance review cycle for your team",
+        "basicInformation": "Basic Information",
         "cycleName": "Cycle Name",
         "cycleNamePlaceholder": "e.g., Q1 2024 Performance Review",
         "cycleType": "Cycle Type",
@@ -142,14 +374,12 @@
         "creating": "Creating...",
         "disabledTooltip": "Fill in cycle name, start date, and end date to create",
         "dateError": "End date must be after start date",
-
         "types": {
           "annual": "Annual",
           "semiAnnual": "Semi-Annual",
           "quarterly": "Quarterly",
           "custom": "Custom"
         },
-
         "deadlines": {
           "title": "Phase Deadlines",
           "subtitle": "Set deadlines for each review phase. Leave blank for no deadline.",
@@ -157,7 +387,6 @@
           "peerReview": "Peer Review Deadline",
           "managerReview": "Manager Review Deadline"
         },
-
         "settings": {
           "title": "Review Settings",
           "selfReview": "Self Review",
@@ -177,7 +406,6 @@
           "includeGitHub": "Include GitHub metrics",
           "includeGitHubDesc": "Auto-import commits, PRs, and code reviews from the review period"
         },
-
         "timeline": {
           "title": "Timeline Preview",
           "selfReview": "Self Review",
@@ -186,7 +414,6 @@
           "noDeadline": "No deadline"
         }
       },
-
       "phases": {
         "selfReviewTitle": "Self Review Phase",
         "selfReviewDesc": "Team members reflect on their achievements and areas for growth using structured prompts.",
@@ -195,7 +422,6 @@
         "managerReviewTitle": "Manager Review Phase",
         "managerReviewDesc": "Managers synthesize feedback and provide final ratings and development recommendations."
       },
-
       "statuses": {
         "draft": "Draft",
         "active": "Active",
@@ -203,9 +429,34 @@
         "peerReview": "Peer Review",
         "managerReview": "Manager Review",
         "completed": "Completed"
+      },
+      "breadcrumb": {
+        "reviews": "Reviews",
+        "cycles": "Cycles"
+      },
+      "statusFilter": {
+        "label": "Filter cycles by status",
+        "all": "All Statuses"
+      },
+      "errors": {
+        "failedToLoad": "Failed to load review cycles"
+      },
+      "confirm": {
+        "activateTitle": "Activate \"{name}\"?",
+        "activateDescription": "This opens the cycle and emails every enrolled developer that their review is live. Notifications can't be unsent.",
+        "activateLabel": "Activate",
+        "advanceTitle": "Advance \"{name}\" to next phase?",
+        "advanceDescription": "Moves from <strong>{from}</strong> → <strong>{to}</strong>. Participants are notified and the relevant submission forms open / close.",
+        "advanceFallbackNext": "next phase",
+        "advanceLabel": "Advance"
+      },
+      "toasts": {
+        "activated": "Activated \"{name}\"",
+        "advanced": "Advanced \"{name}\" to the next phase",
+        "failedToActivate": "Failed to activate cycle",
+        "failedToAdvance": "Failed to advance phase"
       }
     },
-
     "peerRequests": {
       "title": "Peer Review Requests",
       "description": "Feedback requests from your colleagues",
@@ -213,6 +464,101 @@
       "pending": "Pending",
       "inProgress": "In Progress",
       "completed": "Completed",
+      "status": {
+        "pending": "Pending",
+        "accepted": "Accepted",
+        "declined": "Declined",
+        "completed": "Completed"
+      },
+      "source": {
+        "employee": "Self-nominated",
+        "manager": "Manager-assigned"
+      },
+      "sections": {
+        "pendingHeader": "Pending Requests ({count})",
+        "completedHeader": "Completed ({count})"
+      },
+      "detail": {
+        "loading": "Loading request...",
+        "notFoundTitle": "Request not found",
+        "backLink": "Back to peer requests",
+        "heading": "Peer review request",
+        "from": "from",
+        "unknownRequester": "Unknown",
+        "source": "Source",
+        "message": "Message",
+        "readOnly": "This request is for another reviewer. You can view it but not act on it.",
+        "readOnlyExternal": "This request was sent to an external reviewer who isn't in the workspace, so there's nothing to act on from here.",
+        "statusBadges": {
+          "pending": "Awaiting your decision",
+          "accepted": "Accepted — submit your feedback",
+          "completed": "Completed",
+          "declined": "Declined"
+        },
+        "pendingActions": {
+          "prompt": "Accept to write feedback, or decline with a short reason.",
+          "decline": "Decline",
+          "accept": "Accept"
+        },
+        "decline": {
+          "title": "Why are you declining?",
+          "subtitle": "This is shared with the requester so they know whether to reassign or follow up.",
+          "placeholder": "e.g. I haven't worked closely with this person this cycle.",
+          "cancel": "Cancel",
+          "submit": "Decline request",
+          "missingReason": "Add a short reason so the requester knows why"
+        },
+        "form": {
+          "heading": "Write your feedback",
+          "subtitle": "Add concrete examples. Strengths first, then growth areas — both surface in the manager's finalization view.",
+          "strengthsLabel": "Strengths",
+          "strengthsPlaceholder": "e.g. Drove the auth migration end-to-end and unblocked the mobile team.",
+          "growthLabel": "Growth areas",
+          "growthPlaceholder": "e.g. Could share design rationale earlier in big-scope PRs.",
+          "noteLabel": "Anything else for context",
+          "notePlaceholder": "Free-text notes that don't fit above.",
+          "submit": "Submit peer review",
+          "validationError": "Add at least one strength, growth area, or note before submitting"
+        },
+        "toasts": {
+          "loadFailed": "Failed to load request",
+          "accepted": "Accepted — write your feedback below",
+          "acceptFailed": "Failed to accept request",
+          "declined": "Request declined",
+          "declineFailed": "Failed to decline request",
+          "submitted": "Peer review submitted — thanks for the feedback",
+          "submitFailed": "Failed to submit review"
+        },
+        "completedNote": "Thanks — your feedback has been submitted.",
+        "declinedNote": "You declined this request."
+      },
+      "inviteModal": {
+        "selfNominate": {
+          "title": "Nominate peer reviewers",
+          "subtitle": "Pick teammates you'd like to review you this cycle. Each gets a notification and can accept or decline.",
+          "submit": "Send request",
+          "messagePlaceholder": "e.g. We collaborated on the auth migration this quarter — would love your perspective."
+        },
+        "managerAssign": {
+          "title": "Invite peer reviewers",
+          "subtitle": "Pick {min}–{max} teammates. Each gets a notification and can accept or decline.",
+          "submit": "Invite",
+          "messagePlaceholder": "e.g. Focus on cross-team collaboration this cycle."
+        },
+        "searchPlaceholder": "Search by name, email, or role",
+        "selectionSummary": "{selected} selected · {filtered} of {eligible} {eligible, plural, one {workspace member} other {workspace members}}",
+        "loadingExistingInvites": "loading existing invites…",
+        "noMatching": "No matching workspace members.",
+        "messageLabel": "Message to all selected reviewers (optional)",
+        "submitWithCount": "{action} {count, plural, one {# reviewer} other {# reviewers}}",
+        "submitNoCount": "{action} reviewers",
+        "pickAtLeast": "Pick at least {count, plural, one {# reviewer} other {# reviewers}}",
+        "invited": "Invited {count, plural, one {# reviewer} other {# reviewers}}",
+        "invitedWithFailures": "Invited {count, plural, one {# reviewer} other {# reviewers}} — {failed} failed",
+        "failedToSend": "Failed to send invites",
+        "alreadyInvited": "Already {status} — can't re-invite",
+        "maxReached": "Max {count} reviewers per cycle"
+      },
       "noPeerRequests": "No peer requests yet",
       "noPeerRequestsDescription": "When colleagues request your feedback for their performance review, they'll appear here.",
       "aboutTitle": "About Peer Reviews",
@@ -226,9 +572,11 @@
         "impactDesc": "Effect on team/project",
         "nextSteps": "Next Steps",
         "nextStepsDesc": "Actionable recommendations"
+      },
+      "errors": {
+        "failedToLoad": "Failed to load peer requests"
       }
     },
-
     "manage": {
       "title": "Review Management",
       "description": "Monitor team reviews, track deliverables, and manage goals",
@@ -239,6 +587,134 @@
       "inProgress": "In Progress",
       "actionNeeded": "Action Needed",
       "suggestions": "Suggestions",
+      "actionable": {
+        "banner": "Action Required",
+        "bannerDescription": "{count, plural, one {# item needs your attention to keep the review cycle on track} other {# items need your attention to keep the review cycle on track}}",
+        "highPriority": "High Priority",
+        "due": "Due: {date}",
+        "view": "View",
+        "startReview": "Start Review"
+      },
+      "suggestionList": {
+        "activeHeader": "Active Suggestions ({count})",
+        "noneActive": "No active suggestions",
+        "allDiscarded": "All suggestions discarded. Use the section below to restore any of them.",
+        "confidence": "{percent}% confidence",
+        "trackingKeywords": "Tracking keywords:",
+        "discardedHeader": "Discarded ({count})",
+        "restore": "Restore"
+      },
+      "reviewStatus": {
+        "pending": "Pending",
+        "self_review_submitted": "Self Review Done",
+        "peer_review_in_progress": "Peer Review",
+        "manager_review_in_progress": "Manager Review",
+        "completed": "Completed",
+        "acknowledged": "Acknowledged"
+      },
+      "detail": {
+        "notFoundTitle": "Review not found",
+        "notFoundBody": "The review you're looking for doesn't exist or you don't have access.",
+        "header": {
+          "managerLabel": "Manager",
+          "joinedPrefix": "Joined",
+          "skills": "Skills"
+        },
+        "stats": {
+          "activeGoals": "Active Goals",
+          "completed": "Completed",
+          "commits": "Commits",
+          "prs": "PRs",
+          "reviews": "Reviews"
+        },
+        "tabs": {
+          "overview": "Overview",
+          "goals": "Goals",
+          "contributions": "Contributions",
+          "feedback": "Feedback"
+        },
+        "goals": {
+          "dueLabel": "Due:",
+          "progressLabel": "Progress",
+          "keyResults": "Key Results",
+          "suggestedGoal": "Suggested Goal:",
+          "allGoals": "All Goals"
+        },
+        "contributions": {
+          "commits": "Commits",
+          "pullRequests": "Pull Requests",
+          "codeReviews": "Code Reviews",
+          "linesChanged": "Lines Changed",
+          "linesAdded": "Lines Added",
+          "linesRemoved": "Lines Removed",
+          "netChange": "Net Change",
+          "skillsDemonstrated": "Skills Demonstrated"
+        },
+        "feedback": {
+          "selfReview": "Self Review",
+          "context": "Context",
+          "keyAccomplishments": "Key Accomplishments",
+          "strengths": "Strengths",
+          "growthAreas": "Growth Areas",
+          "selfNotSubmitted": "Self review not yet submitted",
+          "peerReviews": "Peer Reviews",
+          "noPeerReviews": "No peer reviews received yet",
+          "impact": "Impact",
+          "suggestedNextSteps": "Suggested Next Steps"
+        },
+        "quickActions": "Quick Actions",
+        "backToReviews": "Back to Reviews",
+        "invitePeerReviewersCta": "Invite Peer Reviewers"
+      },
+      "composer": {
+        "heading": "Manager review",
+        "subheading": "Synthesize the self + peer responses above into your final write-up. Save drafts as you go; submitting finalizes the cycle for this member.",
+        "strengthsLabel": "Strengths",
+        "strengthsPlaceholder": "e.g. Owned the auth migration end-to-end. Held a clear north star and unblocked mobile when the API contract slipped.",
+        "growthLabel": "Growth areas",
+        "growthPlaceholder": "e.g. Could surface architectural trade-offs earlier in design reviews.",
+        "narrativeLabel": "Overall narrative",
+        "narrativePlaceholder": "A short paragraph the developer will read. Tie the rating to specific behaviors from the strengths and growth areas above.",
+        "rating": {
+          "overallLabel": "Overall rating",
+          "overallAriaLabel": "Overall performance rating",
+          "tier1": "Below expectations",
+          "tier2": "Meets some expectations",
+          "tier3": "Meets expectations",
+          "tier4": "Exceeds expectations",
+          "tier5": "Significantly exceeds",
+          "axis": {
+            "execution": "Execution",
+            "collaboration": "Collaboration",
+            "communication": "Communication",
+            "growth": "Growth"
+          }
+        },
+        "saveDraft": "Save draft",
+        "submitFinalize": "Submit & finalize",
+        "validation": {
+          "empty": "Add at least one strength, growth area, or narrative note",
+          "ratingRequired": "Pick an overall rating before finalizing"
+        },
+        "toasts": {
+          "draftSaved": "Draft saved",
+          "saveFailed": "Failed to save draft",
+          "finalized": "Review finalized — the developer will be notified",
+          "finalizeFailed": "Failed to finalize review"
+        },
+        "confirmFinalize": {
+          "title": "Finalize this review?",
+          "description": "Once finalized, the developer is notified and the manager-review row locks. You won't be able to edit unless an admin reopens the cycle."
+        },
+        "readOnly": {
+          "heading": "Manager review submitted",
+          "submittedNote": "Your review is locked in. The developer has been notified and will see the strengths, growth areas, and overall rating above."
+        },
+        "locked": {
+          "heading": "Manager review opens in the manager-review phase",
+          "note": "Wait until self + peer reviews wrap and the cycle advances. You'll see the composer here once it's your turn to synthesize."
+        }
+      },
       "teamOverview": "Team Overview",
       "actionables": "Actionables",
       "githubSuggestions": "GitHub Suggestions",
@@ -253,7 +729,11 @@
       "aiSuggestionsDesc": "Based on GitHub activity, PR patterns, and project management data. Convert to goals or discard.",
       "convertToGoal": "Convert to Goal",
       "viewMember": "View Member",
-      "discard": "Discard"
+      "discard": "Discard",
+      "statusFilter": {
+        "label": "Filter team members by review status",
+        "all": "All Status"
+      }
     }
   }
 }

@@ -24,6 +24,18 @@
       "cancel": "रद्द करें"
     },
 
+    "taskTable": {
+      "key": "की",
+      "title": "शीर्षक",
+      "status": "स्थिति",
+      "priority": "प्राथमिकता",
+      "assignee": "असाइनी",
+      "sprint": "Sprint",
+      "points": "पॉइंट्स",
+      "updated": "अपडेट",
+      "empty": "कोई कार्य फ़िल्टर से मेल नहीं खाता।"
+    },
+
     "projectCard": {
       "public": "सार्वजनिक",
       "private": "निजी",
@@ -173,16 +185,30 @@
       "sprint": "Sprint",
       "noOptions": "कोई विकल्प नहीं",
       "clearAll": "सभी साफ़ करें",
+      "addTask": "कार्य जोड़ें",
+      "newTaskPlaceholder": "+ नया कार्य",
       "taskCount": "{count} कार्य",
       "taskCountPlural": "{count} कार्य",
-      "dropTasksHere": "कार्य यहाँ छोड़ें",
+      "dropTasksHere": "कार्य यहाँ छोड़ें या + पर क्लिक करें",
       "noWorkspace": "कोई वर्कस्पेस नहीं चुना गया।",
       "noTasksFound": "कोई कार्य नहीं मिला",
       "noTasksHintFiltered": "और कार्य देखने के लिए फ़िल्टर साफ़ करें।",
       "noTasksHintEmpty": "कार्य यहाँ देखने के लिए प्रोजेक्ट बनाएं और कार्य जोड़ें।",
       "clearFilters": "फ़िल्टर साफ़ करें",
       "goToProjects": "प्रोजेक्ट्स पर जाएं",
-      "truncatedNotice": "पहले {limit} कार्य दिखाए जा रहे हैं। दृश्य सीमित करने के लिए फ़िल्टर का उपयोग करें।"
+      "truncatedNotice": "पहले {limit} कार्य दिखाए जा रहे हैं। दृश्य सीमित करने के लिए फ़िल्टर का उपयोग करें।",
+      "viewBoard": "बोर्ड",
+      "viewTable": "टेबल",
+      "viewActive": "सक्रिय",
+      "viewArchived": "संग्रहीत",
+      "unarchive": "पुनःस्थापित करें",
+      "unarchiveBulk": "चयनित को पुनःस्थापित करें",
+      "noArchivedTasks": "कोई संग्रहीत कार्य नहीं।"
+    },
+
+    "move": {
+      "statusLabel": "गंतव्य बोर्ड पर स्थिति",
+      "statusHint": "प्रत्येक प्रोजेक्ट के स्थिति कॉलम अलग होते हैं — चुनें कि यह कार्य कहाँ रखा जाए।"
     }
   }
 }

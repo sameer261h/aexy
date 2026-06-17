@@ -17,6 +17,15 @@ from aexy.models.email_infrastructure import (
     EventType,
     EmailProviderType,
 )
+from aexy.services.email_webhook_verify import (
+    is_allowed_sns_topic,
+    is_safe_sns_subscribe_url,
+    verify_mailgun_signature,
+    verify_postmark_basic_auth,
+    verify_sendgrid_signature,
+    verify_sns_message_signature,
+    workspace_id_from_sender,
+)
 from aexy.services.provider_service import ProviderService
 from aexy.services.warming_service import WarmingService
 from aexy.services.reputation_service import ReputationService
@@ -53,15 +62,29 @@ async def ses_webhook(
 
         message_type = request.headers.get("x-amz-sns-message-type")
 
+        topic_arn = payload.get("TopicArn")
+        if not is_allowed_sns_topic(topic_arn):
+            raise HTTPException(status_code=401, detail="Unknown SNS topic")
+
+        # WS-082: the TopicArn field is attacker-controlled in the body. The
+        # signature over the canonical message envelope is what actually
+        # proves the message came from AWS SNS for our topic.
+        if not verify_sns_message_signature(payload):
+            raise HTTPException(status_code=401, detail="Invalid SNS signature")
+
         if message_type == "SubscriptionConfirmation":
-            # Handle SNS subscription confirmation
             subscribe_url = payload.get("SubscribeURL")
-            if subscribe_url:
-                # Auto-confirm by fetching the URL
+            # WS-058: only auto-confirm URLs that resolve to AWS SNS hosts.
+            # An attacker who can post to this endpoint with a fake
+            # SubscriptionConfirmation otherwise gets a blind GET against
+            # whatever URL they pick.
+            if subscribe_url and is_safe_sns_subscribe_url(subscribe_url):
                 import httpx
                 async with httpx.AsyncClient() as client:
                     await client.get(subscribe_url)
-                logger.info(f"Confirmed SNS subscription: {payload.get('TopicArn')}")
+                logger.info(f"Confirmed SNS subscription: {topic_arn}")
+            else:
+                logger.warning("Rejected SNS SubscribeURL with unsafe host: %s", subscribe_url)
             return {"status": "subscription_confirmed"}
 
         elif message_type == "Notification":
@@ -138,8 +161,14 @@ def process_ses_event(message: dict, event_type: str):
                 complained_recipients = complaint_data.get("complainedRecipients", [])
                 recipients = [r.get("emailAddress") for r in complained_recipients]
 
-            # Find workspace/domain from message ID
-            workspace_id, domain_id = _find_workspace_from_message_id(db, message_id)
+            # WS-081: prefer resolving workspace from the signed `mail.source`
+            # field rather than from the caller-controlled message_id. This
+            # blocks the cross-tenant event-injection vector where an attacker
+            # who can guess workspace A's message_id submits fake bounces
+            # against it from a forged payload.
+            workspace_id, domain_id = workspace_id_from_sender(db, mail.get("source"))
+            if not workspace_id:
+                workspace_id, domain_id = _find_workspace_from_message_id(db, message_id)
 
             if not workspace_id:
                 logger.warning(f"Could not find workspace for SES message: {message_id}")
@@ -185,11 +214,13 @@ async def sendgrid_webhook(
 ):
     """Handle SendGrid event webhooks."""
     try:
-        # Verify signature if configured
-        # signature = request.headers.get("X-Twilio-Email-Event-Webhook-Signature")
-        # timestamp = request.headers.get("X-Twilio-Email-Event-Webhook-Timestamp")
-
         body = await request.body()
+        # WS-057: signature verification — was previously commented out.
+        signature = request.headers.get("X-Twilio-Email-Event-Webhook-Signature")
+        timestamp = request.headers.get("X-Twilio-Email-Event-Webhook-Timestamp")
+        if not verify_sendgrid_signature(body, timestamp, signature):
+            raise HTTPException(status_code=401, detail="Invalid SendGrid signature")
+
         events = json.loads(body)
 
         if not isinstance(events, list):
@@ -236,8 +267,10 @@ def process_sendgrid_event(event: dict):
                 bounce_classification = event.get("bounce_classification")
                 bounce_type = "soft" if bounce_classification in ["Technical", "Content"] else "hard"
 
-            # Find workspace/domain
-            workspace_id, domain_id = _find_workspace_from_message_id(db, message_id)
+            # WS-081: resolve workspace from signed sender first.
+            workspace_id, domain_id = workspace_id_from_sender(db, event.get("from"))
+            if not workspace_id:
+                workspace_id, domain_id = _find_workspace_from_message_id(db, message_id)
 
             if not workspace_id:
                 logger.warning(f"Could not find workspace for SendGrid message: {message_id}")
@@ -286,6 +319,28 @@ async def mailgun_webhook(
         form_data = await request.form()
         event_data = dict(form_data)
 
+        # WS-057: verify Mailgun's HMAC(signing_key, timestamp+token).
+        # Mailgun puts the signature block either at the top level
+        # (legacy form) or inside `signature` (newer format).
+        sig_block = event_data.get("signature")
+        if isinstance(sig_block, str):
+            try:
+                sig_block = json.loads(sig_block)
+            except json.JSONDecodeError:
+                sig_block = {}
+        if not isinstance(sig_block, dict):
+            sig_block = {
+                "timestamp": event_data.get("timestamp"),
+                "token": event_data.get("token"),
+                "signature": event_data.get("signature"),
+            }
+        if not verify_mailgun_signature(
+            sig_block.get("timestamp"),
+            sig_block.get("token"),
+            sig_block.get("signature"),
+        ):
+            raise HTTPException(status_code=401, detail="Invalid Mailgun signature")
+
         # Parse event-data if present (newer webhook format)
         if "event-data" in event_data:
             event_data = json.loads(event_data["event-data"])
@@ -332,8 +387,15 @@ def process_mailgun_event(event: dict):
                 severity = event.get("severity")
                 bounce_type = "hard" if severity == "permanent" else "soft"
 
-            # Find workspace/domain
-            workspace_id, domain_id = _find_workspace_from_message_id(db, message_id)
+            # WS-081: resolve workspace from signed sender first.
+            sender_from = (
+                event.get("envelope", {}).get("sender")
+                if isinstance(event.get("envelope"), dict)
+                else None
+            ) or event.get("from")
+            workspace_id, domain_id = workspace_id_from_sender(db, sender_from)
+            if not workspace_id:
+                workspace_id, domain_id = _find_workspace_from_message_id(db, message_id)
 
             if not workspace_id:
                 logger.warning(f"Could not find workspace for Mailgun message: {message_id}")
@@ -378,6 +440,10 @@ async def postmark_webhook(
 ):
     """Handle Postmark webhooks."""
     try:
+        # WS-057: Postmark uses HTTP Basic Auth as its webhook secret.
+        if not verify_postmark_basic_auth(request.headers.get("Authorization")):
+            raise HTTPException(status_code=401, detail="Invalid Postmark credentials")
+
         body = await request.body()
         event = json.loads(body)
 
@@ -419,8 +485,10 @@ def process_postmark_event(event: dict):
                 # Postmark type codes: 1=HardBounce, 2=SoftBounce, etc.
                 bounce_type = "hard" if type_code == 1 else "soft"
 
-            # Find workspace/domain
-            workspace_id, domain_id = _find_workspace_from_message_id(db, message_id)
+            # WS-081: resolve workspace from signed sender first.
+            workspace_id, domain_id = workspace_id_from_sender(db, event.get("From"))
+            if not workspace_id:
+                workspace_id, domain_id = _find_workspace_from_message_id(db, message_id)
 
             if not workspace_id:
                 logger.warning(f"Could not find workspace for Postmark message: {message_id}")
@@ -683,6 +751,20 @@ def _parse_inbound_json(payload: dict) -> dict | None:
             from_data = payload.get("FromFull", {})
             to_data = payload.get("ToFull", [{}])[0] if isinstance(payload.get("ToFull"), list) else payload.get("ToFull", {})
 
+            # Postmark sends Headers as a list of {Name, Value} dicts,
+            # not a flat header→value mapping. Build a name-keyed
+            # lookup once and use it for both the thread_id resolution
+            # and the in_reply_to pointer below. The prior code
+            # called `.get("In-Reply-To")` on Headers[0] directly,
+            # which never matched because Headers[0] is shaped
+            # {"Name": "X", "Value": "Y"}.
+            headers_dict = {
+                h.get("Name"): h.get("Value")
+                for h in payload.get("Headers", [])
+                if isinstance(h, dict)
+            }
+            in_reply_to = headers_dict.get("In-Reply-To")
+
             return {
                 "to": to_data.get("Email", payload.get("To", "")),
                 "from": from_data.get("Email", payload.get("From", "")),
@@ -691,8 +773,9 @@ def _parse_inbound_json(payload: dict) -> dict | None:
                 "body": payload.get("TextBody", ""),
                 "body_html": payload.get("HtmlBody", ""),
                 "message_id": payload.get("MessageID", ""),
-                "thread_id": payload.get("Headers", [{}])[0].get("In-Reply-To") if payload.get("Headers") else None,
-                "headers": {h.get("Name"): h.get("Value") for h in payload.get("Headers", [])},
+                "thread_id": in_reply_to,
+                "in_reply_to_message_id": in_reply_to,
+                "headers": headers_dict,
                 "attachments": [
                     {"name": a.get("Name"), "content_type": a.get("ContentType"), "length": a.get("ContentLength")}
                     for a in payload.get("Attachments", [])
@@ -709,6 +792,15 @@ def _parse_inbound_json(payload: dict) -> dict | None:
             "body_html": payload.get("body_html", payload.get("html", "")),
             "message_id": payload.get("message_id", ""),
             "thread_id": payload.get("thread_id", payload.get("in_reply_to")),
+            # UX-INB-027 / UX-DEF-007: explicit parent pointer so the
+            # inbox UI can render "View parent" without walking the
+            # full thread. RFC 5322 In-Reply-To header — when the
+            # generic format omits it, fall back to thread_id which
+            # most providers already populate.
+            "in_reply_to_message_id": payload.get(
+                "in_reply_to",
+                payload.get("in_reply_to_message_id"),
+            ),
             "headers": payload.get("headers", {}),
             "attachments": payload.get("attachments", []),
         }
@@ -753,6 +845,9 @@ def process_inbound_email(email_data: dict):
                 workspace_id=agent.workspace_id,
                 message_id=email_data.get("message_id") or str(uuid4()),
                 thread_id=email_data.get("thread_id"),
+                # Direct parent — RFC 5322 In-Reply-To. Frontend uses
+                # this for the "View parent" jump in MessageDetail.
+                in_reply_to_message_id=email_data.get("in_reply_to_message_id"),
                 from_email=from_email,
                 from_name=email_data.get("from_name"),
                 to_email=to_email,

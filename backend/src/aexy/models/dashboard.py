@@ -75,7 +75,7 @@ class DashboardPreferences(Base):
         JSONB,
         default=list,
         nullable=False,
-        server_default=text("'[]'::jsonb"),
+        server_default=text("'[]'"),
     )
 
     # Whether the user dismissed the getting started checklist
@@ -91,7 +91,7 @@ class DashboardPreferences(Base):
         JSONB,
         default=dict,
         nullable=False,
-        server_default=text("'{}'::jsonb"),
+        server_default=text("'{}'"),
     )
 
     # Sidebar pinned items: ["/crm", "/agents"]
@@ -99,7 +99,7 @@ class DashboardPreferences(Base):
         JSONB,
         default=list,
         nullable=False,
-        server_default=text("'[]'::jsonb"),
+        server_default=text("'[]'"),
     )
 
     # Timestamps

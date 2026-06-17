@@ -6,6 +6,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { Z } from "@/lib/z"
 
 const Sheet = SheetPrimitive.Root
 
@@ -18,12 +19,16 @@ const SheetPortal = SheetPrimitive.Portal
 const SheetOverlay = React.forwardRef<
     React.ElementRef<typeof SheetPrimitive.Overlay>,
     React.ComponentPropsWithoutRef<typeof SheetPrimitive.Overlay>
->(({ className, ...props }, ref) => (
+>(({ className, style, ...props }, ref) => (
     <SheetPrimitive.Overlay
         className={cn(
-            "fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+            // Stacking is owned by Z.modal from lib/z.ts so Dialog + Sheet
+            // + AlertDialog all share one layer; toasts ride Z.toast above
+            // (UX-DLG-003 / UX-QRK-001 in ux-tracker).
+            "fixed inset-0 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
             className
         )}
+        style={{ zIndex: Z.modal, ...style }}
         {...props}
         ref={ref}
     />
@@ -31,7 +36,10 @@ const SheetOverlay = React.forwardRef<
 SheetOverlay.displayName = SheetPrimitive.Overlay.displayName
 
 const sheetVariants = cva(
-    "fixed z-50 gap-4 bg-background p-6 shadow-lg transition ease-in-out data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500",
+    // p-6 dropped from base so consumers can layer SheetHeader / SheetBody
+    // / SheetFooter with their own padding + scroll behavior. Sheets that
+    // want the old flat-padding behavior can pass `className="p-6"`.
+    "fixed flex flex-col gap-0 bg-background shadow-lg transition ease-in-out data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500",
     {
         variants: {
             side: {
@@ -56,15 +64,16 @@ interface SheetContentProps
 const SheetContent = React.forwardRef<
     React.ElementRef<typeof SheetPrimitive.Content>,
     SheetContentProps
->(({ side = "right", className, children, ...props }, ref) => (
+>(({ side = "right", className, children, style, ...props }, ref) => (
     <SheetPortal>
         <SheetOverlay />
         <SheetPrimitive.Content
             ref={ref}
             className={cn(sheetVariants({ side }), className)}
+            style={{ zIndex: Z.modal, ...style }}
             {...props}
         >
-            <SheetPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
+            <SheetPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary z-10">
                 <X className="h-4 w-4" />
                 <span className="sr-only">Close</span>
             </SheetPrimitive.Close>
@@ -80,7 +89,7 @@ const SheetHeader = ({
 }: React.HTMLAttributes<HTMLDivElement>) => (
     <div
         className={cn(
-            "flex flex-col space-y-2 text-center sm:text-left",
+            "flex flex-col space-y-2 px-6 py-4 border-b border-border text-left",
             className
         )}
         {...props}
@@ -88,13 +97,30 @@ const SheetHeader = ({
 )
 SheetHeader.displayName = "SheetHeader"
 
+/**
+ * Scrolling body for long Sheet content. Sit between SheetHeader and
+ * SheetFooter so the header / footer stay pinned while the middle
+ * overflows. Skips this and uses className overrides if the Sheet
+ * content is short enough to not need scroll.
+ */
+const SheetBody = ({
+    className,
+    ...props
+}: React.HTMLAttributes<HTMLDivElement>) => (
+    <div
+        className={cn("flex-1 overflow-y-auto px-6 py-4", className)}
+        {...props}
+    />
+)
+SheetBody.displayName = "SheetBody"
+
 const SheetFooter = ({
     className,
     ...props
 }: React.HTMLAttributes<HTMLDivElement>) => (
     <div
         className={cn(
-            "flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2",
+            "flex flex-col-reverse sm:flex-row sm:justify-end gap-2 px-6 py-3 border-t border-border",
             className
         )}
         {...props}
@@ -134,6 +160,7 @@ export {
     SheetClose,
     SheetContent,
     SheetHeader,
+    SheetBody,
     SheetFooter,
     SheetTitle,
     SheetDescription,

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.3] - 2026-06-17
+## [0.8.40] - 2026-06-17
 
 ### Added
 
@@ -26,25 +26,3637 @@ A local-first macOS menu-bar app that captures lightweight semantic signals (fro
 - Tracker ingest counts within-batch duplicates so `accepted + duplicates + rejected` reconciles to events sent; insight runs no longer overcount notifications suppressed by recipient preferences.
 - macOS client: onboarding completes when the server mints no enroll token (falls back to the device-code token), the local buffer is capped to bound offline growth, and the sample interval is clamped to the server's accepted `1…600s` range.
 
-## [0.7.2] - 2026-04-16
+## [0.8.39] - 2026-05-28
 
-### Added
+### Pick destination status when moving a task across projects
 
-#### Workspace-level tasks Kanban (`/sprints?tab=tasks`)
-A single workspace-wide board that aggregates every task across every project, sprint, and backlog into one filterable Kanban — so users don't have to hop between per-project boards to see their work.
+Cross-project move (0.8.34) silently re-resolved the new task's
+status to the destination's first "open" status. For sibling boards
+that's fine; for cross-board moves (Product → Tech) the user
+usually has a specific column in mind and the default was wrong.
 
-- Backend `GET /workspaces/{id}/tasks` + `PATCH .../tasks/{id}/status`, scoped on the existing indexed `workspace_id` column (no joins required). PATCH verifies the task's workspace before mutating, so members can't flip tasks outside their workspace.
-- Status updates route through `SprintTaskService.update_task_status()` so drag-drop changes land in the unified activity log (matches the sprint-scoped endpoint).
-- `useWorkspaceTasks` React Query hook with server-scoped fetch, client-side filtering (search / assignee / priority / project / sprint / epic / labels / story points), and optimistic status updates with rollback.
-- `WorkspaceTasksTab` with dnd-kit Kanban, filter bar, and a per-card team badge so tasks from multiple projects stay distinguishable. Card clicks deep-link to the task's project board via `router.push()`.
-- Epic filter shows real epic titles (via `epicApi.list`) instead of UUIDs.
-- Surfaces a truncation banner when the backend's 1000-task cap is hit, so users know to narrow via filters rather than silently missing rows.
-- Full i18n: new `sprints.workspaceTasks` + `sprints.tabs.allTasks` strings in both `en` and `hi` locales.
+`MoveToProjectModal` now fetches the destination project's status
+set via the existing `useTaskStatuses` hook once a target is
+picked, and renders a "Status on destination board" dropdown. The
+default selection follows: same slug on the target → same name
+(case-insensitive) → first active status by position. The picked
+slug rides through as `target_status_slug` on both the single and
+bulk move requests; the backend (`SprintTaskService.move_to_project`)
+validates it against `TaskConfigService.get_statuses_for_project`
+before any write, raising `invalid_target_status` (400) on
+mismatch. Bulk move applies one status to every cloned task.
+
+`_clone_task_to_project` now accepts an `override_status_slug` and
+short-circuits the open-status resolver when supplied. Subtasks
+under `cascade` still resolve their own open status — the picker is
+parent-only, which matches the existing "subtasks inherit the
+destination's defaults" semantics.
+
+### Archive view on the project board and workspace All-Tasks tab
+
+`SprintTask.is_archived` and the unarchive endpoint have existed
+since the early sprint module, but no UI ever surfaced archived
+rows. Once a task was archived (manually or as part of a cross-
+project move), it disappeared.
+
+Both `/sprints/[projectId]/board` and the workspace All-Tasks tab
+get an `Active | Archived` segmented toggle (URL-synced via
+`?view=archived` so reloads and link-shares round-trip). In
+archived view:
+
+- The kanban is replaced by `TaskTableView` — archived rows don't
+  belong in status columns, and the table is the right surface for
+  a flat list. The Board/Table layout toggle, Sprints/Status
+  view-mode toggle, Add Task, Columns shortcut, Import button, and
+  priority/labels/epics filters are all hidden (search, assignee,
+  project, sprint stay). On the board page this is driven by a new
+  `minimal` flag on the existing `FilterBar` component.
+- Each row has an Unarchive icon-button; the bulk-action toolbar on
+  the workspace tab gains an "Restore selected" entry that fires
+  parallel unarchives.
+- The workspace endpoint already accepted `include_archived`; both
+  endpoints now also accept `archived_only`. `list_project_tasks`
+  was hard-coded to `is_archived = false` — that's been generalized
+  to the same flag pair. `archived_only` is strict regardless of
+  `include_archived`.
+
+New `useUnarchiveTask` hook wraps `projectTasksApi.unarchive` and
+reuses `invalidateTaskCaches` so the active view re-fetches
+correctly when a row is restored.
+
+### Workload analytics no longer 500s
+
+`POST /analytics/workload` was crashing with
+`AttributeError: 'WorkloadRequest' object has no attribute 'days'`
+because the handler read `request.days` but the schema didn't
+declare the field. The frontend has been sending `days: 30` since
+that endpoint shipped. Added `days: int = 30` to the schema.
+
+## [0.8.38] - 2026-05-23
+
+### Visible move-link on cross-project moves
+
+Cross-project moves (shipped in 0.8.34) already created a
+`task_dependencies` row linking the new task back to the source —
+but nothing in the UI rendered that linkage. Anyone opening either
+side of the move saw a context-free task.
+
+`SprintTaskService.move_to_project` now prepends a one-line
+"Moved from <KEY> — <title>" breadcrumb to the new task's
+description and a matching "Moved to" line on the source. The
+breadcrumb is written into both `description` (plain text) and
+`description_json` (a ProseMirror paragraph with a `link` mark
+pointing at `/sprints/<team>/board?task=<id>`) so every surface
+that renders descriptions shows it without any extra UI plumbing.
+Cascade subtasks each get their own pair of breadcrumbs pointing
+at the corresponding clone — the parent's pointer alone wouldn't
+reach the children.
+
+The existing `task_dependencies` row is still recorded as the
+structured source of truth for any future banner work.
+
+### Docs sidebar: Recent apps + section-grouped app list
+
+The flat "Apps" section in the docs sidebar (0.8.35) is replaced
+with a sidebar that mirrors the main app sidebar's grouping —
+Engineering / People / Business / AI / Compliance — plus a
+"Recent" strip at the top tracking the user's last-visited apps.
+
+Implementation:
+
+- `recentAppsStore` (Zustand + localStorage, cap 8) records each
+  app visit. Mounted once in `app/(app)/layout.tsx` via
+  `useRecentApps()` so visits from any surface count.
+- `NotionSidebar` reads the main sidebar's `GROUPED_LAYOUT`,
+  applies the same persona filter (`useSidebarPersona`) and
+  app-access filter (`useAppAccess`) the main sidebar uses, and
+  renders each section collapsed by default to keep the docs
+  surface focused.
+- The Knowledge section is hidden in the docs sidebar (the docs
+  sidebar IS the knowledge view; re-listing it would be
+  tautological). Docs and Drive are filtered out of the Recent
+  strip for the same reason.
+- New `SidebarAppGroup` component renders apps with sub-items
+  (Tracking → Standups/Blockers/Time, etc.) as expandable rows
+  inside the section, matching the main sidebar's depth.
+
+## [0.8.37] - 2026-05-23
+
+### Doc editor no longer unmounts on every save
+
+Reported: "after typing the doc refreshes and the cursor becomes
+deselected".
+
+Root cause was on the page, not the editor. `/docs/[documentId]/page.tsx`
+was passing `isLoading={isUpdating}` to `DocumentEditor`, where
+`isUpdating` is the mutation-pending flag from `useDocument`'s
+`updateContent` mutation. `DocumentEditor` returns its loading skeleton
+when `isLoading` is true — so every debounced autosave kicked off by
+typing flipped `isUpdating` to true, the editor was replaced by the
+skeleton, then `isUpdating` flipped back to false and the editor was
+remounted — fresh TipTap instance, fresh selection, cursor lost.
+
+Removed the prop. The page-level initial-load guard (above the
+component) still shows a skeleton on first fetch; once the document
+is loaded the editor stays mounted, and the in-editor "Saving… / Saved"
+indicator reflects save state without tearing anything down.
+
+## [0.8.36] - 2026-05-23
+
+### Remove BubbleMenu from DocumentEditor (selection crash, take 2)
+
+0.8.35 gated BubbleMenu on `editorMode === "rich"` thinking the
+crash was a mode-switch race. The user kept hitting the same
+`removeChild` error while selecting text in rich mode — the gate
+fixed the switch path but not the steady-state path. Re-diagnosis:
+
+- `@tiptap/react`'s `BubbleMenu` wraps Tippy.js.
+- Tippy appends its tooltip node into `document.body`, outside the
+  React tree.
+- Every `selectionchange` causes BubbleMenu to remount its Tippy
+  instance, moving DOM nodes between body and the editor.
+- React's reconciler then tries to remove a node from a parent that
+  no longer owns it → `NotFoundError: Failed to execute 'removeChild'
+  on 'Node'` in the commit phase.
+
+This is a known incompatibility between `@tiptap/react`'s BubbleMenu
+and React 18+ concurrent reconciliation
+(ueberdosis/tiptap#3580, #2658).
+
+Removed the BubbleMenu entirely. The top `EditorToolbar` already
+exposes Bold / Italic / Underline / Code, so the affordance isn't
+lost — only the floating bubble. If we want the bubble UX back, the
+replacement should use `@floating-ui/react` (in-tree positioning)
+rather than Tippy.
+
+## [0.8.35] - 2026-05-23
+
+Two docs surface fixes.
+
+### Apps escape-hatch in the docs sidebar
+
+The main app sidebar is hidden on `/docs/*` routes, so the docs sidebar
+(`NotionSidebar`) was the only navigation chrome — but it had no path
+to other modules. Users had to back out via browser nav or memorize
+URLs to jump to Sprints, CRM, etc.
+
+Added a collapsed-by-default "Apps" section at the bottom of the docs
+sidebar (above the divider before "Add space"). It reuses
+`useAppAccess(workspaceId, developerId)` to list only the apps the
+current user can access, with each row linking to that app's
+`baseRoute` from `APP_CATALOG`. Same access logic as the main sidebar
+— no new permissions surface.
+
+### Selection bug — `removeChild` race on editor mode switch
+
+Reported: selecting text in `/docs/[id]` would intermittently throw
+`NotFoundError: Failed to execute 'removeChild' on 'Node': The node to
+be removed is not a child of this node` in the React commit phase.
+
+Root cause: `DocumentEditor`'s BubbleMenu was rendered when
+`editor && !readOnly`, regardless of `editorMode`. In markdown mode
+the `EditorContent` is replaced by a `<textarea>`, but the BubbleMenu
+(and its Tippy.js portal) stayed mounted. Any subsequent `selectionchange`
+would race React reconciliation — Tippy holds DOM references that React
+no longer owns, the next reposition tries to `removeChild` a detached
+node, and the commit phase throws.
+
+Fix: gate BubbleMenu on `editorMode === "rich"` so it tears down
+cleanly when the user switches modes. One-line conditional change in
+`frontend/src/components/docs/DocumentEditor.tsx`.
+
+## [0.8.34] - 2026-05-22
+
+New: cross-project task move (fork + link). A task can now be moved to
+another project in the same workspace; a fresh task is created in the
+destination, linked back to the source as a "duplicates" dependency,
+and the source is either archived or marked done at the operator's
+choice.
+
+### Why fork instead of true move
+
+Moving the row in place would orphan the source's history, sprint
+membership, comments, and attachments — and `task_key` is workspace-
+scoped but tasks reference sprint/epic/story IDs that don't translate
+across projects. A new task in the destination plus a `task_dependencies`
+link preserves provenance while letting the destination start fresh.
+
+### Backend
+
+- `SprintTaskService.move_to_project(task_id, target_project_id,
+  source_action, subtask_strategy, actor_id)` and a `bulk_move_to_project`
+  variant that returns per-task results (one failure doesn't abort the
+  batch). See plan `mutable-herding-flute.md` for the full contract.
+- New endpoints in `api/project_tasks.py`:
+  - `POST /teams/{team_id}/tasks/{task_id}/move-to-project`
+  - `POST /teams/{team_id}/tasks/bulk-move-to-project`
+- Stable error codes mapped to HTTP 400: `cross_workspace_move`,
+  `same_project_move`, `target_project_not_found`,
+  `task_already_archived`, `task_has_subtasks`,
+  `source_task_not_found`, `invalid_source_action`,
+  `invalid_subtask_strategy`.
+- Subtask handling — caller picks per move:
+  - `block` (default, safest) — reject the move if subtasks exist.
+  - `cascade` — clone every active subtask into the destination under
+    the new parent; archive each original subtask.
+  - `orphan` — leave subtasks in place; their `parent_task_id` still
+    points at the archived/done source.
+- Source-action — caller picks per move:
+  - `archive` — `is_archived=True` on the source.
+  - `mark_done` — set the source's status to its project's first
+    `semantics="done"` slug (workspace fallback, then canonical "done")
+    and set `completed_at = now()` if null.
+- Assignee on the new task is preserved only if the developer is a
+  member of the target project; otherwise cleared. Sprint, started_at,
+  completed_at, cycle/lead time, epic, story, and parent_task_id are
+  intentionally not copied — see the plan for the rationale.
+- Activity log on both ends: `moved_to_project` on the source (carries
+  new task's id/key and the chosen strategies in `activity_metadata`)
+  and `created_from_move` on the new task (carries source's id/key).
+- No schema migration — existing `task_dependencies` with
+  `dependency_type="duplicates"` is the link mechanism.
+
+### Frontend
+
+- New shared `MoveToProjectModal` (`components/planning/MoveToProjectModal.tsx`)
+  used by both single-task and bulk entry points. Project picker excludes
+  the source project and any archived project. Subtask-strategy radio
+  shows only on single-task moves when the task has subtasks.
+- New `useTaskMove` hook (`hooks/useTaskMove.ts`) wrapping both the
+  single and bulk mutations, with `invalidateTaskCaches` integration and
+  friendly toast messages mapped from each stable error code.
+- `EditTaskModal` sidebar (project board) gains a "Move to project…"
+  button above "Archive Task".
+- The board's multi-select bulk toolbar gains a "Move to Project"
+  button next to the existing "Move to Sprint" dropdown.
+
+### Tests
+
+- 12 unit tests in `backend/tests/unit/test_task_move_to_project.py`:
+  happy path, mark-done variant, cross-workspace reject, same-project
+  reject, archived-source reject, subtask block / cascade / orphan,
+  assignee membership rule, sprint+timing fields not copied,
+  activity logged on both tasks, bulk-move continues on per-task
+  failure.
+
+## [0.8.33] - 2026-05-22
+
+Follow-up sweep on the 0.8.32 status work — two production bugs and the
+missing admin surface for editing categories themselves.
+
+### Custom status slugs now round-trip through the API (bug fix)
+
+`PATCH /teams/{id}/tasks/{id}` was rejecting any non-canonical slug
+with a Pydantic `literal_error`:
+
+```
+Input should be 'backlog', 'todo', 'in_progress', 'review' or 'done'
+```
+
+Root cause: `TaskStatus` was still a `Literal[...]` at the schema
+layer, defeating the whole point of project-scoped custom statuses
+from 0.8.32. Two-part fix:
+
+- `TaskStatus = str` in both `backend/src/aexy/schemas/sprint.py` and
+  `frontend/src/lib/api.ts`. Any slug parses; validity is decided at
+  write time, not parse time.
+- New `SprintTaskService.validate_status_slug(task, slug)` checks the
+  slug exists in the task's scope (`workspace_task_statuses` rows for
+  the project OR workspace defaults). On miss → `400 unknown_status`.
+  Wired into both `update_task` and `update_task_status`, on both
+  PATCH endpoints (`/teams/.../tasks/...` and
+  `/sprints/.../tasks/...`).
+
+The canonical five seed slugs (`backlog`, `todo`, `in_progress`,
+`review`, `done`) are accepted unconditionally so workspaces that
+pre-date the status table aren't bricked by tasks carrying slugs
+without matching rows.
+
+### Duplicate "On Hold" columns can no longer be created (bug fix)
+
+Production was showing two columns titled `On Hold` on a kanban — the
+admin had typed the name twice and `create_status` had silently
+deduplicated only the *slug* (storing `on_hold` and `on_hold_1`).
+Both rendered because the column title comes from `name`, not `slug`.
+
+`create_status` and `update_status` now share an `_assert_name_unique`
+helper that rejects case-insensitive name collisions within a scope
+(workspace + project): error code `status_name_exists`, HTTP 400.
+
+This prevents the future occurrence but does **not** clean up existing
+duplicate rows in production data — admins need to delete one of the
+duplicates via the new admin UI (below).
+
+### Category admin UI on the per-project statuses page
+
+`/settings/projects/{projectId}/statuses` gains a "Categories" section
+above the existing statuses list:
+
+- `CategoryModal` — create / edit a category with label, semantics
+  (Open / Active / Done / Cancelled), and color. Slug is auto-derived
+  from the label on create and locked on edit (existing statuses
+  reference it as a string).
+- `SortableCategoryItem` — compact row with color swatch, semantics
+  badge, edit/delete menu.
+- Delete is guarded both client-side (block if any status uses the
+  category) and server-side (`category_in_use` error, HTTP 400).
+
+### Tests
+
+- `backend/tests/unit/test_task_status_validation.py` (new, 4 tests) —
+  canonical slug accepted, project-scoped custom slug accepted,
+  unknown slug rejected, slug scoped to a different project rejected.
+- `backend/tests/unit/test_status_categories.py` (+1) —
+  `test_create_status_rejects_duplicate_display_name` pins the
+  case-insensitive name uniqueness check.
+
+## [0.8.32] - 2026-05-22
+
+Two threads landing together:
+
+  1. **DB-driven status categories.** The `category` on each task status
+     was previously locked to three Literal values (`todo`,
+     `in_progress`, `done`). It's now a free-form slug validated
+     against a new `workspace_status_categories` table that ships six
+     canonical buckets per workspace (`backlog`, `todo`, `in_progress`,
+     `in_review`, `done`, `cancelled`) and is open to admin additions.
+  2. **Project-scoped statuses actually reach the board.** The
+     `useTaskStatuses(workspaceId, projectId)` hook + endpoint existed
+     since 0.8.29, but both the project board (`sprints/[id]/board`)
+     and the workspace All-Tasks tab were silently rendering hardcoded
+     5-status arrays. They now call the hook and render whichever
+     statuses the project (or workspace fallback) defines.
+  3. **Board ↔ Table layout toggle.** The orphaned `Settings2` button
+     in the board toolbar is replaced with a `LayoutGrid | Table2`
+     pill; the workspace All-Tasks tab gains the same toggle. Layout
+     is persisted per scope via the new `useTasksLayout` hook.
+
+### Status categories from the database
+
+- `backend/scripts/migrate_status_categories.sql` creates
+  `workspace_status_categories` and seeds the six canonical buckets
+  for every existing workspace. The unique index uses
+  `COALESCE(project_id::text, '')` so workspace defaults and project
+  overrides occupy separate uniqueness buckets, matching the pattern
+  already in use for `workspace_task_statuses`.
+- Each category carries a `semantics` field (one of `open`, `active`,
+  `done`, `cancelled`). All business logic that needs to branch on
+  completion (burndown, velocity) should read `semantics` — slugs
+  are user-facing and renameable.
+- `StatusCategory` in `backend/src/aexy/schemas/sprint.py` becomes
+  `str`; `CategorySemantics` is the new `Literal`. The frontend
+  mirror in `lib/api.ts` matches.
+- New service helpers in `TaskConfigService`:
+  `get_categories`, `get_categories_for_project`,
+  `create_category`, `update_category`, `delete_category`,
+  `reorder_categories`, `seed_default_categories`.
+- New endpoints under `/workspaces/{id}/status-categories` with the
+  same `?project_id=` scope filter as `/task-statuses`.
+- `create_status` / `update_status` validate the category slug
+  against the workspace's category set (with project fallback) and
+  raise `TaskValidationError("unknown_category")` on miss.
+  Workspaces created before the categories table existed get
+  lazy-seeded on first write so legacy data never trips.
+
+### Status modal, dynamic now
+
+- `StatusModal` accepts a `categories` prop instead of a hardcoded
+  array. Each cell renders the category color, label, and a small
+  `semantics` chip; the title attribute carries the burndown hint.
+  Both consumers (project statuses page + workspace task-config
+  page) wire `useStatusCategories` and thread it through.
+
+### Project-scoped statuses on the kanban
+
+- `frontend/src/app/(app)/sprints/[projectId]/board/page.tsx` calls
+  `useTaskStatuses(workspaceId, projectId)` and renders status
+  columns from the resolved set (project rows or workspace
+  fallback). The hardcoded five-column `STATUS_CONFIG` is kept only
+  as a label/color fallback for the canonical slugs.
+- `WorkspaceTasksTab.tsx` does the same when exactly one project is
+  filtered in; otherwise it falls back to workspace defaults.
+- `useProjectBoard.tasksByStatus` and
+  `useWorkspaceTasks.tasksByStatus` are now `Record<string, _>`
+  instead of `Record<TaskStatus, _>` so custom slugs bucket correctly.
+
+### Board / Table view toggle
+
+- `frontend/src/hooks/useTasksLayout.ts` — localStorage-backed
+  `"board" | "table"` preference, scoped per surface
+  (`board:<projectId>` for each project, `workspaceTasks` for the
+  All-Tasks tab).
+- `frontend/src/components/planning/TaskTableView.tsx` — shared
+  dense table view used by both pages. Columns: Key, Title, Status
+  (with the project-scoped color dot), Priority, Assignee, Sprint,
+  Pts, Updated. Sticky header, hover row, bulk-select column,
+  row-click opens the same detail surface as the kanban cards.
+- The board page swaps its orphaned `Settings2` button for a
+  segmented Board/Table pill; `WorkspaceTasksTab` adds the same
+  pill in its toolbar alongside the existing project-statuses link.
+
+### Tests
+
+- New backend suite `tests/unit/test_status_categories.py` (7 tests)
+  covers: canonical seed, fallback resolver, project override,
+  unknown-category rejection on create + update, lazy-seed for
+  legacy workspaces, and refusal to delete a category in use.
+- New frontend Vitest specs:
+  - `src/test/useTasksLayout.test.ts` — persistence, hydration,
+    malformed-value guard, scope isolation.
+  - `src/test/StatusModal.test.tsx` — dynamic categories rendering,
+    submit payload uses the selected slug, empty-state hint.
+- New Playwright spec `e2e/tasks-view-toggle.spec.ts` — a custom
+  project status (`design_review`) surfaces as a kanban column on
+  the board; the Board ↔ Table toggle swaps content and persists
+  across reload via the scoped localStorage key.
+
+### Migration notes
+
+- The new SQL migration is idempotent and safe to re-run; it uses
+  `CREATE TABLE IF NOT EXISTS` + `ON CONFLICT DO NOTHING` for the
+  seed.
+- Existing status rows keep their category strings unchanged. The
+  migration also retags the seeded "Backlog" status from
+  `category=todo` → `backlog` and "In Review" from `in_progress` →
+  `in_review` for workspaces that hadn't renamed those rows.
+- Pre-existing pre-existing pre-existing tests in
+  `test_task_config_project_scope.py` continue to pass against the
+  updated seed (it already used the `in_review` slug).
+
+## [0.8.31] - 2026-05-22
+
+Moves the status admin to its semantic home: project-scoped statuses
+now live at `/settings/projects/<id>/statuses` next to General /
+Permissions / Repositories, instead of the workspace settings page
+with a `?project=` query param. The workspace task-config page keeps
+its workspace-defaults mode; the project-scoped UI moves out.
+
+### New project settings sub-route
+
+- `frontend/src/app/(app)/settings/projects/[projectId]/statuses/page.tsx`
+  hosts the project status admin in the same shell as General /
+  Permissions: matching breadcrumb, project header chip, tab nav
+  including the new `Statuses` link.
+- Reuses `useTaskStatuses(workspaceId, projectId)`, the
+  `DeleteStatusModal`, and the auto-fork backend from 0.8.29-0.8.30 —
+  no new service or API.
+- Fallback CTA ("Customize for this project") sits in the same
+  position as the workspace settings page's version. Rows render
+  read-only with a `Workspace default` chip until the fork happens.
+
+### Shared status components
+
+- Extracted `SortableStatusItem` to `frontend/src/components/settings/SortableStatusItem.tsx`
+  — the row component used by both `task-config/page.tsx` and the
+  new project statuses page. Includes the `readOnly` mode introduced
+  in 0.8.30.
+- Extracted `StatusModal` (the add/edit form) to
+  `frontend/src/components/settings/StatusModal.tsx`. Both pages
+  import it; the workspace page's inline copy is gone.
+
+### Tab nav + deep-link re-aim
+
+- Project settings (`/settings/projects/[projectId]` and `.../permissions`)
+  pages grow a `Statuses` tab link. Repositories sub-page keeps its
+  back-button layout untouched.
+- `Columns` deep link on the project board
+  (`/sprints/[projectId]/board`) now points at
+  `/settings/projects/<id>/statuses` instead of
+  `/settings/task-config?tab=statuses&project=<id>`.
+- Same change on the workspace All-Tasks header — the link still
+  only renders when the user has filtered to a single project.
+
+### Notes
+
+- `/settings/task-config` keeps its existing project picker for now;
+  it still works but the project deep links no longer point at it.
+  Once usage shifts to the new route the project-mode dropdown there
+  can be retired.
+- `useProject(workspaceId, projectId)` was already exporting
+  `isLoading` — no hook changes needed for this PR.
+
+## [0.8.30] - 2026-05-22
+
+Finishes the project-scoped statuses UX: tasks no longer get orphaned
+when a column is deleted; the project board has a direct entry point
+into status editing; fallback projects render their inherited columns
+as visually read-only; and adding a project status from fallback now
+snapshots the workspace defaults first so the project doesn't lose
+its inherited columns.
+
+### Delete-with-migration (backend + UI)
+
+- `TaskConfigService.delete_status(status_id, migrate_to_status_id=None)`
+  now optionally rewrites every task pointing at the source status
+  (`sprint_tasks.status_id` and the legacy `status` slug column) to
+  the chosen target before the soft delete. Validation refuses a
+  cross-workspace target, refuses a project-scoped target for a
+  workspace-default delete (tasks come from across the workspace),
+  refuses a different project's target for a project-scoped delete,
+  and refuses self-target.
+- New `GET /api/v1/workspaces/{ws}/task-statuses/{id}/usage` returns
+  `{ count }` — powers the delete modal's "N tasks use this status"
+  copy.
+- `DELETE /api/v1/workspaces/{ws}/task-statuses/{id}` now accepts a
+  `?migrate_to=<uuid>` query param.
+- `frontend/src/components/settings/DeleteStatusModal.tsx` replaces
+  the previous `confirm()` dialog. Renders the usage count, requires
+  a target status when count > 0, defaults the target to a same-
+  category sibling for sensible fallback, and surfaces the backend's
+  stable error codes inline.
+
+### Auto-snapshot on first project-scoped create
+
+- `create_status(project_id=...)` for a project that's currently on
+  fallback now clones the workspace defaults into that project before
+  inserting the new row. Without this, the resolver would flip from
+  "5 inherited statuses" to "1 manually-added status" the moment an
+  admin clicked Add Status from a per-project view — silent column
+  loss.
+
+### Entry points from the project board
+
+- `frontend/src/app/(app)/sprints/[projectId]/board/page.tsx` gets a
+  "Columns" link in the toolbar (next to Add Task) that deep-links
+  to `/settings/task-config?tab=statuses&project=<projectId>`.
+- `frontend/src/components/planning/WorkspaceTasksTab.tsx` shows the
+  same link in the All-Tasks header when filtered to a single project.
+- `task-config/page.tsx` reads `?project=<uuid>` from the URL and
+  preselects the scope dropdown so the deep links land where they
+  promise.
+
+### Read-only workspace-default preview
+
+- `SortableStatusItem` gains a `readOnly` prop. When the page is in
+  per-project mode and the project is in fallback (`isUsingWorkspaceFallback`),
+  rows render with a `Workspace default` chip and the drag-handle /
+  edit / delete affordances hide. The single primary action becomes
+  the existing "Customize for this project" CTA.
+
+### Tests
+
+- 5 new unit tests in `test_task_config_project_scope.py`:
+  - `count_tasks_using_status` returns the count.
+  - `delete_status` with a target rewrites both `status_id` and the
+    legacy `status` slug on every affected task.
+  - `delete_status` without a target leaves tasks pointing at the
+    now-inactive row (legacy slug still renders the card).
+  - Cross-workspace / cross-project migration targets are rejected
+    with `migration_target_other_workspace` / `migration_target_other_project`.
+  - `create_status(project_id=...)` on a fallback project copies the
+    workspace defaults in before adding.
+- Test that previously asserted "creating one project status yields
+  exactly one row" was updated to match the new auto-snapshot
+  behavior; the invariant it now expresses is "the resolver returns
+  project-scoped rows once any exist", which is what the codebase
+  actually relies on.
+
+## [0.8.29] - 2026-05-22
+
+Project statuses are now genuinely isolated from workspace edits. The
+0.8.28 release introduced project-scoped statuses with a workspace
+fallback; this release closes the gap where a fallback project would
+still see workspace renames, deletions, and reorders flow through.
+
+### Lazy auto-fork on destructive workspace edits
+
+- New `TaskConfigService._snapshot_fallback_projects(workspace_id)`
+  finds every project in the workspace that has no project-scoped
+  status row of its own and runs `clone_workspace_statuses_to_project`
+  for each, capturing the current workspace defaults.
+- `update_status` and `delete_status` now invoke the snapshot **before**
+  applying the change when the target row is a workspace default
+  (`project_id IS NULL`). Editing a project-scoped row is a no-op for
+  the snapshot — those projects already own their statuses.
+- `reorder_statuses` invokes the snapshot when any of the reordered
+  IDs is a workspace default; reordering changes a project's visual
+  workflow and counts as destructive for the same reason as a rename.
+- `create_status` (workspace) is intentionally **not** wrapped — adding
+  a new status is additive, so fallback projects pick it up via the
+  resolver without being auto-forked into snowflakes.
+- All snapshot writes share the API endpoint's transaction (`db.commit`
+  is the last step in `update_task_status` / `delete_task_status` /
+  `reorder_task_statuses`), so a partial failure rolls back cleanly.
+
+### Tests
+
+- 5 new unit tests in `test_task_config_project_scope.py`:
+  - Workspace rename snapshots the fallback project (project keeps
+    the old name).
+  - Workspace add does **not** snapshot (project stays in fallback
+    and resolves the new status via the workspace defaults).
+  - Workspace delete snapshots the fallback project (project keeps
+    the deleted status as an active project override).
+  - Workspace reorder snapshots the fallback project (project keeps
+    the original order).
+  - Workspace edit with a mixed project set leaves the already-
+    customized project untouched and only forks the fallback one.
+
+### Notes for follow-up frontend work
+
+This release is backend-only. The discoverability work proposed
+alongside this (kanban-header drawer, `/sprints/[projectId]/settings/
+statuses` route, delete-with-task-migration modal, read-only
+"Workspace default" preview, "reset to workspace defaults" undo)
+will land in a follow-up PR. Operators editing statuses today still
+use `/settings/task-config` with the project picker.
+
+## [0.8.28] - 2026-05-22
+
+Workspace All-Tasks gains inline create, statuses become per-project
+(with a workspace fallback), and the kanban picks up a round of
+Linear-style polish. Backend tests now run against SQLite without
+the previous `ARRAY`/`JSONB` schema-compile blocker.
+
+### Inline task create on the workspace kanban
+
+- `WorkspaceTasksTab` (`/sprints?tab=tasks`) was read-only. Adds a
+  hover-only `+` button per column, a Trello-style dashed "+ New
+  task" row at the bottom of every column (Enter to submit, Esc to
+  cancel, refocus on success for rapid entry), and a global "+ Add
+  task" button in the filter bar.
+- New `AddWorkspaceTaskModal` (`components/planning/AddWorkspaceTaskModal.tsx`)
+  — compact, keyboard-first form with Project, Sprint, Status,
+  Priority, Assignee, Story points, dates, and Estimate. Status
+  renders as a locked chip when the modal is opened from a column,
+  so the new card lands in the column the user clicked.
+- Backend: new `POST /api/v1/workspaces/{ws_id}/tasks` endpoint
+  (`api/workspace_tasks.py`) backed by `SprintTaskService.add_workspace_task`.
+  Resolves `team_id` from `project_teams`, validates that the sprint
+  (if any) belongs to that team, and rejects a `status_id` that
+  belongs to a different project (returns one of the stable error
+  codes `project_has_no_team` / `sprint_not_in_project` /
+  `status_belongs_to_other_project` so the frontend can branch on
+  the detail string).
+- Last-used project persists in `localStorage` so successive
+  quick-adds land on the same project without re-picking.
+
+### Project-scoped task statuses (with workspace fallback)
+
+- New migration `migrate_project_task_statuses.sql`: adds a nullable
+  `project_id UUID` column to `workspace_task_statuses` and replaces
+  the workspace+slug unique constraint with a scoped expression
+  index (`workspace_id, COALESCE(project_id, ''), slug`). Existing
+  rows keep `project_id = NULL` and continue to act as workspace
+  defaults; rows with `project_id` set are project overrides.
+- `TaskConfigService.get_statuses_for_project(workspace_id, project_id)`
+  returns the project's own status rows when any exist, falling
+  back to workspace defaults otherwise. This is the single helper
+  the column UI, task-create validation, and the status admin API
+  all share.
+- New `clone_workspace_statuses_to_project` service helper +
+  `POST /workspaces/{ws}/projects/{p}/task-statuses/clone-from-workspace`
+  endpoint — idempotent fork-the-defaults action that powers the
+  new "Customize for this project" CTA on the Statuses settings
+  page.
+- Existing `GET /workspaces/{ws}/task-statuses` now accepts
+  `?project_id=<uuid>`; `POST /task-statuses` accepts `project_id`
+  in the body. Response schema gains a `project_id` field.
+- Frontend `useTaskStatuses(workspaceId, projectId?)` switches
+  scope, exposes `cloneFromWorkspace` and an
+  `isUsingWorkspaceFallback` flag for the CTA.
+- Settings page (`settings/task-config`) gets a project picker; in
+  per-project mode and using fallback statuses, an info banner
+  offers the one-click clone.
+
+### Backfill script (manual, not auto-run)
+
+- `backend/scripts/backfill_project_task_statuses.py` — operator CLI
+  that clones workspace defaults into existing projects. Flags
+  `--workspace-id`, `--project-id`, `--all`, `--dry-run`. Idempotent
+  (skips projects that already have overrides). The non-`migrate*.sql`
+  filename keeps it out of the migration runner so it only runs
+  when invoked explicitly.
+
+### Kanban UX polish
+
+- Bulk-actions toolbar (floats from the bottom when 1+ cards are
+  selected via shift-click / per-card checkbox): bulk "Move to…"
+  status change plus Clear.
+- URL-persisted filters: `?q=`, `?assignee=`, `?priority=`, `?team=`,
+  `?sprint=` round-trip so refresh / back-button / link-sharing
+  reproduces the view.
+- Keyboard shortcuts: `n` opens the new-task modal; `/` focuses the
+  search input.
+- Sticky column headers with backdrop-blur so the column name and
+  count stay visible while scrolling long lists.
+- Loading skeleton swapped from a flat pulsing block to
+  column-shaped placeholders with staggered card animation delays.
+- Mobile kanban: columns stack vertically below `md` (full-width,
+  no max-height) instead of forcing a horizontal scroll on phones.
+- Critical empty-state fix: when a workspace had **zero tasks** the
+  page rendered "No tasks found" and hid the columns — making the
+  new inline quick-add unreachable. The full empty-state now only
+  appears when filters are active and matched nothing.
+
+### Test infrastructure fixes
+
+- `core/database.py` registers SQLite dialect shims via
+  `@compiles(... "sqlite")` for `ARRAY → JSON`, `JSONB → JSON`,
+  `INET → VARCHAR(45)`. Models declared with PG-only types now
+  compile under `sqlite+aiosqlite:///:memory:` so the test suite
+  reaches the test bodies instead of failing in
+  `Base.metadata.create_all()`. 401 previously-blocked tests now
+  run; remaining failures are pre-existing fixture issues
+  unrelated to this PR.
+- Dropped `'::jsonb'` casts from four `server_default` literals in
+  `models/dashboard.py` and `models/crm.py` so SQLite accepts the
+  DDL. PostgreSQL still parses the bare `'[]'` / `'{}'` defaults
+  into JSONB.
+- Playwright fixture `setupTaskBoardMocks` now sets the
+  `aexy_authed` presence cookie via `page.context().addCookies()`,
+  preventing the middleware from bouncing every spec to `/` and on
+  to `/onboarding`. Unblocks `task-card-drag`,
+  `task-create-attachments`, `task-link-clickable`,
+  `task-over-estimate`, `task-attachment-ai-tags`, and
+  `task-overdue-badge` in addition to the two new
+  `workspace-tasks-create` specs.
+
+### New tests
+
+- `backend/tests/unit/test_task_config_project_scope.py` — 5 unit
+  tests covering fallback to workspace defaults, project override
+  preference, no cross-workspace leak, clone copy fidelity, and
+  clone idempotency.
+- `backend/tests/integration/test_workspace_tasks_api.py` — 5 API
+  tests covering the happy path, cross-project status rejection,
+  project-without-team rejection, status-list fallback, and clone
+  idempotency.
+- `frontend/e2e/workspace-tasks-create.spec.ts` — Playwright spec
+  exercising the inline quick-add row (asserts the wire shape:
+  `title`, `project_id`, `status`) and the global "Add task" modal.
+
+### Other
+
+- Frontend `lib/api.ts`: new `workspaceTasksApi.create()`,
+  `taskConfigApi.getStatuses({ projectId })`, and
+  `taskConfigApi.cloneToProject()`.
+- i18n keys: `addTask`, `newTaskPlaceholder`, refreshed
+  `dropTasksHere` copy in both `en` and `hi`.
+
+## [0.8.27] - 2026-05-22
+
+Part B follow-ups: close the three loops Part B's commit message
+flagged as "deferred". All three streams of AI-generated content
+now route through the proposed-edits queue, the doc owner gets a
+notification each time a proposal lands, and the stale-conflict
+view exposes a Regenerate action to refresh against the current
+base.
+
+### Sync service writes proposals
+
+- `DocumentSyncService.regenerate_document` and `process_queue` were
+  referenced by the Temporal `regenerate_document` /
+  `process_document_sync_queue` activities but didn't exist on the
+  service — the whole sync regen path was dead. Implemented both,
+  routing through `ProposedEditsService.create_proposal` with
+  `source=code_change_sync`.
+- `_trigger_real_time_sync` no longer marks the doc
+  `pending_regeneration` and forgets about it — it generates fresh
+  docs and creates a proposal via a new shared `_generate_and_propose`
+  helper.
+
+### suggest_improvements → queue
+
+- New `POST /workspaces/{ws}/documents/{doc_id}/suggest-improvements/apply`.
+  Takes a `suggestion_summary` query string (copy/pasted from the
+  `improvements[].suggestion` field returned by the existing
+  `suggest-improvements` endpoint), runs it through
+  `DocumentGenerationService.update_documentation`, and lands the
+  result as a pending proposal with `source=suggest_improvements`.
+  The legacy GET-style `suggest-improvements` keeps its
+  "return-suggestions-list" contract; the new endpoint is the
+  "apply this one" action.
+
+### Notifications on every new proposal
+
+- `ProposedEditSource` lifecycle now fires a `DocumentNotification`
+  to the document's `created_by_id` with the new `AI_PROPOSAL`
+  type. Self-notifications (proposer == owner, e.g. owner-triggered
+  manual regenerate) are suppressed. Best-effort: if the doc has no
+  `created_by_id`, the notification step is a no-op (legacy fixture
+  safety).
+- New `DocumentNotificationType.AI_PROPOSAL` enum value
+  (`backend/src/aexy/models/documentation.py`).
+
+### Stale-conflict UX: Regenerate action
+
+- `ProposedEditReview` gets a new optional `onRegenerate` prop. When
+  the proposal is stale AND a handler is wired, the merge-conflict
+  view renders a third action between Reject and "Apply anyway":
+  Regenerate.
+- `ProposedEditsBanner` wires this to a new `regenerate` mutation
+  that calls `documentApi.generate(workspaceId, documentId)` — the
+  new proposal supersedes the stale one server-side via
+  `create_proposal`'s supersede sweep, so we just invalidate the
+  query cache afterwards.
+- Non-stale proposals never see the Regenerate button (test
+  asserts this).
+
+### Tests
+
+- **Backend**: `test_proposed_edits_service.py` extended with
+  `TestNotificationOnCreate` (3 specs): notification fired for
+  owner, no self-notification, no notification when owner is
+  missing.
+- **Frontend**: `docs-proposed-edits.spec.ts` extended with two
+  specs: stale conflict renders Regenerate + clicking it calls
+  `POST /generate`; non-stale proposals don't show the button.
+  Total docs E2E: 29 specs, ~60 s.
+
+### Versions
+
+Bumped both `backend/pyproject.toml` and `frontend/package.json`
+to 0.8.27.
+
+## [0.8.26] - 2026-05-22
+
+Part B of the AI documentation initiative: the **proposed-edits
+review queue**. AI-generated content no longer overwrites
+`document.content` directly — it lands in a pending queue the user
+approves or rejects through a banner above the editor.
+
+### Data model
+
+- **New table `document_proposed_edits`**
+  (`backend/scripts/migrate_document_proposed_edits.sql`). Columns:
+  `id, document_id, source, proposed_content (jsonb),
+  base_content_sha, diff_summary (jsonb), status, proposed_by_id,
+  proposed_at, reviewed_by_id, reviewed_at, reason`. Indexed on
+  `(document_id, status)` for the banner's hot read path and on
+  `(document_id, base_content_sha)` for stale-detection lookups.
+- **`DocumentProposedEdit` SQLAlchemy model** in
+  `aexy.models.documentation` + `ProposedEditSource` and
+  `ProposedEditStatus` enums. Wired into `models/__init__.py`'s
+  `__all__`.
+- **Pydantic schemas** — `ProposedEditCreate`, `ProposedEditResponse`
+  (carries computed `is_stale`), `ProposedEditReject`.
+
+### Service
+
+- **`ProposedEditsService`** (`backend/src/aexy/services/proposed_edits_service.py`)
+  - `create_proposal` snapshots the current `content_sha` if the
+    caller didn't supply one, then auto-supersedes prior pending
+    proposals on the same document. The new row is flushed before
+    the supersede UPDATE runs, so the new proposal's id can be
+    referenced in the supersede `reason` without a null-id race.
+  - `approve` routes through `DocumentService.update_document`
+    which creates a `DocumentVersion` automatically — every approved
+    proposal lands as a versioned change.
+  - `reject` records an optional human-readable reason.
+  - `is_stale` compares the proposal's `base_content_sha` against
+    the document's current SHA; rows without a base are never
+    flagged (legacy / migration safety).
+  - `compute_content_sha` is key-order invariant (`sort_keys=True`)
+    so JS round-trips that re-serialize equivalent content don't
+    spuriously trigger the stale badge.
+
+### API
+
+- **`POST /workspaces/{ws}/documents/{doc_id}/generate`** default
+  changed: now creates a pending `proposed_edit` instead of writing
+  to `document.content`. Legacy overwrite behaviour is preserved
+  behind `?apply=true` for scripted / migration callers.
+- **`GET /workspaces/{ws}/documents/{doc_id}/proposed-edits`** —
+  list pending (default), or `?status=approved|rejected|superseded|all`.
+- **`POST .../proposed-edits/{id}/approve`** — applies and
+  transitions; bumps the version chain via DocumentService.
+- **`POST .../proposed-edits/{id}/reject`** — records reason.
+
+### Frontend
+
+- **`ProposedEditsBanner.tsx`** — banner above the editor when
+  pending proposals exist. Groups by source (`regenerate`,
+  `code_change_sync`, `suggest_improvements`, `manual_ai_edit`)
+  with distinct icons/labels per group. Click a proposal to expand
+  the review inline.
+- **`ProposedEditReview.tsx`** — three diff modes:
+  - **Summary (default)**: sections added / removed / headings
+    changed, scannable, no scrolling.
+  - **Unified**: full JSON view in a scroll container.
+  - **Side-by-side**: current vs proposed columns.
+  Approve / Reject actions live in the footer; Reject opens an
+  inline reason input. When `proposal.is_stale` is true, the
+  banner shows the merge-conflict UX and the Approve button copy
+  flips to "Apply anyway".
+- **Wired into `app/(app)/docs/[documentId]/page.tsx`** above the
+  editor. The component self-hides when there are no pending
+  proposals — no layout shift on docs that don't have AI edits.
+- **`documentApi.{listProposedEdits, approveProposedEdit,
+  rejectProposedEdit}`** added to `lib/api.ts` plus `ProposedEdit`,
+  `ProposedEditSource`, `ProposedEditStatus` types.
+
+### Tests
+
+- **Backend**: `tests/unit/test_proposed_edits_service.py` — 10
+  unit tests covering `compute_content_sha` invariants
+  (deterministic, key-order invariant, None == {}), `create_proposal`
+  (SHA snapshotting, flush-before-supersede ordering, string-source
+  acceptance), and `is_stale` (no-base / matching / diverged).
+- **Frontend**: `e2e/docs-proposed-edits.spec.ts` — 5 specs covering
+  banner rendering, all three diff modes (summary / unified /
+  side-by-side toggle), approve flow, reject-with-reason flow, and
+  the stale conflict UX.
+
+Full backend unit suite for docs: 10 specs pass.
+Full docs E2E: 27 specs, ~58 s.
+
+### Migration order
+
+Run `python scripts/run_migrations.py` (the new
+`migrate_document_proposed_edits.sql` is the only pending change).
+No backfill needed — proposals only land going forward, legacy
+generate callers that pass `?apply=true` keep working unchanged.
+
+## [0.8.25] - 2026-05-22
+
+Part A of the AI documentation testing initiative: TDD coverage for
+autogenerate flows + the autoupdate plumbing. The audit had flagged
+that the entire docs-AI surface had zero tests; this commit closes
+that with 11 specs and surfaces three bugs along the way, two of
+which are fixed in the same change.
+
+Part B (`proposed_edits` model + approval UX) lands separately.
+
+### Bugs caught + fixed
+
+- **`PlanTier.TEAM` AttributeError in DocumentSyncService**
+  (`backend/src/aexy/services/document_sync_service.py:68`).
+  Line referenced `PlanTier.TEAM.value` but the enum has no `TEAM`
+  member. Every free-tier or pro-tier-without-realtime developer
+  hit AttributeError when `get_sync_type_for_developer` was called.
+  Fixed to `PlanTier.ENTERPRISE.value`, matching the convention used
+  in `api/knowledge_graph.py`, `api/notifications.py`,
+  `api/app_access.py`. Caught by `test_document_sync_service.py`.
+- **`suggest_improvements` schema drift** (multi-line fix).
+  `DocumentGenerationService.suggest_improvements` claims to return
+  `{quality_score, improvements[], missing_sections[],
+  overall_assessment}` but was returning generic code-analysis JSON
+  (`languages, frameworks, code_quality, summary`) because:
+  1. `lmstudio_provider._build_analysis_prompts` had no branch for
+     `AnalysisType.DOC_*` types — they fell through to
+     `CODE_ANALYSIS_PROMPT`, dropping the service's custom prompt.
+     Fixed by adding a DOC_* branch that honours
+     `request.context["system_prompt"]` + uses the pre-formatted
+     `request.content` verbatim.
+  2. The service's `json.loads(result.raw_response)` blew up on
+     markdown-fenced LLM output. Extracted `_parse_llm_json` helper
+     that strips ```json fences before parsing. Applied to all four
+     `raw_response` parse sites in the service.
+  3. Tightened `DOC_IMPROVEMENT_SYSTEM_PROMPT` to say "Respond ONLY
+     with valid JSON … No preamble, no analysis, no markdown fences".
+  4. Bumped `lmstudio_config` `max_tokens` in the AI test conftest
+     from 2048 → 8192 so Qwen "thinking" models don't run out of
+     budget before producing JSON.
+  Caught by `test_suggest_improvements.py::test_returns_documented_contract_shape`.
+- **Orphan `SyncStatusPanel`** (`frontend/src/components/docs/SyncStatusPanel.tsx`).
+  221 LOC of pending-changes UI implemented but never mounted in
+  any page. Wired into `app/(app)/docs/[documentId]/page.tsx`:
+  uses `useDocumentCodeLinks` to compute the pending count, renders
+  above the editor when the doc has any code links, exposes a
+  manual-sync button that calls `documentApi.generate`. Caught while
+  writing the FE pending-banner spec.
+
+### Coverage added — 5 backend specs
+
+| File | What it covers |
+| --- | --- |
+| `backend/tests/ai/services/test_document_generation_paste.py` | `generate_from_code` returns TipTap doc shape with heading + paragraph + matching identifier (real LLM) |
+| `backend/tests/ai/services/test_document_generation_repo.py` | `generate_from_repository` forwards to GitHubService correctly; missing file raises ValueError (mocked GH, real LLM) |
+| `backend/tests/ai/services/test_document_regenerate_from_link.py` | The orchestration the `{doc_id}/generate` endpoint runs: load doc, load links, generate, write content back, flip `generation_status`, clear `has_pending_changes` |
+| `backend/tests/ai/services/test_suggest_improvements.py` | Contract shape (`quality_score`, `improvements[]`, `missing_sections[]`, `overall_assessment`); locks in the fix for the schema drift above |
+| `backend/tests/unit/test_document_sync_service.py` | Plan-tier routing in `get_sync_type_for_developer`: REAL_TIME / DAILY_BATCH / MANUAL for premium / pro+enterprise / free; the previously-dead enterprise branch now reaches DAILY_BATCH |
+
+### Coverage added — 5 frontend specs
+
+| File | What it covers |
+| --- | --- |
+| `docs-autogenerate-paste.spec.ts` | Full live flow: paste TS function, click Generate, real LLM round-trip, lands on new doc with editor visible |
+| `docs-autogenerate-repo.spec.ts` | From Repository tab opens; either repo list or empty state renders; Generate disabled in empty state |
+| `docs-autogenerate-repo-full.spec.ts` | End-to-end repo orchestration with mocked repo/branch/contents APIs; user picks repo → root dir → click Generate → mocked content lands as a new doc |
+| `docs-pending-changes-banner.spec.ts` | SyncStatusPanel renders pending count + manual-sync label when a code-link is dirty (mocked code-links, live doc) |
+| (orphan SyncStatusPanel finding informs this) | — |
+
+### Frontend dev container & test container
+
+- Installed `pytest`, `pytest-asyncio`, `pytest-cov`, `aiosqlite` into
+  the `aexy-backend` image (they weren't there before, blocking any
+  attempt to run the backend test suite via `docker exec`).
+
+## [0.8.24] - 2026-05-22
+
+Docs UI/UX follow-up sweep: the five items the 0.8.23 commit
+deliberately left as "out of cluster scope" — visual gradient
+heroes, ring-spinner duplication, Drive IA confusion, hardcoded
+colour refs, mobile responsiveness on Drive/Files/Knowledge-Graph.
+5 new E2E specs lock the changes in (18 total docs E2E specs now,
+~32 s full pass).
+
+### Visual: gradient heroes gone
+
+- **Replaced the `from-primary-500/20 to-purple-500/20` rounded-2xl
+  icon hero in two places** (`DocsLayoutClient.tsx`, `page.tsx`)
+  with a typography-first treatment: small tracked eyebrow label,
+  semibold tracking-tight headline, one line of supporting copy.
+  The audit called this gradient pattern the strongest "AI-slop"
+  tell in the surface — `docs-no-gradient-hero.spec.ts` regression-
+  guards both heroes.
+- Landing headline shifted from "Documentation / Create, organize,
+  and auto-generate documentation from your code" to an inviting
+  "What do you want to write today?" with shorter supporting copy.
+
+### Spinner consolidation
+
+- **New `components/ui/spinner.tsx`** with `xs|sm|md|lg` size variants,
+  `role="status"`, `data-testid="aexy-spinner"`, and an sr-only
+  label. Replaces four near-identical inline implementations:
+  `DocsLayoutClient.tsx:81` (lg), `[documentId]/page.tsx:45` (md),
+  `CollaborativeEditor.tsx:319` (sm), `TemplateSelector.tsx:140` (xs).
+- Future docs/UI spinners should reuse this component; the old
+  inline pattern accumulated four variants of the same idea across
+  the surface.
+
+### Drive IA: distinct from docs, discoverable from the sidebar
+
+- **Sidebar gains a "Files" link** in `SidebarNavigation.tsx` pointing
+  at `/docs/drive`. Drive was previously reachable only by URL.
+- **Drive page heading renamed to "Files & Storage"** (`drive.page.title`
+  in `messages/en/drive.json` + `messages/hi/drive.json`) with a new
+  subtitle: "Workspace files, task attachments, and compliance
+  documents — separate from your written docs." Makes the relationship
+  to docs explicit.
+- `docs-drive-ia.spec.ts` asserts the sidebar Files link is present,
+  click lands on /docs/drive, and the renamed heading + subtitle
+  render correctly.
+
+### Colour tokens sweep
+
+- **85 → 70 hardcoded colour refs in the docs surface.** Visible
+  destructive/success states replaced with semantic tokens:
+  `text-red-{300,400}` → `text-destructive`, `bg-red-50 dark:bg-red-900/20`
+  → `bg-destructive/10`, `text-emerald-400` (saved indicator) → `text-success`.
+  Touched: `DocumentItem.tsx` (Delete menu item), `[documentId]/page.tsx`
+  (error state), `CodeLinksDisplay.tsx`, `CodeLinkPanel.tsx`,
+  `CreateSpaceModal.tsx`, `GenerationPanel.tsx` (error+success banners),
+  `DocumentEditor.tsx` (Saved indicator). 15 refs collapsed.
+- Remaining ~70 are mostly: `CollaborationAwareness.tsx` (dead code),
+  `VersionHistoryPanel.tsx` (diff visualization where red specifically
+  means "removed"), `SyncStatusPanel`/`GitHubSyncPanel` (domain-specific
+  status palettes), and `DocumentItem.tsx`'s yellow favorite-star.
+
+### Mobile sub-routes
+
+- **Audit at 390×844** of `/docs/drive`, `/docs/files`, and
+  `/docs/knowledge-graph`. All three render usable content on
+  mobile after the Cluster 1 fixes (Drive already had `lg:flex-row`
+  + `lg:w-56` responsive utilities; KnowledgeGraph paywall is
+  naturally vertically-flowed; `/docs/files` redirects to `/docs/drive`).
+- `docs-mobile-sub-routes.spec.ts` locks in the regression: each
+  route's primary content is visible at 390 px and the CTAs/headings
+  don't overflow the viewport.
+
+### Tests
+
+5 new E2E specs (`frontend/e2e/docs-*.spec.ts`):
+
+- `docs-no-gradient-hero` — regression guard
+- `docs-drive-ia` — sidebar link + renamed heading + subtitle
+- `docs-mobile-sub-routes` — 3 routes × 390 px content reachability
+
+Total docs E2E: 18 specs, ~32 s full pass.
+
+## [0.8.23] - 2026-05-22
+
+In-app docs UX bug-fix sweep across three clusters (shell, editor,
+a11y), TDD against 13 new E2E specs. Captures every fix in a failing-
+then-passing test so the regressions can't sneak back. Cmd+K now
+actually searches docs, mobile is no longer unusable, the editor
+gets a real reading measure plus bullets + a floating BubbleMenu,
+and the sidebar exposes tree semantics to assistive tech.
+
+### Cluster 1 — shell fixes
+
+- **`Cmd+K` in `/docs` opens the doc-scoped SearchModal, not the
+  global CommandPalette.** Two `keydown` listeners on `document` were
+  racing — the app-shell global was mounted earlier and won. The docs
+  layout now installs its listener in capture phase and calls
+  `stopImmediatePropagation()`, so the global never sees the event
+  on docs routes. (`DocsLayoutClient.tsx`)
+- **Sidebar collapses to a drawer below `md`.** The hard-coded
+  `w-60 flex-shrink-0` was eating ~62 % of a 390 px viewport. Sidebar
+  now slides off-screen via `-translate-x-full md:translate-x-0`,
+  with a `data-testid="docs-mobile-menu-trigger"` hamburger in a new
+  mobile top bar (`pl-14` so it doesn't collide with the app-shell's
+  fixed-position trigger) and a backdrop that closes on tap.
+  Drawer auto-closes on route change.
+- **Delete confirmation is a styled dialog, not `window.confirm()`.**
+  `NotionSidebar.tsx` now opens the existing `ConfirmDialog` from
+  `components/ui/confirm-dialog.tsx` with `tone="danger"` and a
+  "Delete" primary action. The native browser dialog (which broke
+  visual consistency with the dark theme) is gone.
+- **Inert menu items hidden until implemented.** "Duplicate" and
+  "Manage Space" were `console.log("…")` TODOs surfaced as live
+  affordances. NotionSidebar no longer passes the `onDuplicate` /
+  `onManageSpace` props, so DocumentItem's existing
+  `{onDuplicate && (…)}` guards collapse the rows. Real handlers
+  can be wired later without changing markup.
+- **`/docs/files` no longer strands on "Loading document…".**
+  The bare prefix matched the `[documentId]` catch-all with
+  `documentId="files"` and loaded forever. A new
+  `app/(app)/docs/files/page.tsx` redirects to `/docs/drive`.
+
+### Cluster 2 — editor fixes
+
+- **Reading-measure cap.** `prose ... max-w-none` (which ran ~140
+  cpl on 1440 px viewports) replaced with
+  `prose ... max-w-3xl mx-auto` (~672 px / ~65 cpl). Editor
+  spec asserts `≤ 900 px` at 1440 desktop.
+  (`DocumentEditor.tsx:181`)
+- **Lists render visible markers again.** Tailwind's preflight
+  reset was stripping bullets off bare `<ul>`/`<ol>` inside the
+  ProseMirror because typography-plugin `prose-ul:` modifiers
+  weren't resolving in the cascade. Switched to arbitrary-variant
+  utilities (`[&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal
+  [&_ol]:pl-6 [&_li]:my-1`) which carry enough specificity.
+- **Emoji picker closes on Escape.** Audit caught the picker
+  staying open across three intermediate actions. Added a
+  scoped `keydown` listener while the picker is mounted; on
+  Escape it sets `showEmojiPicker(false)`.
+- **Manual `Save` button removed.** `autoSave` is on by default
+  with a 1 s debounce; the duplicate Save button created
+  "is autosave actually working?" doubt. Drop the `onSave` prop
+  passed to EditorToolbar — the `{onSave && (…)}` guard already
+  collapses the row. `handleManualSave` callback also removed.
+- **Floating BubbleMenu is back in the non-collab path.** The
+  BubbleMenu only existed in `CollaborativeEditor.tsx`, which is
+  hard-disabled by `collaborationEnabled = false`. DocumentEditor
+  now mounts its own BubbleMenu with Bold/Italic/Underline/Code
+  controls. `data-testid="docs-bubble-menu"` lives on an inner
+  wrapper because `@tiptap/react@2.27.1` BubbleMenu only forwards
+  `className` to the rendered div (verified by reading
+  `node_modules/@tiptap/react/dist/index.cjs`).
+
+### Cluster 3 — ARIA / accessibility
+
+- **SearchModal exposes the right contract.** `role="dialog"` +
+  `aria-modal="true"` + `aria-label="Search documents"` on the
+  modal root. Screen-reader users can now identify the overlay.
+- **Sidebar is a real tree.** The scrollable content container
+  gets `role="tree"` + `aria-label="Documents"`. Each
+  DocumentItem row gets `role="treeitem"` + `aria-selected`
+  (driven by `isSelected`) + `aria-expanded` when it has children.
+  Active document is `aria-selected="true"`.
+
+### Tests
+
+13 new E2E specs under `frontend/e2e/docs-*.spec.ts`, all live-
+backend, no LLM (use `backendOnlyReady` + `setupAiLiveAuth`).
+Spec-first per cluster: write specs → run them red → implement
+fixes → run them green. Files:
+
+- `docs-cmdk-doc-search`, `docs-mobile-sidebar` (×2),
+  `docs-styled-confirm-dialog`, `docs-todo-menu-items-hidden`,
+  `docs-files-route-redirect`
+- `docs-editor-reading-measure`, `docs-editor-list-bullets`,
+  `docs-editor-emoji-picker-escape`, `docs-editor-no-save-button`,
+  `docs-editor-bubble-menu`
+- `docs-a11y-search-modal`, `docs-a11y-doc-tree`
+
+Full suite passes in ~22 s.
+
+## [0.8.22] - 2026-05-22
+
+AI/automation E2E coverage expansion: the workflow builder now has a
+schema-driven test fixture, 35 new Playwright specs across nodes,
+triggers, actions, templates and end-to-end runs, plus tighter
+assertions on the live-LLM tests so the suite actually catches
+provider drift and prompt regressions instead of greenlighting them.
+
+### Workflow builder — new `join` node + canvas testability
+
+- **`join` is now a first-class node type.** Added to
+  `WorkflowNodeType` in `backend/src/aexy/schemas/workflow.py`; the
+  canvas's `JoinNode` was already wired up but the schema literal
+  was missing, so `nodes: [..., { type: "join" }]` round-trips
+  through validation now instead of being silently coerced.
+- **`NodePalette` and `NodeConfigPanel` got stable test hooks.**
+  `data-testid="palette-category-${kind}"`,
+  `palette-subtype-${kind}-${value}` on every entry, plus
+  `data-testid="node-config-panel"` + `role="dialog"` on the config
+  drawer. One helper change updates every spec instead of 200.
+- **Categories without subtypes show a hover-revealed `+` affordance.**
+  A bare row gave no visual hint that clicking does anything;
+  drag-first UX stays primary, the icon is subtle by design.
+
+### Automation templates — save no longer silently 400s
+
+- **`send_email` template actions now ship subject + body.** The
+  backend's `validate_workflow` rejects email actions without
+  `email_body`, so the "follow-up sequence" and "welcome sequence"
+  templates were silently failing the save with HTTP 400 and the
+  user saw an empty canvas after "saving" (`automationTemplates.ts`).
+- **Template action `config` is spread flat into node `data`.**
+  `NodeConfigPanel` writes action fields flat (`data.email_body`,
+  `data.duration_value`) and the backend reads them flat too;
+  nesting under `data.config` meant the validator never saw the
+  required fields. No remaining `node.data.config.*` readers
+  anywhere in the frontend.
+
+### Schema-driven test fixture
+
+- **`backend/scripts/dump_automation_schema.py`** emits the
+  trigger/action registry to
+  `frontend/e2e/fixtures/automation-schema.generated.json`. The
+  per-subtype specs (`ai-automation-triggers-*`,
+  `ai-automation-actions-*`) parametrise from this fixture so
+  adding a new trigger on the backend forces a matching test entry.
+- **`npm run schema:automation`** regenerates the fixture via
+  `docker exec aexy-backend ...`. **`npm run schema:automation:check`**
+  is the CI drift gate. Both now precheck that `aexy-backend` is
+  running and exit with a clear message ("Start it with:
+  docker-compose up -d backend") instead of leaving devs to parse
+  a raw `docker exec` error.
+
+### AI automation E2E suite — 35 new specs
+
+- **Three layers, all live-backend:**
+  1. **Per-node CRUD** (`ai-automation-node-{trigger,action,
+     condition,wait,agent,branch,join}.spec.ts`) — palette add,
+     config-panel render, click-to-select, delete.
+  2. **Per-subtype parametrised loops** —
+     `ai-automation-{triggers,actions}-{module}.spec.ts` covering
+     every trigger and action in every module's registry, all
+     driven by the generated fixture above.
+  3. **End-to-end** — `canvas-wire` (6-node save/reload
+     round-trip), `templates` (every gallery template lands a
+     usable graph), `generate-workflow-per-module` (LLM generator
+     across all 10 modules), `run-agent` and `end-to-end`
+     (record-created trigger → seeded LLM agent → workspace
+     state mutation, with marker-envelope assertions).
+- **Shared helpers in `frontend/e2e/fixtures/automation-helpers.ts`**
+  — `openCanvas`, `addNodeFromPalette`, `canvasNodes`,
+  `openNodeConfig`, `connectNodes`, `saveWorkflow`,
+  `fetchWorkflow`, `deleteAutomation`. Roughly 35 specs share one
+  contract; testid drift breaks one helper, not the whole suite.
+
+### Live-LLM assertions — false-positive class eliminated
+
+- **Marker-envelope check on agent output.** `ai-automation-run-agent`
+  and `ai-automation-end-to-end` now pass a per-test
+  `echo_token` in `trigger_data` and instruct the agent (via its
+  system prompt) to wrap it in a literal `[ECHO:<token>]`
+  envelope. The envelope shape can't appear from stub providers,
+  cached responses, or a passthrough copy of input data — only
+  from an LLM that actually read and reshaped the payload.
+- **`generate-workflow-per-module` now hard-fails on unknown
+  `trigger_type`.** A `console.warn` previously demoted LLM
+  hallucinations like `record.modified` (instead of
+  `record.updated`) to log noise nobody reads — exactly the
+  prompt-regression class this spec exists to catch. Now an
+  unknown trigger fails the test with the known-trigger list in
+  the failure message.
+- **`run-agent` workflow status check tightened from
+  `["completed", "running", "failed"]` to strictly `"completed"`.**
+  `dry_run=true` is synchronous so anything else means the
+  executor bailed before producing the node_results we go on to
+  assert against.
+
+### Test-env plumbing
+
+- **`backendOnlyReady` (in `frontend/e2e/fixtures/ai-env.ts`)**
+  splits the LM Studio probe out of `aiLiveReady`. Structural
+  tests that don't invoke any LLM (canvas wiring, palette
+  interaction, save round-trip) no longer skip the entire spec
+  file when LM Studio happens to be down.
+- **`setupAiLiveAuth` now sets the `aexy_authed=1` cookie before
+  the first navigation.** Middleware redirects every protected
+  route to `/?next=...` when the cookie is missing — and the
+  cookie is normally set client-side by `useAuth` AFTER mount, so
+  without this fix the very first goto bounced through the login
+  page and dropped any query params we'd set.
+- **`playwright.config.ts`** honours `PLAYWRIGHT_BASE_URL` instead
+  of hard-coding `http://localhost:3000`, so the suite can run
+  against a non-default host (CI runner, remote box).
+- **`docker-compose.yml`** passes
+  `LMSTUDIO_BASE_URL=${LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}`
+  into the backend. `localhost` inside the container was the
+  container, not the host — the agent action couldn't reach the
+  developer's LM Studio during E2E and dev runs.
+
+## [0.8.21] - 2026-05-22
+
+AI surface hardening: the `/automations` canvas no longer crashes on
+LLM-generated workflows, the agent provider list catches up with the
+backend, the frontend dev container has the headroom to run the new
+live AI E2E suite, and a small layout bug in the workflow generator
+is fixed before it ships.
+
+### Workflow generator — layout fix
+
+- **LLM-generated workflows now render reliably.** The
+  `POST /automations/generate-workflow` response had no `position`
+  on its nodes, so ReactFlow crashed the `/automations` canvas and
+  bounced the user to the route's error boundary. Backend now
+  assigns `{x, y}` to every generated node via a one-shot
+  auto-layout pass before responding
+  (`backend/src/aexy/services/workflow_generator.py`).
+- **Layout uses longest-path topological depth.** Diamonds and
+  fan-in graphs (`A→B→C→D` plus `A→D`) now place the merge node at
+  the depth of the longer path, with descendants cascading correctly.
+  The earlier BFS variant settled the merge node at the shallower
+  depth if the short edge was walked first. Five new unit tests in
+  `tests/unit/test_workflow_generator.py` pin the contract: every
+  node gets a position, linear chains cascade right, the diamond
+  case settles on longest-path depth, existing positions are
+  preserved, and cycles render rather than crash.
+
+### Agent LLM provider list — FE/BE parity
+
+- **DeepSeek and LM Studio show up in the provider picker.** The
+  backend has accepted `"deepseek"` and `"lmstudio"` as
+  `AgentCreate.llm_provider` values for a while; the frontend
+  selector only knew the four originals, so any agent created with
+  one of the new providers crashed the agent detail page when
+  `LLMConfigDisplay` tried `PROVIDERS[provider].models.find(...)`.
+  Selector now lists DeepSeek (Chat + Reasoner) and LM Studio
+  (Qwen 3.5 9B), and `LLMConfigDisplay` falls back to a generic
+  render for any future unknown provider rather than throwing.
+  (`frontend/src/components/agents/shared/LLMProviderSelector.tsx`)
+
+### Frontend dev container — heap headroom
+
+- **No more silent OOM kills during AI E2E runs.** Turbopack's
+  lazy compilation across `/agents`, `/automations`, `/chat`,
+  `/compliance`, … in quick succession was exhausting the default
+  Node heap and getting SIGKILL'd by Docker. Frontend service now
+  sets `NODE_OPTIONS=--max-old-space-size=6144` (6 GiB V8 heap)
+  with a matching `mem_limit: 7g` so Docker doesn't kill the
+  process before V8 has a chance to GC (`docker-compose.yml`).
+
+### AI E2E test suite — new live tier
+
+- **15 new `frontend/e2e/ai-*.spec.ts` specs** drive every AI
+  surface (agent chat + conversation create + prompt preview +
+  test run, /ask, workflow generation, automation test run, code
+  analysis, developer insights, email draft, file
+  metadata/sidecar, file search, hiring re-evaluate, learning
+  path, review-cycle generate) against the **live** stack — real
+  frontend, real backend, real LM Studio. Mocked AI responses
+  defeat the point of this tier; the existing `*.spec.ts` files
+  cover UI-only behaviour.
+- Auto-skips the whole file when LM Studio is unreachable, exactly
+  like the backend `tests/ai/` suite.
+- Shared helpers in `frontend/e2e/fixtures/ai-env.ts` (env +
+  LM Studio probe + auth bootstrap) and
+  `frontend/e2e/fixtures/ai-helpers.ts` (seeders, long-timeout
+  response waiters, fatal-error collectors).
+- Default LLM wait per request is 3 minutes (`AI_E2E_LLM_WAIT_MS`).
+  A spec that times out is signalling that the model is genuinely
+  slow, not flaky — don't lower it. See the new
+  "AI E2E tests" section in `CLAUDE.md` for setup.
+
+## [0.8.2] - 2026-05-21
+
+`/reviews` surface UX overhaul, prod-bug fixes, and a tighter
+contract between the frontend and the manager-review backend. One
+hard 422 (manager Save Draft) is fixed via a backend schema relax
++ matching client change; the rest is i18n parity, draft-hydration
+correctness, and accessibility nits.
+
+### Reviews — bug fixes
+
+- **Manager Save Draft no longer 422s.** The frontend used to send
+  `overall_rating: 0` as a sentinel against `ManagerReviewSubmission`
+  which is `Field(ge=1, le=5)` — every draft save before the manager
+  had settled on a rating was rejected. `overall_rating` is now
+  `Optional[float]` on the submission schema (the hard constraint
+  stays on `FinalReviewData` where it actually matters), the service
+  preserves any prior rating when `None` is passed, and the client
+  drops the `?? 0` fallback. Three new regression tests pin the
+  contract: null accepted, missing accepted, finalize still rejects
+  out of range (`backend/tests/unit/test_reviews_prod_bugs.py`).
+- **Discarded suggestions no longer leak across workspaces.** The
+  hydration `useEffect` on `/reviews/manage` only wrote
+  `discardedIds` when the new workspace key had data; switching to a
+  workspace with no entry kept the previous team's discard list in
+  state. Now always resets (`manage/page.tsx`).
+- **Draft hydration re-runs on id change.** All three draft surfaces
+  — manager review composer, self-review form, peer decline reason —
+  used a boolean `hydratedRef` that stayed `true` across client-side
+  nav, so visiting a second review/request id never hydrated its
+  draft. Now keyed by id (`hydratedKeyRef === currentKey`), with an
+  explicit reset when the new id has no stored draft.
+
+### Reviews — UX consistency
+
+- **Cycle list now shares the inline-error pattern.** Activate /
+  advance on `/reviews/cycles` used to surface failures as a toast
+  that sat hidden behind the open `ConfirmDialog`; the detail page
+  rendered an inline red block inside the dialog. The list page now
+  uses the same inline block — same place users see the failure
+  matches the action that produced it.
+
+### i18n — parity + sweep
+
+- **25 new translation keys**, mirrored across `en` and `hi` (parity
+  preserved at 550 keys each). Sweep covers: cycles list ConfirmDialog
+  + toasts + status filter + breadcrumb + error panel; goal complete
+  dialog; manage status filter; manage detail "Back to Reviews" +
+  "Invite Peer Reviewers"; peer-requests error title.
+- Hindi entries keep technical terms (PR, GitHub, peer reviewer,
+  cycle, etc.) in English per the project convention.
+
+### Accessibility
+
+- **Notify dropdown trigger** on `/reviews/cycles/[cycleId]` now has
+  an explicit `aria-label` alongside `title=` — screen readers don't
+  reliably announce `title`, and the trigger needed a stable
+  accessible name.
+
+### Internal
+
+- `next-env.d.ts` and `tsconfig.tsbuildinfo` are now gitignored —
+  the former is rewritten by Next between dev (`.next/dev/...`) and
+  prod (`.next/...`) builds, the latter is per-machine.
+
+## [0.8.1] - 2026-05-20
+
+UX overhaul of the agents + automations surface, plus a four-week
+accessibility sweep across the workspace shell. Nineteen commits since
+`0.8.01` consolidate three workstreams: a unified Operations IA, an
+inbox triage rewrite, and a long polish tail that migrates the last raw
+modals/drawers off ad-hoc divs onto Radix `Dialog` / `Sheet` primitives.
+Closes with four follow-ups from the PR #148 review.
+
+### Operations IA + agents UX
+
+- **Unified Operations page** (`/operations`, new). Single entry for
+  agents *and* automations — replaces the two separate `/agents` and
+  `/automations` landings, which the audit flagged as the #1 user
+  confusion ("am I building an agent, or wiring a workflow?"). New
+  `frontend/src/app/(app)/operations/page.tsx` (534 lines) plus
+  sidebar layout updates and `messages/{en,hi}/operations.json`
+  translations.
+- **Agent inbox triage v2** (`/agents/[id]/inbox`). Multi-select with
+  shift-click range, bulk-action toolbar (approve / dismiss / mark
+  read), and full keyboard navigation (j/k row movement,
+  x = toggle-select, enter = open). Inbox detail polish adds five
+  follow-up wins (HTML email rendering via DOMPurify, sender chip,
+  read-state indicator, optimistic toggles, skeleton during refetch).
+- **Per-tab dirty state on the edit page** (`/agents/[id]/edit`).
+  Replaces the prior single `hasChanges` boolean — each of the seven
+  tabs (General / LLM / Tools / Behavior / Prompts / Escalation /
+  Email) reports its own dirty bit so users switching tabs see which
+  sections still have pending edits. Help text and the
+  system-agent-locks-non-LLM-tabs disable are part of the same pass.
+- **`useRouteGuard` hook** (`frontend/src/hooks/useRouteGuard.ts`,
+  new). Anchor-click intercept + `beforeunload` for unsaved-changes
+  prompting; companion `requestConfirm(href)` API for programmatic
+  navigations (toolbar shortcuts, form-success redirects). Wired into
+  the edit page; ready for reuse on automation builder and CRM detail
+  forms.
+- **Live-streamed executions + inbox**. React Query polling on the
+  agent detail page so executions and inbox counts refresh without a
+  manual reload. Pauses on hidden tabs (default RQ behavior); no extra
+  socket plumbing.
+- **Automation builder onboarding via template gallery**. New
+  `frontend/src/components/automations/TemplateGallery.tsx` and
+  `frontend/src/lib/automationTemplates.ts` — the automation `/new`
+  page now opens to a curated gallery (standup digest, blocker
+  escalation, sprint kickoff, etc.) instead of a blank canvas.
+
+### Accessibility + polish (Weeks 1–4)
+
+- **Modal/drawer primitives**. Migrated the last raw `<div role="dialog">`
+  surfaces (delete-agent confirm, email-disable confirm, multi-select
+  bulk confirm, automation-version pick) to `components/ui/dialog.tsx`
+  (Radix `DialogPrimitive` — focus trap, escape, restored focus on
+  close). Drawers (workflow Test Results, Execution History, Version
+  History) moved to `components/ui/sheet.tsx`. New
+  `components/ui/confirm-dialog.tsx` for the destructive-action pattern.
+- **Chat surfaces**. Markdown rendering in `MessageBubble` with safe
+  link handling, `aria-live="polite"` execution-status region in
+  workflow nodes, `prefers-reduced-motion` respected on the chat
+  thinking-indicator and the workflow canvas pan/zoom transitions.
+- **Light-theme contrast + focus-visible**. ARIA labels on every
+  icon-only button across agents/automations/inbox; `focus-visible`
+  outlines added to all interactive surfaces; light-theme contrast
+  bumps on placeholder text and disabled-state buttons.
+- **Optimistic toggles + inbox skeleton**. Enable/disable agent + mark-
+  read/unread now flip instantly with rollback on error; inbox shows
+  skeleton rows during the first fetch instead of an empty state.
+- **`lib/datetime.ts`**. Centralized relative-time + locale-aware
+  date helpers; replaced ~20 ad-hoc `Intl.DateTimeFormat` callsites.
+- **ICU plurals on counters**. "1 task" / "N tasks" etc. now driven by
+  `next-intl` ICU patterns so the Hindi locale gets correct plural
+  forms without per-callsite branching.
+- **`messages/{en,hi}` additions** — `automations`, `inbox`,
+  `insights`, `operations` namespaces (full parity between locales).
+
+### Frontend
+
+- **Per-tab dirty indicators on `agents/[id]/edit/page.tsx`**. Each
+  tab carries its own `dirtyByTab[id]` so the tab strip can dot-mark
+  which sections have unsaved edits. Form-init effect skips re-sync
+  when the user has local changes (UX-EDT-021) — a refetch from
+  background polling or another mutation won't clobber in-flight
+  typing.
+- **`auth/callback/page.tsx` + `lib/oauth.ts`**. Refactored the OAuth
+  inflight tagging into a shared `OAuthInflightTagger` component;
+  callback page no longer touches localStorage directly.
+
+### Review followups (PR #148)
+
+- **`middleware.ts`** — `AUTH_REQUIRED_PREFIXES` matched `/docs/` but
+  not bare `/docs`, leaving the docs root unprotected by the auth
+  gate. Now matches both, consistent with every other entry in the
+  list.
+- **`api/app_access.py`** — extracted `_load_template_for_workspace`
+  helper. `update_member_access` and `apply_template_to_member` had
+  inlined the identical "template belongs to this workspace (or is a
+  system template)" check; both now call the helper.
+- **`useRouteGuard.ts`** — wrapped `new URL(anchor.href, ...)` in
+  try/catch. A page with a malformed anchor href would have thrown
+  inside the captured click handler.
+- **`agents/[id]/edit/page.tsx`** — added a rationale comment next to
+  the `react-hooks/exhaustive-deps` suppression: `hasChanges` and
+  `name` are read inside the form-init effect but intentionally
+  excluded from deps to avoid re-syncing the form mid-edit.
+
+### Streaming chat + agent runtime
+
+- **SSE streaming on the agent chat surface** (`/agents/[id]/chat/...`).
+  New `AgentService.stream_message` emits tokens, tool-call markers,
+  and citations as Server-Sent Events; the frontend `useAgentChatStream`
+  hook wires them into the message bubble incrementally with an
+  optimistic placeholder, mid-stream stop, and a token-cost meter.
+  Migration `migrate_agent_message_streaming.sql` adds the supporting
+  columns on `agent_messages` (stream state, token deltas, citations).
+- **`agents/base.py` + `services/agent_service.py`** — the agent base
+  class gained a `stream()` co-routine alongside the existing
+  request/response shape; the service routes streaming-capable agents
+  through it and falls back to a single-shot completion for the rest.
+- **MessageBubble citations**. Inline numbered footnotes link back to
+  the cited tool-call output; renders even after the stream completes.
+
+### Inbox thread chain + generate-from-prompt
+
+- **Inbox thread chain**. Inbox replies are now stitched together via
+  `parent_message_id`, so the detail pane renders the full back-and-
+  forth (incoming → agent reply → reply-to-reply, etc.) instead of a
+  flat list. New `test_inbox_thread_chain.py` (316 lines) pins the
+  resolver against forked threads and missing parents.
+- **Generate workflow from prompt**. The automation `/new` page can
+  now seed a workflow from a natural-language description. New
+  `services/workflow_generator.py` calls the LLM, validates the
+  produced node graph, and hands it to the existing builder. Wired
+  into `TemplateGallery` as a "Describe your workflow" entry.
+- **Inbox unarchive** + Postmark parser fix in `api/email_webhooks.py`
+  (Postmark's `MessageStream` field was being dropped on rebound
+  events, breaking attribution for unarchived items).
+
+### Agent edit + wizard
+
+- **Defaults endpoint** (`GET /agents/defaults`) returns the system
+  prompt / tools / behavior defaults for a given agent type so the
+  wizard and edit page render preview state without hardcoding.
+  Backed by `useAgentDefaults` on the frontend.
+- **Prompt preview** on the edit page — substitutes a sample
+  `{{variable}}` payload through the system prompt and renders the
+  result inline so users see what the agent will actually see at
+  runtime.
+- **Server-side wizard drafts** (UX-DEF-003). New `agent_drafts` table
+  (`migrate_agent_drafts.sql`), `AgentDraftService`,
+  `GET/PUT/DELETE /agents/drafts` endpoints, and the `useAgentDraft`
+  hook. Replaces the localStorage-only draft that vanished on
+  cross-device switches; drafts auto-restore on wizard re-entry and
+  garbage-collect on completion.
+
+### Frontend reliability
+
+- **`lib/reportError.ts`**. Centralized error reporter — forwards to
+  Sentry when `NEXT_PUBLIC_SENTRY_DSN` is set, falls back to a
+  structured console log otherwise. `ModuleError.tsx` boundary now
+  reports through it instead of swallowing. 156-line test suite covers
+  both branches.
+- **Misc UX-close batch**: status counts on inbox tabs, accessible
+  Save button (`aria-busy` during inflight, error-region announcement
+  on failure), email-cancel resets the form to persisted values
+  instead of leaving stale local edits, NodeConfigPanel layout fix.
+
+### Tests
+
+- **~120 new vitest + pytest cases** across:
+  - `reportError.test.ts` (156 lines) — Sentry / console branches.
+  - `useAgentDraft.test.tsx` (326 lines), `useAgentChatStream.test.tsx`
+    (430 lines) — hook lifecycle, abort, error paths.
+  - `test_agent_stream_message.py` (510 lines) — five SSE flows
+    including mid-stream cancellation and tool-call interleaving.
+  - `test_agent_draft_service.py` (226 lines) — CRUD + workspace-
+    scope assertions.
+  - `test_workflow_generator.py` (233 lines) — graph validation +
+    LLM error fallback.
+  - `test_agent_cost_estimation.py` (125 lines), `test_agent_preview_prompt.py`
+    (340 lines), `test_inbox_thread_chain.py` (316 lines),
+    `test_inbox_unarchive.py` (193 lines),
+    `test_email_webhook_parse.py` (117 lines).
+
+### Review followups (agents-big-features)
+
+Post-merge audit of the streaming-chat + agent-runtime branch surfaced
+one Critical cross-workspace gap on the new SSE endpoint plus a
+cluster of Highs around partial state, citation XSS, and an SSE chunk-
+buffering blind spot. Fixed in place; tests added for each.
+
+- **Security (Critical):** `POST /workspaces/{ws}/crm/agents/{aid}/
+  conversations/{cid}/messages/stream` now calls
+  `_assert_agent_in_workspace` and rejects conversations whose
+  `workspace_id` doesn't match the URL. Previously the endpoint only
+  checked `conversation.agent_id == agent_id`, so a developer in
+  workspace A who knew a foreign workspace's (agent_id, conversation_id)
+  pair could stream user messages into that foreign conversation.
+- **Backend:** SSE stream commits the user message + execution shell
+  in a single transaction so a flush failure can't strand a user
+  message without a paired execution row. Inbox thread forward walk
+  now queries only the new frontier per round (was O(n²) on long
+  threads); capped at 50 rounds matching the backward walk. Workflow
+  generator caps generated graphs at 100 nodes / 200 edges so a runaway
+  LLM response can't spawn thousands of canvas nodes.
+- **AgentDraft persistence:** `save_draft` now uses
+  `attributes.flag_modified(...)` to force the JSONB UPDATE (previously
+  relied on assigning a new dict, which worked but was fragile under
+  in-place mutation). Documented the pattern on the model field.
+- **Frontend (chat surface):** Citations + markdown anchors now drop
+  back to plain text for non-`http(s)` schemes, blocking
+  `javascript:` / `data:` URL XSS at the source. Live token meter +
+  per-message meter + "Sources" + "Processing…" + generate-prompt
+  placeholder all flow through `useTranslations` (`messages/en/agents.json`,
+  `messages/hi/agents.json`, `messages/{en,hi}/automations.json`). Per-
+  message meter stacks under the timestamp on narrow screens. Optimistic
+  message ids use `crypto.randomUUID()` instead of `Date.now()` so two
+  sends in the same millisecond can't collide React keys.
+- **Frontend (state hardening):** `useAgentChatStream` awaits
+  `refetchQueries` then clears pending in the same tick (was
+  `invalidateQueries` + 80 ms setTimeout, which caused a one-paint
+  flicker when the refetch resolved fast). `useAgentDraft` tracks a
+  save-sequence + mountedRef so a slow in-flight save can't overwrite
+  newer state and unmount races don't trigger React's "set state on
+  unmounted component" warning. Inbox thread strip drives selection
+  through a state callback instead of `document.querySelector(...).click()`.
+- **Tests:** Added gpt-4o vs gpt-4o-mini and dated-pin regression
+  cases to `test_agent_cost_estimation.py` (the longest-prefix-wins
+  sort would silently bill the wrong rate if reversed). Added a
+  `useAgentChatStream` test that tears a frame across two stream
+  chunks (mid-JSON + across `\n\n`) to lock in the buffer-reassembly
+  behavior. 77 backend + 82 frontend tests passing.
+
+## [0.8.01] - 2026-05-19
+
+Post-review hardening of the 0.8.0 workspace-scope authz pass. Four
+parallel reviewers audited the branch and flagged five Criticals plus
+several Mediums that were missed in the original sweep; this release
+closes all of them.
+
+### Security (Critical)
+
+- **`api/sprint_tasks.py` — bulk task ops 500'd on the new authz path**.
+  `_filter_task_ids_to_workspace` ended with a stray `return sprint`
+  (undefined name), so `bulk_assign_tasks`, `bulk_update_status`, and
+  `bulk_move_tasks` raised `NameError` for every in-workspace call
+  instead of authorizing them. Removed the dead return.
+- **`api/reviews.py` — submit/finalize routes missed caller-identity
+  checks**. `submit_self_review`, `submit_manager_review`, and
+  `finalize_review` accepted any authenticated caller. Added
+  `_require_reviewee` (caller must equal `review.developer_id`) and
+  `_require_review_manager_or_admin` (caller must equal
+  `review.manager_id` or hold workspace `admin`); both return 404 to
+  avoid existence oracles.
+- **`api/dependencies.py` — story/task dependency mutations had no
+  workspace scope**. `update_story_dependency`, `delete_story_dependency`,
+  `resolve_story_dependency` and the three task-dependency twins
+  loaded by id with `db.get()` and mutated without any tenancy check.
+  Added `_load_story_dependency_authorized` and
+  `_load_task_dependency_authorized` helpers that resolve the
+  dependent resource's workspace, assert active membership, and 404
+  on mismatch. Wired into all six routes.
+- **`api/email_webhooks.py` — SES SNS Notification path skipped
+  signature verification** (WS-082). Only the `TopicArn` was checked
+  against the allowlist; the field is attacker-controlled in the body,
+  so anyone who knew or guessed an allow-listed ARN could POST forged
+  Bounce/Complaint events. Added `verify_sns_message_signature` that
+  builds the canonical AWS SNS string-to-sign, validates
+  `SigningCertURL` against the AWS SNS host pattern (no SSRF), fetches
+  the cert (cached by URL), and RSA-verifies the message envelope.
+  Supports SignatureVersion 1 (SHA-1) and 2 (SHA-256).
+- **`services/email_webhook_verify.py` — no replay window on SendGrid /
+  Mailgun verifiers** (WS-082). A captured signed payload could be
+  replayed indefinitely. Added a 300s skew check on both providers,
+  matching the mailagent internal-auth middleware.
+
+### Security (Medium)
+
+- **`services/github_task_sync_service.py` — cross-workspace
+  `[slug:task-key]` auto-link** (WS-083). `_find_aexy_task` resolved by
+  workspace slug alone, so a malicious PR body in repo X (owned by
+  workspace A) containing `[victim-workspace:42]` could create a
+  `TaskGitHubLink` row pointing at workspace B's task. The lookup now
+  requires the resolved task's workspace to have actively adopted the
+  mentioning repo (`WorkspaceRepository.is_active`).
+- **`api/tracking.py` — four POST endpoints trusted body refs**
+  (WS-084). `submit_standup`, `create_work_log`, `log_time`, and
+  `report_blocker` accepted `task_id`/`sprint_id`/`team_id` from the
+  request body without scoping; the row was stamped with the caller's
+  first team's workspace. Replaced with `_resolve_tracking_workspace`
+  which derives the workspace from the supplied refs (in
+  task → sprint → team priority), rejects bodies that mix refs across
+  workspaces, and asserts the caller is an active member of the
+  resolved workspace.
+- **`api/developer_insights.py` — non-admins received `author_email`
+  PII** (WS-085). `list_developer_commits` returned the raw email
+  field for every active workspace member. Added `_is_workspace_admin`
+  helper that gates the field on owner/admin role; non-admins receive
+  `null`.
+- **`mailagent/main.py` — empty `internal_secret` failed open in prod**
+  (WS-086). When the shared secret was missing, the middleware silently
+  passed every request through to handlers. Mailagent now raises
+  `RuntimeError` at boot when `environment in {production, staging}`
+  and the secret is empty; dev/test continue to pass through with the
+  existing warning.
+- **`auth/callback/page.tsx` — JWT lingered in URL bar and Referer**.
+  The OAuth callback hung onto `?token=…` in the address bar until the
+  next navigation. Now scrubbed via `history.replaceState` before any
+  token use, mirroring the `/p/[publicSlug]` flow.
+- **`/p/[publicSlug]/page.tsx` — public-slug login didn't sync the
+  presence cookie**. The page wrote `token` to localStorage but skipped
+  `setAuthPresenceCookie()`, reintroducing the redirect-loop class that
+  `5895c1da` had fixed for the landing page. Cookie now set inline.
+
+### Security (Low)
+
+- **`lib/authCookie.ts` — presence cookie missing `Secure`**. Added
+  `Secure` attribute on HTTPS so the flag isn't sent in cleartext if a
+  proxy ever downgrades the connection.
+- **`AnalyticsDetailsModal.tsx` — external commit links missing
+  `noopener`**. `rel="noreferrer"` only; added `noopener` for explicit
+  tabnabbing defense (modern browsers imply it, but the codebase
+  convention is to set both).
+
+### Frontend
+
+- **i18n compliance on `AnalyticsDetailsModal.tsx`**. Per CLAUDE.md's
+  rule that all user-facing strings in new components must use
+  `useTranslations()`, the modal's ~30 hardcoded English strings (tab
+  labels, table headers, loading/empty states, etc.) are now driven
+  by the new `insights.details` namespace in `messages/en` +
+  `messages/hi`. The same pass i18n'd three new strings in
+  `insights/page.tsx` (Sources / Profile / Show inactive / "still
+  loading" toast).
+
+### Tests
+
+- **`tests/unit/test_dependency_authz.py` (new)** — six cases pinning
+  the story- and task-dependency loader helpers: active member passes,
+  cross-workspace caller gets 404, missing id gets 404, removed-status
+  member is rejected.
+- **`tests/unit/test_email_webhook_verify.py`** — four SNS signature
+  tests (attacker cert URL rejected, valid sig accepted, tampered
+  payload rejected, dev-mode short-circuit) plus replay-window tests
+  for SendGrid and Mailgun. Refreshed the Mailgun happy-path fixtures
+  to use current timestamps.
+- **`tests/unit/test_github_issue_auto_link.py`** — `_adopt_repo`
+  fixture that wires `Repository` + `WorkspaceRepository` for the test
+  workspace; new `test_cross_workspace_slug_injection_is_blocked`
+  exercising the WS-083 fix, plus `test_shared_adoption_still_links`
+  pinning that shared-repo adoption still resolves correctly to the
+  workspace whose slug was used.
+
+## [0.8.0] - 2026-05-19
+
+Code review cleanup of work that originated on the long-running
+`agent-upgrade` branch (compliance/tracking/automation/assessment
+modules). Three reviewers audited the code as it currently sits on
+`main`; this release fixes the verified Critical and High findings.
+
+### Security (workspace-scope authz)
+
+- **`api/tracking.py` — Slack channel-config endpoints**. `GET /channels`,
+  `POST /channels`, `PATCH /channels/{config_id}`, `DELETE /channels/{config_id}`
+  now verify the caller is a member of the target workspace (`viewer` for
+  read, `member` for write). Without it, an authenticated user in
+  workspace A could enumerate, create, edit, or delete channel configs
+  in workspace B.
+- **`api/tracking.py` — team/sprint standup reads**.
+  `GET /standups/team/{team_id}` now fetches the team and asserts
+  workspace membership; `GET /standups/summary/{sprint_id}` does the
+  same via the sprint's team. Previously any authed user could read any
+  team or sprint's standup aggregate by guessing IDs.
+- **`api/tracking.py` — task-scoped reads**. `GET /logs/task/{task_id}`
+  and `GET /time/task/{task_id}` now fetch the task and verify the
+  caller is a member of the task's workspace before returning logs or
+  time entries.
+- **`api/tracking.py` — blocker mutations**. `PATCH /blockers/{id}/resolve`
+  and `PATCH /blockers/{id}/escalate` now require workspace
+  membership (`member` role) before allowing state transitions.
+  Previously any authed user could resolve or escalate any blocker by
+  guessing its UUID.
+- **`api/tracking.py` — `GET /blockers/active`**. Without an explicit
+  `team_id`, the endpoint was returning blockers across all
+  workspaces. It now scopes the query to workspaces the caller is a
+  member of (`WorkspaceService.list_user_workspaces`); if `team_id`
+  is supplied, it verifies workspace membership for that team first.
+- **`api/assessments.py` — workspace-scope authz across all authed
+  endpoints**. Added two helpers:
+  - `_assert_workspace_access(db, organization_id, developer_id, role)`
+    for endpoints that take an `organization_id` directly
+    (`POST /`, `GET /`, `GET /organization/{id}/metrics`).
+  - `_assert_assessment_access(db, assessment_id, developer_id, role)`
+    that fetches the assessment and asserts workspace membership,
+    returning the loaded `Assessment`.
+  Applied to: `create_assessment`, `list_assessments`, `get_assessment`,
+  `update_assessment`, `delete_assessment`, `clone_assessment`,
+  `get_wizard_status`, all five `step/N` endpoints, `list_topics`,
+  `suggest_topics`, `list_questions`, `create_question`, `update_question`,
+  `delete_question`, `generate_questions`, `list_candidates`,
+  `add_candidate`, `import_candidates`, `remove_candidate`,
+  `resend_candidate_invite`, `get_email_template`, `update_email_template`,
+  `pre_publish_check`, `publish_assessment`, `get_assessment_metrics`,
+  `get_organization_metrics`, `reevaluate_candidate`,
+  `get_candidate_details`. Public-token endpoints
+  (`/public/{public_token}/*`) are out of scope (intentionally
+  unauthenticated). Previously any authed developer could read or mutate
+  assessments in any organization by guessing UUIDs.
 
 ### Fixed
 
-- `POST /developers/me/api-tokens` returned a 307 to the trailing-slash variant; browsers drop the `Authorization` header following cross-origin redirects, so cross-subdomain token creation (aexy.io → server.aexy.io) failed. Routes now register without a trailing slash, matching the convention used elsewhere.
-- HTTPS redirects broken behind the prod nginx → backend proxy: uvicorn wasn't trusting `X-Forwarded-Proto`, so `Location` headers came back as `http://` and browsers blocked them as mixed content. Prod compose and Dockerfile now launch uvicorn with `--proxy-headers --forwarded-allow-ips=*` so slash canonicalization, auth flows, and any future redirect keep the original scheme.
+- **N+1 query in `get_team_tracking_dashboard`**
+  (`backend/src/aexy/api/tracking.py`). The per-member developer fetch
+  loop was issuing one `SELECT Developer WHERE id = ?` per team member;
+  it now batch-loads all developers in a single `IN` query and indexes
+  by id.
+- **11 automation activities silently using the 5-minute default
+  timeout**. `temporal/dispatch.py` `ACTIVITY_CONFIG` now declares:
+  `check_missed_standups`, `check_time_entry_thresholds`,
+  `check_stale_blockers`, `detect_blocker_patterns`,
+  `check_time_anomalies`, `check_standup_participation`,
+  `check_approaching_due_assignments`, `check_overdue_assignments`,
+  `check_expiring_certifications`, `check_expired_certifications`,
+  `check_bulk_compliance_rates` — each with `STANDARD_RETRY` and a
+  10-minute timeout to accommodate scheduled detection activities that
+  loop over active workspaces.
+
+### Removed
+
+- Unused imports in `backend/src/aexy/api/tracking.py`:
+  `from typing import Any` and
+  `from aexy.services.automation_service import dispatch_automation_event`
+  (dispatch is routed through `services/tracking_events.py` helpers).
+  `WorkspaceService` is now imported at module scope.
+
+### Not in scope (filed as follow-up work)
+
+- Stub trigger handler implementations for `standup.streak` and
+  `training.bulk_overdue` — need product/design input on thresholds
+  before implementing.
+- i18n migration for `NodePalette.tsx` and the reminder/tracking
+  pages — separate, larger effort that needs translator coordination.
+- Test coverage for `tracking_events.py`,
+  `tracking_compliance_config.py`, `compliance_service.py`,
+  `hiring_intelligence.py`, `assessment_service.py`.
+
+## [0.7.91] - 2026-05-19
+
+Replace manual GitHub issue/PR linking with mention-based auto-linking
+via `[workspace-slug:task-key]` in PR or issue title/body.
+
+### Added
+
+- **Issue webhook now auto-links tasks**. `api/webhooks.py` routes
+  `issues` events (opened/reopened/edited/closed) through
+  `GitHubTaskSyncService.process_issue`, which parses the issue title +
+  body for `[slug:key]` mentions and upserts a `TaskGitHubLink` row per
+  match with `is_auto_linked=True`. Works from any repo — the slug
+  resolves against `Workspace.slug`, the number against the
+  workspace-wide `task_key`.
+- **Edit re-sync**. On `pull_request.edited`/`synchronize` and
+  `issues.edited`, auto-links whose mention is no longer present in the
+  fresh body are deleted. Manual edits to the GitHub source are now the
+  way to add or remove links.
+- **`link_issue_manually` is now upsert**. If a row already exists for
+  `(task_id, repo, number)`, its cached `github_issue_title`/`state`/`url`
+  refresh when fresher values arrive (issue renamed on GitHub →
+  link metadata updates).
+- **Copy-mention chip** in the task modal showing `[slug:task_key]`
+  inline help so users know what to paste into a PR/issue body.
+
+### Removed
+
+- **Manual link POST endpoints** in both `api/sprint_tasks.py` and
+  `api/project_tasks.py`:
+  `POST /github-links/pull-requests` and `POST /github-links/issues`.
+- **Orphan search endpoints** that only powered the manual dropdowns:
+  `GET /github/pull-requests`, `GET /github/issues`,
+  `GET /{task_id}/github-links/issue-repositories` (both scopes).
+- **Manual linking UI** in `board/page.tsx` — the PR + issue
+  search dropdowns, the manual `owner/repo#123` entry, and ~300 lines
+  of supporting state/queries/mutations.
+- **Client functions** `linkPullRequest`, `linkGitHubIssue`,
+  `searchPullRequests`, `searchGitHubIssues`, and
+  `getGitHubIssueRepositoryContext` from `lib/api.ts` (sprint and team
+  scopes). `getTaskGitHubLinks` and `unlinkGitHubLink` retained.
+
+### Tests
+
+- `tests/unit/test_github_issue_auto_link.py` — process_issue creates
+  one auto-linked row per mention, case-insensitive slug match,
+  hyphens in slug, edit-then-remove drops the stale row, edit refreshes
+  cached title/state, `closed`/`reopened` refresh state without
+  pruning (only `edited` is allowed to remove mentions).
+
+## [0.7.90] - 2026-05-19
+
+Fix duplicate developer rows in team insights, plus auto-hide
+zero-contribution members.
+
+### Fixed
+
+- **Ghost dedup**: `compute_team_distribution` now takes a `member_ids`
+  list distinct from the activity-expanded `developer_ids`, so
+  `_build_developer_alias_map` can actually map ghost ids onto their
+  canonical workspace-member rows. The prior code passed the same
+  list as both args, which made the `NOT IN` filter exclude the
+  ghosts we wanted to bridge — producing two rows for "Ritesh
+  Biswas" (active vs ghost-with-personal-email) on the team insights
+  endpoint.
+- **`identity_key` fallbacks** when a developer has no
+  `GitHubConnection`:
+  1. Pull `Commit.author_github_login` (most-frequent value per
+     developer) and use it as the github login key.
+  2. Parse `<id>+<login>@users.noreply.github.com` out of the
+     developer's email. Together these collapse the two Mobashir
+     ghost rows that shared the same GitHub login but were never
+     linked to a Connection row.
+- Aliased ghost ids are now removed from the display set so
+  `_rollup_by_identity` never sees a ghost+canonical pair — fewer
+  reliances on the identity_key tie-breaker.
+
+### Added
+
+- `compute_team_distribution(..., hide_zero_contribution=False)`
+  optionally filters out members whose four counters (commits, PRs
+  merged, lines changed, reviews given) are all zero in the window.
+- `GET /workspaces/{id}/insights/team?include_inactive=false`
+  (default) — applies the filter. `?include_inactive=true` restores
+  the full roster.
+- Frontend toggle "Show inactive" on the Team Insights page
+  (`insights/page.tsx`) wired through `useTeamInsights` and the
+  generated `getTeamInsights` client.
+- Regression tests for: ghost-via-email collapse, ghost-via-commit-
+  author-github-login collapse, and zero-contribution filter.
+
+### Known limitation
+
+- An active workspace member with neither a `GitHubConnection` nor
+  any name/email overlap with their ghost rows cannot be linked
+  automatically. The three "Mobashir" rows in the original example
+  collapse from 3 → 2 (two ghosts merge), but the active member
+  `mobashir.r@bimaplan.co` stays separate until either an admin
+  links their GitHub login, or a manual "merge identities" action
+  is added.
+
+## [0.7.89] - 2026-05-19
+
+Post-review hardening for the 0.7.82-0.7.88 workspace-scope leak audit.
+The fixes were correct but a code review surfaced residual fail-open
+edges and missing test coverage; this release closes those.
+
+### Security
+
+- **Webhook signature verification is now fail-closed by default**
+  (`services/email_webhook_verify.py`). A new
+  `webhooks_require_signing` setting (default `True`) replaces the
+  prior behavior where each provider returned `True` when its env var
+  was missing. SES, SendGrid, Mailgun, and Postmark all reject events
+  outright when the required key isn't configured. Local development
+  can flip the flag off to fall back to the old accept-with-warning
+  behavior; production must keep the default.
+- **Mailagent path-bypass closed** (`mailagent/middleware.py:44`).
+  `_is_public_path` previously OR'd in `path.startswith(p)` (no
+  trailing slash), so `/healthcheck-evil` could skip HMAC auth on the
+  way to a route named with a public-prefix prefix. Tightened to
+  exact-match OR `startswith(p + "/")`.
+- **OAuth interceptor catches keyboard and programmatic navigation**
+  (`frontend/src/lib/oauth.ts`). The 0.7.85 implementation only
+  listened on `mousedown`, breaking OAuth login for keyboard users
+  (Tab + Enter on a focused login link) and any JS-driven navigation
+  (`window.location.assign("/auth/github/login")`). Now also installs
+  a capture-phase `keydown` listener and patches
+  `window.location.{assign,replace}` + the `href` setter so the
+  inflight marker is set on every navigation vector.
+- **Public booking enumeration rate-limit applied to every GET**
+  (`api/booking/public.py`). The 0.7.86 fix only guarded the workspace
+  lookup endpoint; the teams/team-by-id/event-type/slots endpoints
+  inherit the same throttle now via router-level `Depends`.
+- **Frame-ancestors regex tightened** (`frontend/next.config.js`).
+  Negative-lookahead now anchored to `embed/` so `/embedded-*` paths
+  still receive `X-Frame-Options: DENY` and
+  `frame-ancestors 'none'` instead of falling through both rules.
+
+### Added
+
+- `core/workspace_auth.py` — centralizes the
+  `assert_active_member(db, workspace_id, developer_id)` and
+  `assert_resource_in_workspace(db, model, id, workspace_id)`
+  helpers used across the 0.7.82-0.7.88 fixes. Call sites in
+  `app_access.py` and `manager_learning.py` switched to the helpers;
+  remaining inline copies will migrate opportunistically.
+- Regression tests:
+  - `backend/tests/unit/test_email_webhook_verify.py` — pins the
+    fail-closed default for all four providers and the SubscribeURL
+    SSRF guard.
+  - `backend/tests/unit/test_workspace_auth.py` — pins membership
+    checks (active vs pending/suspended/removed) and the
+    resource-in-workspace mismatch case.
+  - `mailagent/tests/test_internal_auth_middleware.py` — pins the
+    public-path matcher against prefix-bypass paths and the HMAC
+    sign/verify wire-format round-trip between backend and mailagent.
+  - `frontend/src/test/oauth.test.ts` — pins `safeInternalPath`
+    against open-redirect inputs and round-trips
+    `stashPostLoginRedirect`.
+
+### Changed
+
+- Middleware redirect to `/?next=...` is now consumed.
+  `frontend/src/app/page.tsx` stashes the (validated) `next` path in
+  `sessionStorage` for the OAuth flow, and `useSetToken` honours it
+  after onboarding completes. Open-redirect protection enforced by
+  `safeInternalPath`.
+
+## [0.7.88] - 2026-05-19
+
+Closes the last 9 `suspect` rows in the workspace-scope leak tracker.
+Five close as fixed with concrete patches; four close as verified-`ok`
+or covered by prior fixes. Tracker is now zero open across every
+severity.
+
+### Security
+
+- **App access** (WS-053) — `update_member_access` and
+  `apply_template_to_member` (`api/app_access.py`) now verify the
+  target `developer_id` is an active `WorkspaceMember` of the route's
+  workspace, and that the `applied_template_id` belongs to that
+  workspace (or is a system template with `workspace_id` NULL).
+- **Manager learning** (WS-055) — `create_learning_goal`
+  (`api/manager_learning.py`) verifies `data.developer_id` is an
+  active `WorkspaceMember` of `current_workspace_id` before stamping
+  a goal. Approval/budget routes follow the existing-goal chain so
+  they inherit the same scope.
+- **Custom reports** (WS-049) — `ReportBuilderService.list_reports`
+  no longer surfaces `is_public=True` reports cross-tenant in the
+  default listing. Public reports now require an explicit matching
+  `organization_id` filter to appear. The reports route doesn't
+  pass `organization_id` today, so the default listing returns the
+  caller's own reports only.
+- **Tracking helper** (WS-020) — `get_developer_team`
+  (`api/tracking.py`) now accepts an optional `workspace_id` and
+  constrains the team join via `Team.workspace_id`. Existing call
+  sites keep historical "first team found" semantics; workspace-
+  prefixed routes can opt in.
+
+### Documentation
+
+- Tracker rows WS-015 (exports), WS-016 (code insights), WS-017
+  (sprint analytics), WS-018 (public renderers), WS-019 (learning
+  services) closed as verified-`ok` or covered by prior fixes
+  (WS-009, WS-039, WS-041, WS-051, WS-055, WS-060, WS-061, WS-066,
+  WS-067, WS-068, WS-074). Each row now records the evidence used to
+  close it.
+
+## [0.7.87] - 2026-05-19
+
+Closes the seven `Medium`/`Low` confirmed rows in the workspace-scope
+leak tracker (WS-013, WS-065, WS-069, WS-070, WS-075, WS-082, WS-083).
+
+### Security
+
+- **Leave approver lookup** (WS-013) —
+  `LeaveRequestService._find_approver` now joins `Team` and constrains
+  `Team.workspace_id == workspace_id`, so a developer's team lead in
+  another workspace can no longer become the approver on this
+  workspace's leave requests.
+- **Roadmap requests** (WS-065) — added `_check_roadmap_rate_limit`
+  (Redis sliding window: 10 creates / 50 votes per developer per
+  hour) on `public_projects.create_roadmap_request` and
+  `vote_roadmap_request`. Caps the spam vector while keeping the
+  public roadmap open to any authenticated developer.
+- **One-click unsubscribe** (WS-069) — `/u/{token}` now serves a
+  confirmation page on GET and only mutates subscriber state on POST.
+  Email prefetchers and link-checkers no longer trigger unsubscribes
+  while mail clients implementing RFC 8058's `List-Unsubscribe-Post`
+  still work.
+- **Email click tracker** (WS-070) — `_record_click_event` resolves
+  the `?r=<recipient_id>` query parameter and drops the attribution
+  if `recipient.campaign_id != link.campaign_id`. The click is still
+  recorded at the link level; only the forged per-recipient
+  attribution is rejected.
+- **Webhook rate limits** (WS-082) — `_enforce_webhook_rate_limit`
+  (Redis sliding window) applied to `/webhooks/github` (600 per IP
+  per minute) and `/webhooks/automations/{id}/trigger` (60 per
+  automation per minute). Caps Temporal workflow / LLM token spam.
+- **Webhook source-IP capture** (WS-083) —
+  `/webhooks/automations/{id}/trigger` now records `source_ip` via
+  the shared `get_client_ip` helper instead of `request.client.host`,
+  so the captured IP honours `X-Forwarded-For` behind a load
+  balancer.
+- **`(app)/layout.tsx`** (WS-075) — adds `queryClient.clear()` before
+  the `isResolved && !isAuthenticated` redirect fires, eliminating
+  the brief window during a cross-tab logout where ghost-cached
+  React Query workspace data could be visible. The workspace-scoped
+  providers (`ChatWebSocketProvider`, `WorkspaceSearchPalette`,
+  `FloatingChatWidget`) were already gated on
+  `isResolved && isAuthenticated`.
+
+## [0.7.86] - 2026-05-19
+
+Closes the remaining `High` rows in the workspace-scope leak tracker
+(WS-060, WS-061, WS-067, WS-068) plus seven related Medium/Low rows on
+the public/embed surface. Tracker now has zero open `Critical` or `High`
+items.
+
+### Security
+
+- **Public booking surface** (`booking/public.py`) —
+  `get_workspace_teams`, `get_team_info`, and the booking confirmation
+  response no longer leak member emails. Only `id`/`name`/`avatar_url`
+  is exposed. A new Redis-backed per-IP rate limit (30/min) gates
+  `GET /public/book/{workspace_slug}` to make slug enumeration costly.
+  Closes WS-060, WS-064.
+- **Public project surface** (`public_projects.py`) — added
+  `_project_team_ids` helper. Backlog, board, stories, goals, roadmap,
+  sprints, and timeline endpoints now intersect with `ProjectTeam` /
+  `GoalProject` so a public project never leaks data from the other
+  projects in the same workspace. `_fetch_sprints_with_stats` accepts
+  a `team_ids` parameter; all callers now pass it. No schema migration
+  required. Closes WS-061.
+- **Calendar OAuth** (`booking/calendars.py`) — `start_oauth` signs
+  `settings.frontend_url` into state instead of the request `Origin`
+  header. Callback always redirects to `settings.frontend_url`,
+  ignoring any legacy signed value. Open-redirect via OAuth state is
+  closed. Closes WS-063.
+- **Booking webhook admin CRUD** (`booking/webhooks.py`) — added
+  `_require_workspace_admin` helper applied to every route
+  (list/create/get/secret/update/delete/test). An authenticated user
+  from workspace A can no longer read/modify webhooks (or their HMAC
+  secrets) for workspace B. Closes WS-062.
+- **Public table share links** (`public_tables.py`,
+  `models/crm.py`) — added `TableShareLink.allowed_origins` column
+  (migration `backend/scripts/migrate_table_share_link_allowed_origins.
+  sql`) plus `_origin_matches` helper. Every `/public/tables/{token}*`
+  route now rejects requests whose `Origin` header isn't in the link's
+  allowlist (NULL/empty preserves legacy behaviour). Closes WS-066,
+  WS-074.
+- **Assessment public-take** (`assessment_take.py`) —
+  `get_assessment_by_public_token_or_id` no longer accepts the
+  assessment UUID as a fallback for the public token; only
+  `public_token` matches. Candidate creation in `start_assessment`
+  goes through a Redis sliding-window rate limit
+  (`_check_candidate_create_rate_limit`): 5 candidates per IP per hour
+  and 50 per assessment per hour. Email-verification flow remains
+  backlog. Closes WS-067 fully and WS-068 partial.
+- **RSVP** (`booking/booking_service.py`) — `respond_to_rsvp` is now
+  single-shot: refuses to process an attendee that already has
+  `responded_at` set, and rotates `response_token` after the first
+  use. A leaked email link can no longer be replayed to flip the
+  response later. Closes WS-076.
+
+## [0.7.85] - 2026-05-19
+
+Closes the remaining four `Critical` and most of the `High` rows in the
+workspace-scope leak tracker: frontend OAuth + framing hardening,
+mailagent isolation, automation webhook signing, and per-provider email
+webhook signature verification.
+
+### Security
+
+- **Automation webhook HMAC** (WS-056) — `POST /webhooks/automations/
+  {id}/trigger` now requires `X-Aexy-Signature: sha256=<hex>` over the
+  raw body, verified with a per-automation HMAC secret derived as
+  `HMAC(settings.secret_key, "automation:" + automation_id)`. Lets us
+  ship signature verification without a `webhook_secret` column
+  migration on `CRMAutomation`; the UI surfaces this derived value as
+  the automation's webhook secret. `record_id` is now constrained to
+  `CRMRecord.workspace_id == automation.workspace_id` before loading.
+- **Email provider webhooks** (WS-057, WS-058, WS-081) — new
+  `services/email_webhook_verify.py` implements:
+  - SendGrid: ECDSA over `timestamp + body` against the configured
+    public key (`X-Twilio-Email-Event-Webhook-Signature`).
+  - Mailgun: HMAC over `timestamp + token` with the signing key.
+  - Postmark: HTTP Basic Auth against the configured `user:pass`.
+  - SES (via SNS): topic-ARN allowlist plus a hostname check on the
+    SNS `SubscribeURL` that restricts auto-confirmation to
+    `sns.<region>.amazonaws.com` (fixes the prior blind-SSRF).
+  Each provider handler now resolves the workspace from the
+  signature-verified sender via `SendingDomain.domain` lookup first,
+  and only falls back to the legacy `message_id` lookup when no
+  matching sending domain exists. New settings:
+  `sendgrid_webhook_public_key`, `mailgun_webhook_signing_key`,
+  `postmark_webhook_basic_auth`, `ses_sns_topic_arn_allowlist`.
+- **Mailagent zero-auth** (WS-077, WS-078, WS-079, WS-080) — new
+  `mailagent/middleware.py` `InternalAuthMiddleware` requires
+  `X-Mailagent-Signature: HMAC-SHA256(internal_secret, timestamp + "." +
+  body)` on every non-public route with a ±5min replay window. The
+  Aexy backend's `mailagent_client._request` signs every outbound call
+  when `settings.mailagent_signing_secret` is configured. CORS now
+  only mounts when `cors_allowed_origins` is set (default empty —
+  server-to-server only), and `allow_credentials` is False. `/send/
+  email` validates `from_address.domain` against the verified
+  `mailagent_domains` catalog and strips arbitrary headers down to a
+  whitelist of threading/unsubscribe ones. Per-workspace
+  `EmailProvider` isolation (full WS-079) is parked as a backlog
+  item — the unauthenticated-access vector is now closed.
+- **Frontend OAuth callback** (WS-071b) — `/auth/callback` now calls
+  `consumeOAuthInflight()` and rejects the URL token (redirects to
+  `/?error=oauth_state_missing`) when the marker isn't present. A new
+  document-level `OAuthInflightTagger` (mounted in `providers.tsx`)
+  watches mousedown events for any `<a href>` matching
+  `/auth/<provider>/(login|connect|connect-crm)` and sets the marker
+  just before navigation. Catches the inline anchor login buttons in
+  `app/page.tsx` and `LandingHeader.tsx` without modifying every
+  callsite. The matching `/p/[publicSlug]` handler (WS-071) is
+  refactored to use the same shared `lib/oauth.ts` helper.
+- **Frontend middleware auth gate** (WS-072) — `middleware.ts` now
+  redirects auth-required path prefixes to `/?next=<path>` when the
+  `aexy_authed` presence cookie is absent. The cookie is mirrored from
+  `localStorage["token"]` by `useAuth` on mount and at
+  `setToken`/`logout`. The JWT itself remains in localStorage and is
+  still validated by the API; the cookie just prevents the SSR app
+  shell from leaking placeholders to logged-out users.
+- **Frame-ancestors / clickjacking** (WS-073) — `next.config.js` now
+  configures `headers()`: `X-Frame-Options: DENY` + CSP
+  `frame-ancestors 'none'` everywhere except `/embed/*` (which gets
+  `frame-ancestors *` until per-link origin allowlisting moves to the
+  API side under WS-074). Also adds `Referrer-Policy:
+  strict-origin-when-cross-origin` and `X-Content-Type-Options:
+  nosniff` site-wide.
+
+## [0.7.84] - 2026-05-19
+
+Closes 24 `High` and `Medium` ID-forgery rows in the workspace-scope leak
+tracker (WS-010..014, WS-027..041, WS-044..047, WS-050..052, WS-054).
+Each fix follows the same shape: load the referenced resource by id and
+assert its `workspace_id` matches the route's workspace before delegating
+to the service.
+
+### Security
+
+- **CRM notes & activities** (`crm.py`) — note CRUD and per-record
+  activity list now verify `CRMRecord.workspace_id == workspace_id`
+  before exposing sub-resources. Stops `POST /workspaces/A/crm/records/
+  <B_record_id>/notes`. Closes WS-027, WS-028.
+- **Data tables / forms** (`tables.py`, `forms.py`) — `list_fields`
+  now 404s on cross-workspace tables; `delete_field` and
+  `reorder_fields` verify form-in-workspace and field-in-form before
+  mutating. Closes WS-029, WS-030.
+- **AI agents** (`agents.py`, `agent_policies.py`,
+  `automation_agents.py`) — added `_assert_agent_in_workspace` helper
+  applied to all inbox actions (get/reply/escalate/archive/process),
+  routing-rule delete, agent-policy create, and automation-agent
+  trigger config. Routing-rule delete additionally verifies the rule
+  belongs to the agent. Closes WS-031..034.
+- **Goals / Epics / Stories / Releases / Sprint Tasks** — every
+  cross-resource link operation now verifies the target shares the
+  workspace: `link_project`, `link_epic`, `add_tasks_to_epic`,
+  `add_tasks_to_story`, `add_sprint_to_release`,
+  `add_stories_to_release`, and sprint-task bulk_assign/status/move.
+  Sprint-task `bulk_move` also requires the target sprint to share
+  the workspace. The `get_sprint_and_check_permission` helper now
+  returns the sprint object so call-sites can scope queries to it.
+  Closes WS-035..039.
+- **On-call** (`oncall.py`) — `verify_workspace_access` now accepts
+  `team_id` and asserts `Team.workspace_id == workspace_id`. All call
+  sites updated. Closes WS-040.
+- **Sprints by team** (`sprints.py`) — `list_sprints` and
+  `get_active_sprint` verify `Team.workspace_id == workspace_id`.
+  Closes WS-041.
+- **Team calendar** (`team_calendar.py`) — three GET endpoints now
+  require workspace viewer-role membership and (when `team_id` is
+  supplied) verify the team's workspace. Closes WS-010.
+- **Tracking team dashboard** (`tracking.py`) —
+  `get_team_tracking_dashboard` now resolves the team's workspace and
+  requires caller viewer-role before reading standups/blockers/time
+  logs. Closes WS-011.
+- **Dependency APIs** (`dependencies.py`) — added `_require_member_of`
+  helper. Caller must be a member of the dependent story/task's
+  workspace before creating or listing dependencies. Also fixed a
+  pre-existing `session.add(...)` NameError on both `create_story_
+  dependency` and `create_task_dependency`. Closes WS-012.
+- **Chat** (`chat_service.py`, `chat.py`) — `update_message` and
+  `delete_message` now accept `workspace_id` and constrain the lookup
+  via a `ChatChannel.workspace_id` join. A sender who is a member of
+  multiple workspaces can no longer edit a message in workspace B by
+  hitting workspace A's route. Closes WS-014.
+- **Leave management** (`leave.py`) — added generic
+  `_assert_resource_in_workspace` helper. Applied to update/delete of
+  `LeaveType` (admin-only), `LeavePolicy` (admin-only), `Holiday`
+  (admin-only), and leave-request approve/reject/cancel/withdraw.
+  `get_developer_balance` requires admin and verifies target is a
+  workspace member; `get_team_balances` verifies `Team.workspace_id`.
+  Closes WS-044..047.
+- **Google email-to-record link** (`google_integration.py`) —
+  `link_email_to_record` now verifies the CRM record belongs to the
+  caller's workspace before inserting the link. Closes WS-050.
+- **Entity activity / comments** (`entity_activity.py`) — added
+  `_entity_model` mapping plus `_assert_entity_in_workspace` helper
+  applied to both `create_activity` and `add_comment`. Validates the
+  10 most common workspace-scoped entity types (task/story/epic/
+  release/goal/crm_record/project/sprint/form/leave_request);
+  remaining types continue to be stamped pending follow-up. Closes
+  WS-051 (partial — see helper note).
+- **Reminders** (`reminders.py`) — control-owner update/delete and
+  domain-team-mapping delete now verify the target's `workspace_id`
+  matches the route. Closes WS-052.
+- **Planning poker** (`planning_poker.py`) —
+  `get_poker_session_state` and the WebSocket entrypoint now resolve
+  the sprint and require viewer-role membership of
+  `sprint.workspace_id`. WebSocket rejects with 4003/4004 on miss.
+  Closes WS-054.
+
+## [0.7.83] - 2026-05-19
+
+Continues the workspace-scope leak audit by closing four more `Critical`
+rows from the tracker: three legacy unauthenticated APIs and the GitHub
+webhook fail-open.
+
+### Security
+
+- Legacy analytics API (`/analytics/*`) — every endpoint now binds
+  `current_user_id` (was discarded as `_`) and runs each request's
+  `developer_ids` (or path `developer_id`) through a
+  `_require_developers_visible` check that requires every target to
+  share an active workspace with the caller. Rejects (403) the whole
+  request rather than silently dropping invisible developers. Closes
+  WS-007.
+- Hiring intelligence API (`/hiring/*` section 1) — added
+  `get_current_developer` to every route in the unauth section
+  (team-gaps, bus-factor, roadmap-skills, requirements list/create/get
+  /jd/rubric/scorecard/status). Helpers `_resolve_team_workspace_or_403`,
+  `_require_developers_visible`, `_require_requirement_workspace_member`
+  enforce workspace membership for the supplied `team_id` /
+  `organization_id` / `requirement_id`. JD generation, rubric
+  generation, requirement create/status update now require workspace
+  admin role. Closes WS-008.
+- Learning paths API (`/learning/*`) — all 16 endpoints require
+  authentication. Personal endpoints (list paths, generate path,
+  stretch tasks) require the caller to be the target developer or
+  hold admin role in a workspace the developer is a member of.
+  Path-scoped endpoints (get/regenerate/progress/milestones/activities
+  /recommended courses) use `_require_path_access` to resolve owner
+  via the path itself. Pause/resume/abandon are owner-only.
+  Team-scoped overview and recommendations require active membership
+  in the team's workspace. Closes WS-009.
+- GitHub webhook (`/webhooks/github`) — fail-closed when a webhook
+  secret is configured: the `X-Hub-Signature-256` header is now
+  mandatory (401 if missing) and verified. When no secret is
+  configured the route returns 503 unless `settings.debug` is True;
+  prevents an empty/typoed env-var from turning ingestion into an
+  open endpoint. Closes WS-059.
+
+## [0.7.82] - 2026-05-19
+
+This release closes nine `Critical` authentication-bypass issues uncovered
+by a platform-wide workspace-scope leak audit. A third pass added 28 new
+tracker rows (WS-056..WS-083) covering the frontend, public/embed
+surfaces, mailagent, and webhook ingress, with one same-day fix applied
+to a frontend session-hijack vector.
+
+### Security
+
+- Notifications API (`/notifications/*`) now binds the developer
+  identity to the JWT via `Depends(get_current_developer_id)` on every
+  one of its 19 endpoints. The previous `developer_id: str = Query(...)`
+  parameter (used as authentication by every list/preference/push/admin
+  route) is removed. Closes WS-042.
+- Slack integration (`/slack/*`) — every admin-surface route now
+  requires authentication and verifies the caller is an active
+  owner/admin of the integration's workspace via a shared
+  `require_integration_admin` helper. OAuth `/install` and `/connect`
+  derive the installer id from the current user, not a query
+  parameter. The signed webhook routes (`/commands`, `/events`,
+  `/interactions`) and the OAuth `/callback` remain public as
+  intended. Closes WS-043.
+- Reviews API (`/reviews/*`) — the entire surface (~28 endpoints
+  covering cycles, individual reviews, work goals, peer requests,
+  contribution summaries) now requires `Depends(get_current_developer)`
+  and enforces resource-appropriate authorization: cycle CRUD requires
+  workspace admin; individual-review reads require reviewee / manager
+  / peer-reviewer / workspace-admin; goal edits require ownership; peer
+  request actions require the actual party. Closes WS-021 through
+  WS-026.
+- Predictive analytics (`/predictions/*`) now binds `current_user_id`
+  (was discarded as `_`) and requires the caller to share an
+  active workspace with the target developer at admin role for
+  attrition / burnout / trajectory / insights endpoints. Team-health
+  POST verifies admin permission in the supplied `team_id`'s
+  workspace, or falls back to per-developer visibility. Closes WS-048.
+- Frontend public project page (`/p/[publicSlug]`) no longer silently
+  writes a URL `?token=` query parameter into `localStorage["token"]`.
+  Token consumption now requires a one-shot `oauthInflight`
+  sessionStorage marker set by the page's own OAuth login button
+  immediately before navigating to the provider. Without that marker
+  the token is stripped from the URL and discarded. Closes WS-071; the
+  residual `/auth/callback` variant is tracked as WS-071b.
+
+### Documentation
+
+- Updated `docs/workspace-scope-leak-tracker.md` with 28 new findings
+  (WS-056..WS-083) covering: cross-workspace CRMRecord pumping through
+  the unauthenticated automation webhook (WS-056), every email
+  provider webhook lacking signature verification (WS-057), an SSRF
+  in the SES `SubscribeURL` auto-confirm flow (WS-058), GitHub
+  webhook fail-open when no secret configured (WS-059), public
+  project endpoints returning entire workspace's data rather than
+  project-scoped data (WS-061), assessment public-token bypass
+  (WS-067), Candidate fan-out without verification (WS-068),
+  mailagent's zero-auth admin surface (WS-077), and cross-tenant
+  event injection through `message_id` lookup (WS-081). Each existing
+  fixed row was relabelled with file:line evidence pointing at the
+  patch.
+
+## [0.7.81] - 2026-05-19
+
+This release hardens analytics authorization, scopes repository insights
+strictly to adopted workspace repos, and adds an evidence drill-down on
+the team insights page.
+
+### Added
+
+- Added an `AnalyticsDetailsModal` on the team insights page with
+  Summary / Sources / Commits tabs surfacing the rows behind each
+  aggregate. A workspace-admin-only Raw tab exposes the underlying
+  JSON for debugging.
+- Added `commits_synced`, `prs_synced`, `reviews_synced` to the
+  workspace repository response, overlayed from the adopter's
+  `DeveloperRepository` row so the catalog and analytics agree on sync
+  state during the sync-pipeline migration.
+
+### Changed
+
+- Repository insights now intersect a workspace member's commits and PRs
+  against the workspace's adopted-repo allow-list, so a member's
+  personal or open-source contributions no longer leak into team-level
+  insights.
+- Team insights now refuse requests from non-active workspace members.
+  Removed and suspended members keep their historical attribution but
+  cannot keep calling analytics endpoints.
+- Project and sprint PR search and the GitHub task sync explicitly scope
+  by `WorkspaceRepository.workspace_id`, making the cross-workspace
+  guarantee a query invariant instead of relying on data invariants.
+
+### Security
+
+- Closed six unauthenticated reads in `/intelligence/team/{workspace_id}`
+  endpoints (burnout, expertise, collaboration, collaboration graph,
+  complexity, technology) that previously returned data when the caller
+  was not a workspace member.
+- Gated the analytics modal Raw tab behind workspace admin so commit
+  author emails are not exposed to non-admin viewers.
+- Workspace-member-based authorization now uniformly requires active
+  membership. A teammate marked as "left" keeps their historical
+  attribution but can no longer read workspace notification settings,
+  AI code insights, role-gated resources via `is_owner`, billing
+  fallback workspaces, or per-app permission paths. Affects
+  `notifications.py`, `code_insights.py`, `workspace_service.is_owner`,
+  `billing.py` workspace selection, and `app_access_service` member
+  lookup (which protects four downstream config callsites).
+
+### Fixed
+
+- Fixed a `NameError` in the project PR search endpoint where the team
+  variable was bound in the wrong function.
+
+## [0.7.80] - 2026-05-19
+
+This release improves developer identity handling in insights and adds
+soft member offboarding for workspaces.
+
+### Added
+
+- Added a developer ghost dedupe utility for merging name-variant ghost
+  contributors into canonical workspace members after safe dry-run review.
+- Added workspace member status toggles so admins can mark teammates as
+  left and restore them later without deleting membership history.
+- Added member identity metadata to team insights responses, including
+  email, GitHub login, avatar, identity key, and membership status.
+
+### Changed
+
+- Team insights now roll up duplicate contributor rows by identity and
+  compute per-member averages from the rolled-up contributor set.
+- The compare page now deduplicates remaining identity twins, supports
+  search across identity fields, and hides past or external contributors
+  behind explicit toggles.
+- Organization settings can show past members and sorts removed members
+  below active teammates.
+
+## [0.7.79] - 2026-05-18
+
+This release improves the employee-facing review experience and reuses
+the peer-reviewer invitation flow across manager and self-nomination
+surfaces.
+
+### Added
+
+- Added `/reviews/my-reviews/[reviewId]` so employees can open their own
+  review, submit self-review notes, nominate peer reviewers when allowed,
+  track peer-review request status, and acknowledge completed manager
+  reviews.
+- Added a shared `InvitePeerReviewersModal` that supports both manager
+  assignment and employee self-nomination modes while preventing duplicate
+  active reviewer invites.
+- Added direct “Open your review” CTAs from the reviews dashboard and
+  review cycle detail page when the current user is enrolled in the
+  active cycle.
+
+### Changed
+
+- Replaced the route-local peer reviewer assignment modal with the shared
+  review component.
+- Refined review page copy and routing so participants land on their own
+  actionable review surface instead of the admin-oriented cycle view.
+
+## [0.7.78] - 2026-05-18
+
+This release resolves frontend TypeScript drift across app surfaces and
+centralizes repeated marketing-page icon tuple types.
+
+### Added
+
+- Added shared landing-page marketing types for icon rows and capability
+  cards so AI Company OS, AI Agents, CRM, and GTM Intelligence pages can
+  reuse one typed tuple shape.
+
+### Changed
+
+- Updated frontend API types to match current backend response shapes for
+  workspaces, plans, reviews, OKRs, campaigns, tables, agents, GTM,
+  planning poker, chat, and analytics payloads.
+- Adjusted React 19 ref and JSX namespace usage, Recharts formatter
+  signatures, cloneElement icon typing, and fixture annotations so
+  TypeScript can validate without local casts.
+- Removed stale onboarding use of the removed repository-enable API and
+  aligned sprint backlog deletion with the existing archive task action.
+
+### Fixed
+
+- Fixed TypeScript errors across chat, reminders, docs, CRM/tables,
+  onboarding, sprint, GTM, insights, e2e fixtures, and marketing pages.
+
+## [0.7.77] - 2026-05-18
+
+This release improves performance review workflows with peer-review
+detail pages, manager assignment tools, phase controls, and automated
+deadline reminders.
+
+### Added
+
+- Added peer-review request detail pages where reviewers can accept,
+  decline, and submit focused feedback from a notification link.
+- Added manager peer-reviewer assignment UI on individual review pages.
+- Added review-cycle activation and deadline-reminder notification types
+  with templates and delivery helpers.
+- Added a daily Temporal deadline sweep for T-7, T-3, and T-1 review
+  reminders, plus a migration to track sent reminders per cycle.
+
+### Changed
+
+- Review cycle list and detail pages now expose activate and advance-phase
+  actions with refreshed table/menu behavior.
+- Review cycle activation now notifies enrolled participants when the
+  cycle opens.
+
+## [0.7.76] - 2026-05-18
+
+This release makes AI token usage visible and billable at the workspace
+level, and adds raw commit detail behind developer insights.
+
+### Added
+
+- Added workspace-level month-to-date LLM counters, provider breakdowns,
+  overage cost tracking, and an idempotent migration for the new workspace
+  usage columns.
+- Added `GET /workspaces/{workspace_id}/llm-usage` so any workspace
+  member can inspect current AI token consumption and reset timing.
+- Added workspace AI usage cards to billing and insights settings.
+- Added a developer commits endpoint and table so developer insights can
+  show the underlying synced commits behind aggregate metrics.
+
+### Changed
+
+- AI analysis activities now roll commit, PR, and review token usage into
+  every workspace that has adopted the analyzed repository.
+- Billing usage now reads workspace token counters when the caller belongs
+  to a workspace, while preserving legacy developer counters as fallback.
+
+## [0.7.75] - 2026-05-17
+
+This release tightens the AI insights experience after the initial
+code-insights rollout, with better contributor-claim flows, more resilient
+LLM execution, and clearer loading states.
+
+### Added
+
+- Added an auto-detecting claim banner on insights pages so developers can
+  reclaim orphaned GitHub commit, PR, and review activity without leaving
+  the context where missing activity is visible.
+- Added shared code-insight card skeletons to keep digest and repository
+  health panels stable while AI snapshots load.
+- Added identity-page success messaging and richer claim metrics for
+  commits, PRs, and reviews.
+
+### Changed
+
+- Expanded ghost contributor matching to include GitHub no-reply email
+  attribution, not only email-null contributor rows.
+- Wrapped commit, PR, and review AI analysis calls with inline
+  rate-limit waits so Temporal activities are less likely to burn retries
+  during LLM concurrency spikes.
+- Increased DeepSeek read timeouts for long-tail completions while keeping
+  connection failures fast.
+- Refined AI digest cards and insights pages with improved empty/loading
+  states and contributor-claim entry points.
+
+## [0.7.74] - 2026-05-17
+
+AI code insights now run across GitHub commits, pull requests, reviews,
+and sprint task links, with workspace controls for enabling analysis and
+new UI surfaces for reading the results.
+
+### Added
+
+#### AI code insights
+- Added code-insight API endpoints for commit, pull request, review,
+  similar-PR, reviewer-suggestion, task-PR alignment, and snapshot
+  retrieval workflows.
+- Added Temporal activities and schedules for artifact analysis, weekly
+  developer digests, repository health summaries, active PR refreshes,
+  task-to-PR alignment, and performance-review summaries.
+- Added LLM analysis cache, deterministic security scanning, PR
+  embeddings, AI settings, and migration scripts for the new storage
+  columns and snapshot tables.
+
+#### Product surfaces
+- Added frontend code-insight hooks, API client helpers, localized
+  messages, and cards/panels for AI summaries in developer, repository,
+  review, sprint board, and settings pages.
+- Added identity settings messaging and navigation surfaces for the
+  organization/settings area.
+
+### Changed
+
+- GitHub sync now enriches commits and PRs with deterministic metadata,
+  supports branch-aware commit collection, and fans out AI analysis after
+  repository sync.
+- Developer identity handling can claim and merge ghost contributor
+  activity into the authenticated GitHub developer profile.
+- Coverage artifacts are ignored so regenerated test output stays out of
+  normal commits.
+
+## [0.7.73] - 2026-05-12
+
+Tasks now have a copyable per-workspace identifier and a short
+shareable link. Format is `[{workspace_slug}:{task_key}]` (e.g.
+`[aexy:42]`); the bracketed form doubles as an auto-link token in
+GitHub PR/issue titles. The kanban task card surfaces two icon-only
+copy actions on hover — full link / full identifier shown on hover,
+copied on click.
+
+### Added
+
+#### Shareable task identifiers
+A new monotonic per-workspace counter assigns a `task_key` to every
+new task. Combined with `workspace.slug` it forms the displayed
+identifier `[slug:N]`, rendered as a subtle monospace prefix on the
+kanban card title and used as the body of two new copy actions in
+the card's hover quick-actions bar. Existing tasks are backfilled
+in `created_at` order per workspace.
+
+- New columns: `sprint_tasks.task_key` (int, unique per workspace)
+  and `workspaces.next_task_key` (counter). Migration
+  `migrate_task_keys.sql` adds them, backfills existing tasks, and
+  seeds each workspace counter to `MAX(task_key) + 1`.
+- Atomic assignment via a SQLAlchemy `before_insert` event on
+  `SprintTask` — one `UPDATE ... RETURNING` consumes the next key
+  and serializes concurrent inserts. Covers all task-creation paths
+  (manual, GitHub import, Jira, Linear, workflows, templates,
+  planning poker) without touching their call sites.
+- `SprintTaskResponse` exposes `task_key`, `workspace_slug`,
+  `identifier`, and `public_url` so the frontend can render and
+  copy without recomposing the string.
+
+#### Public short-link route
+A short URL at `/t/{workspace_slug}/{task_key}` resolves to the
+sprint kanban for the task, with the task drawer auto-opened.
+
+- New backend endpoint `GET /api/v1/tasks/by-key/{slug}/{key}`
+  returns the task UUID plus the sprint and project IDs needed to
+  build the redirect. Auth-gated on workspace membership.
+- New frontend route `frontend/src/app/(app)/t/[workspaceSlug]/[taskKey]/page.tsx`
+  calls the resolver and `router.replace`s to
+  `/sprints/{project_id}/{sprint_id}?task={uuid}` (or the project
+  backlog when the task has no sprint).
+- The sprint kanban page reads `?task=<uuid>` on mount, opens the
+  task drawer for that task, and strips the param so refresh
+  doesn't re-open it.
+
+#### GitHub PR/issue title auto-linking
+The task reference parser learns a new pattern for the native
+`[workspace-slug:N]` form. When a PR or issue is ingested with that
+bracket in its title, `GitHubTaskSyncService` resolves the matching
+task by `(workspace.slug, task_key)` and creates a `TaskGitHubLink`
+with `is_auto_linked=True`.
+
+- New `AEXY_BRACKETED_PATTERN` regex
+  `\[([a-z0-9][a-z0-9-]*):(\d+)\]` in `task_reference_parser.py`,
+  exposed as `TaskReferenceSource.AEXY`. Distinct from the existing
+  `[PROJ-123]` Jira/Linear pattern (the colon separator avoids the
+  collision).
+- Already wired into the runtime webhook path
+  (`/webhooks/github`) for both PRs and commits — no behavior change
+  for past PRs that didn't use this format, future ones link
+  automatically.
+
+#### Card UI
+- Two icon-only buttons in `TaskCardPremium`'s hover quick-actions
+  bar: `Link2` copies the public URL, `Hash` copies the identifier.
+  Full string in the `title=` tooltip; Sonner toast on click.
+- Persistent monospace `[slug:N]` prefix on the card title so the
+  identifier is visible at a glance without hovering.
+
+## [0.7.72] - 2026-05-07
+
+Project-level (sprint-less) tasks reach feature parity with sprint
+tasks. Backlog tasks can now carry attachments, attach GitHub PRs and
+issues, accept comments, and surface a full activity history; several
+silently-dropped fields on create/update across both routes are
+plugged; the History tab now logs every meaningful task mutation
+including archives, sprint moves, and planning-poker estimates; and
+repository connection moves from per-developer to workspace-scoped.
+
+### Added
+
+#### Workspace + project repository connection
+Repositories are connected at the **workspace** level now, with
+projects picking subsets. New tables `workspace_repositories` (the
+workspace's adopted catalog) and `team_repositories` (the project's
+selection) replace `DeveloperRepository.is_enabled` as the source of
+truth for "which repos are tracked here." Migration
+`migrate_workspace_team_repositories.sql` backfills both from
+existing per-developer enables so nothing in scope today disappears.
+
+- New endpoints: `GET/POST/DELETE /workspaces/{id}/repositories`
+  (admin), `GET/POST/DELETE /teams/{id}/repositories`, plus
+  `POST /workspaces/{id}/repositories/{wr_id}/reclaim` for the
+  former-member adoption flow.
+- `WorkspaceRepositoryService` exposes the adopt / unadopt /
+  reclaim / link-team / unlink-team / pick_installation_developer
+  surface; the canonical sync state (sync_status, last_sync_at,
+  webhook bookkeeping, incremental cursors) lives on
+  `workspace_repositories` since sync is workspace-owned now.
+- Free-plan repo cap is now per-workspace.
+  `LimitsService.can_adopt_repository(workspace_id)` counts active
+  rows against the workspace's effective plan and gates the adopt
+  endpoint. Removes the per-developer counter from the gating path
+  (still used as a display-only roll-up on the limits widget).
+- Consumers swapped: PR search (sprint + project), GitHub issue
+  search/import, the auto-sync Temporal scheduler, developer
+  insights, sync-status. Per-developer enable/disable endpoints
+  are removed; the column `DeveloperRepository.is_enabled` stays
+  as a discovery cache and gets cleaned up in a follow-up.
+- New project settings tab at
+  `/settings/projects/{projectId}/repositories` for picking which
+  workspace repos a project tracks.
+- Former-member adoption UX: a "Reclaim" banner on
+  `/settings/repositories` lists `workspace_repositories` whose
+  adopter is no longer an active workspace member, with a one-click
+  "Reclaim" action that re-binds the row to the active member who
+  clicked it (or any active member with reach as a fallback).
+  `WorkspaceRepository.sync_status='no_credentials'` is set
+  automatically when the auto-sync scheduler can't get a token,
+  surfacing the same banner.
+- Frontend rewires `handleRepoToggle` on `/settings/repositories`
+  to call `workspaceRepositoriesApi.adopt` / `unadopt` instead of
+  the removed per-developer endpoints; existing UI keeps working,
+  the toggle now adopts into the current workspace.
+
+
+
+#### Backlog tasks can carry attachments
+Sprint-less project tasks had attachment upload gated behind a "Move
+this task into a sprint to upload attachments" banner because the
+only attachment routes lived under `/sprints/{sprint_id}/tasks/...`.
+Added parallel endpoints under `/teams/{team_id}/tasks/{task_id}/attachments`
+(POST / GET / DELETE) authorised via team membership. Both routers now
+share the same upload, list, and delete logic via a new
+`backend/src/aexy/services/task_attachment_service.py` (S3 put,
+storage-quota assertion, AI metadata pipeline dispatch, S3 delete,
+quota-cache invalidation — all in one place). The frontend picks the
+right endpoint based on `task.sprint_id`; the gate banner is gone.
+
+#### Backlog tasks can attach pull requests and GitHub issues
+The PR linking section in the task modal now works for project-level
+tasks — new endpoints `GET /teams/{team_id}/tasks/github/pull-requests`
+and `POST /teams/{team_id}/tasks/{task_id}/github-links/pull-requests`
+mirror the sprint-scoped equivalents (workspace-membership check on
+the PR author preserved). The list endpoint at
+`/teams/{team_id}/tasks/{task_id}/github-links` now returns both issue
+and PR links (previously filtered to `github_issue` only). The
+`EditTaskModal` dispatches search and link mutations to either endpoint
+based on whether the task has a `sprint_id`.
+
+#### Project-level GitHub issue import
+New `POST /teams/{team_id}/tasks/import` (with
+`projectTasksApi.importTasks` on the frontend) imports GitHub issues
+into the team's backlog without requiring a sprint, populating the
+"Select issue" dropdown across every task in the team. New service
+helpers `add_project_task` and `_import_project_task_items` keep the
+import dedup keyed on `(team_id, source_type, source_id)`.
+
+#### Backlog tasks show activity history and accept comments
+The History tab previously rendered "Move this task into a sprint to
+view its full activity history" for sprint-less tasks because the only
+activities + comments routes were sprint-scoped. Added the matching
+team-scoped routes (`GET /teams/{team_id}/tasks/{task_id}/activities`
+and `POST /teams/{team_id}/tasks/{task_id}/comments`) and updated
+`AssignmentHistoryPanel` to dispatch by `task.sprint_id` vs
+`task.team_id`. Activity rows are keyed on `task_id` only on the model
+side, so existing per-task creation / status / assignment / field-change
+events surface for backlog tasks without any data backfill.
+
+#### History tab now logs every meaningful task mutation
+Audit pass on every place that mutates a `SprintTask`. Previously
+silent paths now write per-task `TaskActivity` rows:
+
+- **Project-task PATCH** delegates to `SprintTaskService.update_task`
+  instead of duplicating field assignments, so backlog edits get the
+  same per-field timeline (`title_changed`, `priority_changed`, etc.)
+  that sprint tasks have.
+- **Project-task status PATCH** writes a per-task `status_changed` row
+  in addition to the workspace `EntityActivity` it already emitted.
+- **Attachment upload + delete** write `attachment_added` /
+  `attachment_removed` rows attributed to the actor; affects sprint
+  AND project tasks (this was missing for both).
+- **Archive / unarchive / remove** write `archived` / `unarchived`
+  rows; `actor_id` threaded through `archive_task`, `unarchive_task`,
+  and `remove_task` on the service.
+- **Sprint moves** (project PATCH inline `sprint_id`, the dedicated
+  `move-to-sprint` endpoint, and `bulk_move_to_sprint`) write
+  `sprint_changed` with prior and new sprint IDs.
+- **Planning-poker finalize** writes a `points_changed` row when the
+  estimate it stamps onto each task differs from the prior value.
+- **Project-task creation** writes a `created` row so backlog
+  timelines start with "X created this task" instead of empty.
+
+`TaskActivityAction` extended with `attachment_added`,
+`attachment_removed`, `archived`, `unarchived`, and `sprint_changed`,
+with renderer cases in both task modals.
+
+### Fixed
+
+#### Project-task creation silently dropped dates and estimated hours
+`POST /teams/{team_id}/tasks` accepted `start_date`, `end_date`, and
+`estimated_hours` in `ProjectTaskCreate` but the handler instantiated
+`SprintTask(...)` without passing them through, so a fresh task always
+saved with NULL dates and NULL hours regardless of the form. The
+frontend create path mirrored the drop —
+`useProjectBoard.addTaskMutation` explicitly listed each forwarded
+field and the dates/hours weren't in the list. Wired all three fields
+through every layer (SprintTask kwargs in the backend, mutationFn type
+and forwarding, and the `create` and `addTask` API client signatures).
+
+#### Project-task PATCH silently dropped four fields
+The same route accepted `start_date`, `end_date`, `estimated_hours`,
+and `contributes_to_goal` in `SprintTaskUpdate` but the inline
+update in `project_tasks.py:update_task` only handled
+title/description/story_points/priority/status/labels/epic_id/sprint_id/
+assignee_id/mentions. Editing dates or hours on a backlog task looked
+successful but nothing persisted. Added the four missing assignments
+with `model_fields_set` semantics on the date and hours fields so
+callers can clear them by sending explicit null; `contributes_to_goal`
+is non-nullable on the model and stays "set when explicitly provided."
+
+#### Project-task responses omitted attachments and seven other fields
+`task_to_response` was duplicated across `sprint_tasks.py` and
+`project_tasks.py` and the project-tasks copy was missing
+`attachments`, `work_started_at`, `cycle_time_hours`,
+`lead_time_hours`, `contributes_to_goal`, `start_date`, `end_date`,
+and `estimated_hours`. Result: uploading an attachment to a backlog
+task succeeded server-side, but when the UI re-fetched the task via
+the project-task list/get/update endpoints, the response serialized
+`attachments: []` and stale nulls for dates/hours. Extracted the
+canonical builder into a new
+`backend/src/aexy/services/sprint_task_response.py` and pointed both
+routers at it, so the response shape stays in lockstep going forward.
+
+#### Sprint-task PATCH silently dropped `description_json`
+The mirror bug on the sprint-scoped route: `data.description_json`
+came in via Pydantic but `task_service.update_task` had no parameter
+for it, so the rich-text representation never updated even when the
+plain `description` did. Added a sentinel-typed `description_json`
+parameter to `SprintTaskService.update_task` (with no activity-log
+entry — `description_changed` already covers that), and pass it
+through from the sprint-tasks PATCH handler.
+
+#### Aligned frontend update types with the backend schema
+`sprintApi.updateTask`, `projectTasksApi.update`, and
+`useProjectBoard.updateTaskMutation` had TypeScript signatures that
+omitted `start_date`, `end_date`, `estimated_hours`, and
+`contributes_to_goal`. The runtime axios call still sent them
+(JavaScript is permissive), but the types misled callers. Added the
+missing fields so the contract matches the backend.
+
+## [0.7.71] - 2026-05-07
+
+Patch release on top of 0.7.7. Fixes a production-only file-upload
+outage, light-mode contrast on the task-create form, and brings the
+deployment docs in line with the real stack.
+
+### Fixed
+
+#### Object storage missing from production compose
+`docker-compose.prod.yml` had no rustfs (or any S3-compatible) service
+and no `S3_ENDPOINT_URL` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`
+env vars on `backend` or `temporal-worker`, even though the dev compose
+ships rustfs and points the backend at it. Result: in production
+`StorageService.is_configured()` returned False and every file upload —
+task attachments, recording uploads, compliance docs — returned `503
+File storage is not configured on this deployment`. Added a `rustfs`
+service to the prod compose (internal-network only, with healthcheck),
+wired the S3 env vars on backend and temporal-worker, added
+`rustfs_data` and `rustfs_logs` volumes, added an `/storage/` proxy
+location to `nginx/nginx.conf` so uploaded URLs are reachable from the
+browser, and seeded `RUSTFS_ROOT_USER` / `RUSTFS_ROOT_PASSWORD` /
+`S3_PUBLIC_ENDPOINT_URL` in `.env.prod.example`. Existing operators
+need to set those three values in `.env.prod` and re-run
+`docker compose -f docker-compose.prod.yml up -d`.
+
+#### Light-mode contrast on task-create attachment & GitHub-issue buttons
+The native `<input type="file">` "Choose files" button on the new-task
+form and the secondary "Link issue" button on the GitHub Issues panel
+both used `bg-primary-*/10` + `text-primary-200/300` — both very light
+blue, which collapses to barely-visible against the form background in
+light mode. Reskinned all three controls (two file inputs + the link
+button) to the solid `bg-primary-600` + `text-white` style already used
+by the primary "+ Link" button, so they pass contrast in both light
+and dark mode.
+
+### Documentation
+
+#### New Database Operations guide and stale-reference cleanup
+A new `docs/guides/database-operations.md` is now the canonical
+reference for everything that touches PostgreSQL: the custom SQL
+migration system at `backend/scripts/migrate_*.sql`, manual and
+automated backups (the production `aexy-backup` sidecar at 02:00 UTC),
+restore from sql dump, restore from volume snapshot, the safe
+postgres image-rebuild flow (data on the `postgres_data` named
+volume is independent of the image — `down -v` is what kills it),
+the major-version upgrade dump-and-reload procedure, and pgvector
+specifics. Linked from `docs/README.md`, `DEPLOY.md`, and the
+deployment guide.
+
+`DEPLOY.md` and `docs/guides/deployment.md` were brought in line with
+the actual stack: the `alembic upgrade head` references became
+`python scripts/run_migrations.py`, the Celery / Celery beat /
+Flower references became Temporal worker / Temporal UI / Temporal
+schedules, the postgres prerequisite is now PG 18 with pgvector
+(the bundled `aexy-postgres:18-alpine-pgvector` image) instead of
+PG 14/16, and the deployment example compose now includes the
+`temporal`, `temporal-ui`, and `temporal-worker` services. The
+backup/restore quick-references in both docs now point at the new
+Database Operations guide for full procedures.
+
+## [0.7.7] - 2026-05-07
+
+### Added
+
+#### Admin billing breakdown — line-item view of charges, usage, and rates
+Workspace owners/admins now have a dedicated breakdown page at
+`/settings/billing/breakdown` answering "what am I being charged this
+period and why." Platform admins get the same view across every
+workspace at `/admin/billing` with a margin column and a click-to-drill
+drawer. Both reuse a single `BillingBreakdownView` component so the
+shape and behavior stay consistent.
+
+- New `BillingBreakdownService` (`backend/src/aexy/services/billing_breakdown_service.py`)
+  composes `LimitsService`, `UsageService`, `PostpaidBillingService`,
+  and `StorageQuotaService` into one typed `BillingBreakdown`. Line
+  items: base subscription fee, active seats (with included vs
+  billable split), LLM usage per provider (tokens, request count,
+  rate display), storage usage (informational), plus info counters
+  for plan-included free tokens and postpaid accruals. The service
+  reads period bounds from `WorkspaceSubscription.current_period_*`
+  and falls back to the current calendar month.
+- Workspace endpoints `GET /api/v1/billing/breakdown?workspace_id=…&period=current|previous|YYYY-MM`
+  and `GET /api/v1/billing/breakdown/history?workspace_id=…&months=6`,
+  gated by `verify_workspace_admin`. Margin information is never
+  exposed via these routes.
+- Platform-admin endpoints under `/api/v1/platform-admin/billing/*`:
+  `breakdown`, `breakdown/history`, `summary` (paginated, filterable
+  workspace table), and `totals` (revenue, margin, top workspaces,
+  plan-tier and billing-model splits). Margin (`base_cost_cents`
+  vs `charged_cents` from the snapshotted `UsageRecord` rows) is
+  exposed only here.
+- `BillingBreakdownView` renders the period header, total/delta cards,
+  a category-grouped line-item table with per-item drilldown (provider,
+  request counts, base cost when admin), info counters, invoices for
+  the period, and a 6-period sparkline. The `delta_cents` /
+  `delta_pct` are computed against the prior month's
+  `usage_aggregates` row, falling back to live SQL over
+  `usage_records` when the aggregate is missing.
+- Sidebar entries: `Billing Breakdown` (adminOnly) under Account in
+  `settingsNavigation.ts`, and `Billing` in the platform-admin sidebar
+  in `(admin)/layout.tsx`.
+
+#### Daily Temporal job to populate billing aggregates
+New `aggregate_billing_usage` activity (analysis.py) wired into
+`worker.py` and scheduled in `schedules.py` to run every 24h. It
+calls `UsageService.update_usage_aggregate` for every active
+customer subscription's current period, plus the current and prior
+calendar month for every workspace that has any usage. Without this
+job the historical breakdown view stays empty in production —
+nothing else writes to `usage_aggregates`.
+
+#### Internationalization for the breakdown views
+Added `settings.billing.breakdownPage` and `settings.platformBilling`
+translation namespaces in `messages/en/settings.json` and
+`messages/hi/settings.json`. Every user-facing string in the new
+pages and the shared `BillingBreakdownView` component goes through
+`useTranslations()`. Plan tier and billing-model labels stay in
+English in the Hindi translations per project convention.
+
+### Fixed
+
+#### Plan-included free tokens no longer reduce the breakdown total
+The breakdown previously emitted a synthetic `free_credit` line item
+with a negative subtotal, dropping `total_cents` by an estimated
+allowance. The Stripe billing pipeline
+(`UsageService.report_workspace_usage_to_stripe`) reports the raw
+sum of `UsageRecord.total_cost_cents` with no such deduction —
+per-member free quotas live on `Developer.llm_overage_cost_cents`
+and never reduce the workspace invoice. The result was that the UI
+showed a lower bill than what Stripe charged. The synthetic credit
+is now surfaced as `free_tokens_per_member_per_month` and
+`llm_tokens_used` info counters plus a computation note explaining
+the per-developer scope, so `total_cents` always equals what the
+billing pipeline reports.
+
+#### Platform billing summary filters now apply before pagination
+`GET /platform-admin/billing/summary` was paginating on the workspace
+query first, then dropping rows whose computed `plan_tier` or
+`billing_model` didn't match. A filtered request could return an
+empty first page even when matches existed on later pages, and the
+`total` count reflected only the search filter. The filters are now
+pushed into SQL: `plan_tier` joins `Workspace.plan_id → Plan.tier`,
+`billing_model` joins `WorkspaceSubscription.workspace_id →
+WorkspaceSubscription.billing_model`. `total` reflects the filtered
+set, and pagination operates on the filtered query. Workspaces with
+no active subscription row are excluded when `billing_model` is set
+(they have no canonical workspace-level billing model to filter on);
+plan-tier filtering uses the source plan tier and does not consider
+workspace plan overrides.
+
+## [0.7.6] - 2026-05-07
+
+### Added
+
+#### Full task activity history
+The History tab on the task modal now shows every change to a task —
+not just assignment and status — and every change is attributed to the
+user who made it. A reviewer can see who created the task, who renamed
+it, who shifted the dates, who edited the description, who reassigned
+it, and who dragged it across the board, top-to-bottom in the order
+events actually happened.
+
+- `SprintTaskService.update_task` now snapshots each field before
+  mutation and writes a per-task `TaskActivity` row (`title_changed`,
+  `description_changed`, `points_changed`, `priority_changed`,
+  `status_changed`, `labels_changed`, `epic_changed`,
+  `start_date_changed`, `end_date_changed`,
+  `estimated_hours_changed`) for every value that actually changed.
+  Description bodies are not stringified into `old_value`/`new_value`
+  — only the fact that the description changed is recorded — to keep
+  the activity row small for rich-text edits.
+- `update_task_status` and `bulk_update_status` now accept an
+  `actor_id` and write a per-task activity row attributing the status
+  change to the user who dragged the card or clicked the pill.
+  Previously the workspace-wide `EntityActivity` feed had this but
+  the modal's History tab did not.
+- `create_task` records the creator on the `created` activity row, so
+  the History tab opens with a "X created this task" line instead of
+  silently starting at the first edit.
+- `TaskActivityAction` union extended in `frontend/src/lib/api.ts`
+  with the six new field-change actions, and the renderer in
+  `AssignmentHistoryPanel` (board page) and `ActivityItem` (single
+  sprint page) now switches on every action with human-readable
+  copy: "renamed to X", "set due date to Y", "cleared estimate", etc.
+- The History panel no longer filters out non-assignment events —
+  it shows everything, with the actor name on every line.
+
+### Changed
+
+#### Optimistic drag-and-drop on the kanban board
+Dropping a task into a new column updates the cache before the
+network round-trip, so the card stays where the user dropped it
+instead of snapping back to its original column for ~100 ms before
+re-rendering. Both `useSprintTasks` (sprint board) and
+`useProjectBoard` (workspace tasks) gained `onMutate` /
+`onError` / `onSettled` handlers that snapshot the prior cache,
+apply the new status optimistically, roll back on failure, and
+invalidate on settle. The "snap back, then move" flicker that
+made dnd-kit feel laggy is gone.
+
+#### Editable links in task descriptions
+TipTap's `Link` extension was switched to `openOnClick: false` in
+edit mode (when `readOnly` is false), so single-clicking a link
+inside the editor now lands the cursor on it for editing instead
+of opening it in a new tab. Cmd/Ctrl+click still opens the link.
+In read-only renders (description preview, comment view) plain
+clicks open the link as before.
+
+### Fixed
+
+#### Storage object orphaned on task attachment delete
+`DELETE /sprints/{sprint_id}/tasks/{task_id}/attachments/{id}` was
+removing the `task_attachments` row but leaving the underlying S3
+object in RustFS forever, so deleted files kept counting against
+the workspace's storage quota. The endpoint now derives the storage
+key from the attachment URL via the new
+`StorageService.key_from_url` (handles both path-style and the R2
+virtual-hosted style), calls `delete_object`, and invalidates the
+workspace usage cache via `StorageQuotaService` so the quota meter
+catches up immediately.
+
+#### `task.assigned` automation didn't fire on PATCH-based reassignment
+Reassigning a task by sending `PATCH /sprint-tasks/{id}` with a new
+`assignee_id` updated the row and wrote the assignment activity, but
+never dispatched the `task.assigned` automation trigger — only the
+dedicated `/assign` endpoint did. So workspace automations subscribed
+to `task.assigned` (Slack DMs, Linear sync, etc.) silently missed
+every reassignment performed through the task modal's edit flow.
+`update_task` now mirrors `assign_task`'s `dispatch_automation_event`
+call when the assignee changes.
+
+### Internal
+
+- New helper `_stringify_field` in `sprint_task_service` renders
+  TaskActivity field values consistently — `None` stays `None` (so
+  the History tab can render "—"), datetimes go through `.isoformat()`,
+  and lists join with `, `. Avoids the `"None"` string showing up
+  in old/new value cells.
+- Removed a vestigial `hasattr(task, "attachments")` guard in
+  `task_to_response` — the `attachments` relationship is always
+  present on `SprintTask` since the v0.7.4 schema migration.
+
+## [0.7.5] - 2026-05-07
+
+### Added
+
+#### Drive — collaborative file storage with AI tagging
+A workspace-wide Drive backed by S3-compatible storage (RustFS in dev),
+enriched by an AI metadata pipeline that captions images, tags documents,
+and annotates videos with timecoded events from a vision-language model.
+
+- New `drive_files` table with folder hierarchy, soft delete, and per-kind
+  rendering hints (file / folder / image / video / audio / pdf / doc).
+  Smart Views are filter overlays — they don't move files, they translate
+  a JSONB filter to a `file_metadata` join. Migration
+  `migrate_drive_v1.sql` is idempotent and adds covering partial indexes.
+- New `/workspaces/{ws}/drive/files`, `/folders`, `/files`, `/files/{id}`,
+  `/smart-views`, `/files/{id}/annotations`, `/files/{id}/reannotate`,
+  and `/usage` endpoints. Multipart upload caps at 500 MB per file and
+  2 GB per batch before the plan-level quota check, protecting worker
+  memory.
+- Drive UI under `/docs/drive`: file grid, smart-view sidebar, hybrid
+  search bar, multi-file dropzone, quota banner, and a video player that
+  overlays Qwen-VL annotations on the timeline.
+- Storage quotas: per-plan `max_storage_gb` (with `-1` for unlimited),
+  workspace-level overrides, and a Redis-cached usage rollup spanning
+  drive_files, task_attachments, and compliance_documents. Concurrent
+  uploads are serialised per-workspace via a Postgres advisory lock so
+  two simultaneous uploads can't overshoot the cap.
+
+#### Polymorphic file AI metadata
+A single `file_metadata` row per file regardless of where the file lives.
+`(source_type, source_id)` is unique across `drive_file`,
+`task_attachment`, and `compliance_document`. `file_embeddings` and
+`video_annotations` foreign-key to `file_metadata.id`, so a non-Drive
+video (e.g. a task attachment) can carry annotations through the same
+machinery. Adding a fourth source type is one resolver registration —
+no schema change.
+
+- Migration `migrate_file_metadata_v1.sql` creates the schema in a single
+  transaction with a GIN index on `ai_tags`/`ai_categories` and an
+  ivfflat cosine index on the 1024-dim `embedding` column.
+- New `/workspaces/{ws}/files/{source_type}/{source_id}/metadata` and
+  `.../reannotate` endpoints — the frontend's universal "Reannotate"
+  button posts here regardless of source.
+- New `/workspaces/{ws}/search/files?q=…&kinds=…` workspace-wide hybrid
+  search: pgvector cosine over `file_embeddings` plus an ILIKE pass over
+  `ai_summary` and per-source file names. Cmd+K palette
+  (`WorkspaceSearchPalette`) is the user-facing surface.
+- New `/workspaces/{ws}/source-files?source_type=…` browse endpoint
+  returns a unified file row for any source. The Drive sidebar uses it
+  to render virtual cross-source views ("Task attachments",
+  "Compliance documents") in the same grid as drive files.
+
+#### Qwen vision + embeddings via the LLM gateway
+The gateway grows lazy `vision` and `embeddings` properties selected via
+`settings.llm.vision_provider` / `embeddings_provider`. Provider keys
+are tracked separately from chat-LLM usage so vision + embedding spend
+shows up distinctly in the rate limiter.
+
+- Vision providers: OpenRouter (`qwen/qwen2.5-vl-72b-instruct` by default)
+  and local Ollama (any Qwen-VL tag). Both implement `analyze_image` and
+  `analyze_video_frames`.
+- Embedding providers: OpenRouter (`text-embedding-3-large@1024`) and
+  Ollama (`bge-m3`). Both produce pgvector-compatible 1024-dim vectors
+  so the two backends are interchangeable.
+- New `gateway.embed_batch_limited`, `vision_image_limited`, and
+  `vision_video_frames_limited` helpers gate every call through the
+  Redis rate limiter. Provider keys: `qwen-openrouter`, `qwen-ollama`,
+  `embeddings-openrouter`, `embeddings-ollama`.
+- ffmpeg frame sampling for video annotation runs in
+  `asyncio.to_thread`, so a multi-minute video doesn't block the worker
+  event loop.
+
+#### Admin Plans & Overrides editor
+A super-admin UI under `/admin/plans` to inspect plans, edit
+per-workspace overrides, and kick off the AI metadata backfill for
+existing rows.
+
+- Backfill endpoint enqueues a Temporal workflow per workspace that
+  scans uncovered drive_files, task_attachments, and compliance_docs
+  and dispatches the AI pipeline at the configured rate. The button
+  is idempotent — re-clicking finds the running workflow rather than
+  starting a parallel one.
+
+### Changed
+
+#### LLM gateway settings moved under `settings.llm.*`
+`vision_provider`, `vision_model`, `embeddings_provider`,
+`embeddings_model`, and `embeddings_dim` now live under the `LLMSettings`
+group instead of the root `Settings`. Existing `VISION_PROVIDER` /
+`EMBEDDINGS_*` env vars continue to work.
+
+#### Drive registered in the app catalogue
+Added to both `frontend/src/config/appDefinitions.ts` and
+`backend/src/aexy/models/app_definitions.py` so it shows up in app-bundle
+permission templates and the sidebar layout filter.
+
+#### `DriveFile` is no longer the home of AI metadata
+`ai_status`, `ai_summary`, `ai_tags`, `ai_categories`, and
+`ai_processed_at` were removed from `drive_files` and the `DriveFile`
+TypeScript interface. AI metadata is now read from `file_metadata` via
+the polymorphic endpoint or the `useFileMetadata` hook. `FileCard` fetches
+its own AI metadata per row, which means task_attachment and
+compliance_document files render with the same AI badges in the Drive
+grid.
+
+#### Drive-specific search dropped
+`GET /workspaces/{ws}/drive/search` and `driveApi.search` are gone.
+Callers use the workspace-wide `/search/files?kinds=drive_file` endpoint
+(via `useDriveSearch`, which adapts the response to the legacy hit
+shape so the UI didn't have to change).
+
+### Fixed
+
+- **Server boot crash from stale module references.** Several legacy
+  imports survived the polymorphic-metadata refactor — `DriveFileEmbedding`
+  in `drive_search_service`, `VideoAnnotation.file_id` in `drive_service`,
+  and a `max_storage_gb` default placed before required dataclass fields
+  in `EffectivePlan`. Each one raised at module-import time, taking down
+  the entire FastAPI app on startup. All cleaned up; `drive_search_service`
+  was removed entirely (replaced by the cross-source `file_search_service`).
+- **Gateway vision/embedding settings raised AttributeError.** The
+  gateway was reading `settings.vision_provider` etc. off the root
+  `Settings`, but those fields had been moved to `LLMSettings`. First
+  call to `gateway.vision` or `gateway.embeddings` crashed.
+- **Workspace-wide file_name search produced wrong rows.** The `_scan`
+  helper's `select(FileMetadata).join(FileMetadata, …)` re-joined
+  `FileMetadata` onto itself; the source table was never in the FROM
+  clause. Now starts from the source table and joins `file_metadata`
+  correctly.
+- **Folder cycle detection only caught direct self-parenting.** Moving
+  folder A under one of its own descendants (A → … → D → A) silently
+  succeeded and corrupted the tree. Now walks the parent ancestry and
+  rejects on collision.
+- **None-gateway 500.** When `get_llm_gateway()` returned `None`
+  (misconfigured or no API keys), `FileSearchService` and the Drive
+  search route called `gateway.embeddings` and crashed. Both now accept
+  `Optional[LLMGateway]` and degrade to keyword-only search.
+- **Mutable default `BackfillStartRequest()`** in the admin backfill
+  route replaced with `Body(default_factory=BackfillStartRequest)`.
+
+### Security
+
+- **SSRF guard on the file AI pipeline's `_download_bytes`.** URLs must
+  match an allowlisted host suffix (`.amazonaws.com`, `.cloudfront.net`,
+  `.r2.cloudflarestorage.com`, `.aexy.io`) or the configured
+  `s3_endpoint_url`. After DNS resolution, every returned IP is checked
+  against private / loopback / link-local / multicast / reserved /
+  unspecified ranges, defending against DNS rebinding attacks where a
+  "public" hostname resolves to `169.254.169.254` or RFC1918. Storage
+  endpoints matched verbatim skip the IP check by design (ops controls
+  those names; they often resolve privately). `follow_redirects=False`
+  prevents 30x bypass.
+- **IDOR fix on cross-source reannotate.** The
+  `/workspaces/{ws}/files/{source_type}/{source_id}/reannotate` endpoint
+  used to dispatch the LLM pipeline without verifying that `source_id`
+  belonged to `workspace_id`. Any workspace member could trigger
+  reprocessing of any file in any workspace by guessing a UUID, charging
+  the LLM bill to the wrong tenant. Now resolves the source row and
+  rejects with 404 when the workspace doesn't match.
+- **Storage quota TOCTOU race.** Two concurrent uploads from the same
+  workspace could both pass the cached usage check and overshoot the
+  cap by ~2× the incoming bytes. `assert_storage_available` now wraps
+  the check in `pg_advisory_xact_lock(hashtextextended(workspace_id, 0))`
+  and reads the used-bytes total fresh from the DB inside the lock.
+
+### Performance
+
+- **Source-files browse covering indexes** (migration
+  `migrate_source_files_idx_v1.sql`):
+  - `idx_drive_files_workspace_uploaded` on
+    `(workspace_id, uploaded_at DESC)` partial
+    `WHERE deleted_at IS NULL AND kind <> 'folder'` — covers the exact
+    scan the endpoint runs and skips the sort step.
+  - `idx_task_attachments_task_uploaded` on `(task_id, uploaded_at DESC)`
+    — speeds the join-then-sort pattern when listing all task
+    attachments in a workspace.
+  - `compliance_documents` already had `(workspace_id, created_at DESC)`
+    from `migrate_compliance_documents.sql` — no new index needed.
+
+### i18n
+
+- New `messages/en/drive.json` and `messages/hi/drive.json` cover the
+  Drive UI: ~65 keys across `drive.page`, `drive.fileCard`,
+  `drive.upload`, `drive.quota`, `drive.smartView`, `drive.video`,
+  `drive.aiBadges`, `drive.metadataPopover`, `drive.metadataSidecar`,
+  and `drive.search`. ICU placeholders ({count}, {percent}, {used},
+  {limit}, {incoming}) match across both locales.
+
+### Tests
+
+- New Playwright e2e specs: `drive-quota.spec.ts`,
+  `drive-smart-views.spec.ts`, `drive-upload.spec.ts`,
+  `compliance-doc-ai-sidecar.spec.ts`, `task-attachment-ai-tags.spec.ts`,
+  `workspace-search-palette.spec.ts`, `admin-backfill.spec.ts`,
+  `admin-plans-edit.spec.ts`. Shared `e2e/fixtures/drive-mock-data.ts`
+  fixture seeds files, smart views, AI metadata, and quota state.
+
+### Internal
+
+- `.gitignore` extended for `frontend/playwright-report/`,
+  `frontend/test-results/`, `frontend/e2e/debug-screenshot*.png`, and
+  `REVIEW_*.md`. The previously-tracked `playwright-report/index.html`
+  was removed from the index.
+
+## [0.7.4] - 2026-05-06
+
+### Added
+
+#### Task attachments, schedule, and over-estimate detection
+Sprint tasks now carry a scheduled timeline and uploaded files, and the
+board surfaces when work has slipped.
+
+- Added `start_date`, `end_date`, and `estimated_hours` columns to
+  `sprint_tasks`, plus a new `task_attachments` table with cascade delete.
+  Migration `migrate_sprint_tasks_v3.sql` is idempotent and indexes
+  `end_date` and `task_id`.
+- Added `POST/GET/DELETE /sprints/{sprint_id}/tasks/{task_id}/attachments`
+  endpoints. Multipart uploads stream through the existing S3-compatible
+  storage service (RustFS).
+- AddTaskModal gains datetime-local inputs for start/end, an estimated
+  hours field, and a multi-file uploader. Files are uploaded after the
+  task is created so cascade delete cleans up cancelled flows.
+- EditTaskModal mirrors the new fields and renders an attachment list
+  with download links and delete actions.
+- Kanban cards render an `Overdue` badge when `end_date` has passed and
+  the task is not done, and an `Over estimate` badge when actual cycle
+  time exceeds `estimated_hours`. Both are pure-frontend computations.
+
+#### Assignment history visible in the task modal
+The EditTaskModal grows a History tab showing the full reassignment
+chain so reviewers can see who originally assigned a task and every
+hand-off in between.
+
+- `assign_task`, `unassign_task`, and the assignee branch of
+  `update_task` now write both old and new assignee IDs into the
+  per-task `TaskActivity` stream and the workspace-wide
+  `EntityActivity` feed.
+- The History panel filters activities to assignment and status events,
+  resolves participant names from workspace members, and renders them
+  oldest-first so the chain reads in the order it actually happened.
+
+### Changed
+
+#### Whole task card is draggable on the kanban board
+Drag-and-drop listeners moved from the small `GripVertical` handle onto
+the `TaskCardPremium` root, so the entire card body initiates a drag.
+The grip icon remains as a visual affordance. Interactive children
+(menu, checkbox, quick-status, archive, quick-edit) stop pointer-down
+propagation so clicks on them no longer initiate a drag.
+
+### Fixed
+
+#### Links in task descriptions are clickable after saving
+The TipTap `Link` extension now uses `openOnClick: true` with
+`target="_blank"` and `rel="noopener noreferrer nofollow"`, so URLs
+typed into a task description open in a new tab on click instead of
+being inert.
+
+### Tests
+
+- Added six Playwright e2e specs covering: attachment upload during
+  task creation with start/end dates and estimated hours; the Overdue
+  badge; the Over estimate badge; the assignment history chain; the
+  whole-card drag affordance; and clickable links in saved
+  descriptions. A shared `task-test-helpers.ts` fixture sets up the
+  board mocks for all of them.
+
+## [0.7.3] - 2026-04-27
+
+### Added
+
+#### Task modal GitHub PR linking
+Task modals now link to real synced GitHub pull requests instead of the
+old placeholder `pr_references` field.
+
+- Added sprint task API endpoints to search workspace pull requests, list
+  task GitHub links, manually link a PR, and unlink an existing PR.
+- The task modal now shows linked PRs with repository, number, title,
+  state, and outbound GitHub links.
+- Added a searchable PR picker with explicit link/unlink actions and
+  loading/error feedback through React Query mutations.
+- Added Playwright coverage for opening a task modal from a board deep
+  link, displaying existing PR links, linking a synced PR, and unlinking
+  an existing PR.
+
+#### Task modal GitHub issue linking
+Tasks can now connect to GitHub issues from the project board.
+
+- Added GitHub issue link metadata to `task_github_links` with repository,
+  issue number, title, state, and URL.
+- Added issue search/link/unlink APIs for both sprint tasks and project
+  backlog tasks.
+- Added GitHub issue repository context APIs so task modals can explain
+  which repo will be used for bare `#123` references.
+- Added task title/description auto-linking for explicit `owner/repo#123`
+  references and GitHub issue URLs. Bare `#123` links only when the
+  project has a single imported GitHub issue repository.
+- The task modal now shows linked GitHub issues separately from PRs and
+  supports manual issue linking from imported GitHub issues.
+- The task modal now supports manual repo override for cross-repo issue
+  links using `owner/repo`, `#123`, `owner/repo#123`, or full GitHub
+  issue URLs.
+- Extended Playwright coverage to verify auto-linked issues, manual issue
+  linking, cross-repo issue override, and issue unlinking.
+
+### Fixed
+
+#### Task modal close behaviour on deep links
+Closing a task modal opened from `/sprints/{projectId}/board?task=...`
+now removes only the `task` query parameter and prevents the modal from
+immediately reopening while the route updates. The same modal path is
+used from the board and deep-link entry points.
+
+### Changed
+
+#### Task modal polish
+Refined the task modal into a wider, more deliberate editing surface:
+status changes are saved explicitly, unsaved edits prompt before closing,
+dialog accessibility metadata was added, and the GitHub PR section now
+lives in the main task content area.
+
+---
+
+## [0.7.2] - 2026-04-14
+
+### Added
+
+#### Microsoft (Entra ID) login — parallel to Google sign-in
+Added direct Microsoft 365 / Entra ID sign-in alongside the existing
+Google flow. Tenant defaults to `common` so both personal (`@outlook.com`,
+`@hotmail.com`) and work/school accounts can sign in.
+
+- Three endpoints: `GET /api/v1/auth/microsoft/login` (basic profile + email),
+  `/auth/microsoft/connect-crm` (adds Mail + Calendar via Graph), and
+  `/auth/microsoft/callback`. Two-scope split mirrors Google.
+- New `MicrosoftConnection` SQLAlchemy model and migration
+  (`migrate_2026_04_14_microsoft_connections.sql`), parallel to
+  `GoogleConnection`.
+- `DeveloperService.get_or_create_by_microsoft` with scope-merge rule:
+  a subsequent basic login never clobbers tokens that already hold
+  `Mail.Read` / `Calendars.ReadWrite`.
+- Graph `/me` user info uses `mail` with `userPrincipalName` fallback
+  (personal accounts return `mail: null`).
+- Profile fields (email / display name / avatar) resync every time the
+  user signs in, so Azure AD changes propagate.
+- Frontend: "Continue with Microsoft" button + MS lockup icon in the
+  two CTA blocks on the landing page.
+- 16 integration tests covering service scope-merge, redirect URL shape,
+  state validation, happy-path callback with mocked Graph responses,
+  and the personal-account `userPrincipalName` fallback.
+
+#### Refresh-token rotation for Google + Microsoft OAuth
+New `aexy.services.oauth_token_service` centralises refresh-token
+behaviour for every OAuth-holding row type (developer connections,
+workspace Google integrations, booking calendar connections). Three
+ad-hoc copies of the refresh flow (`gmail_sync_service`,
+`calendar_sync_service`, `booking/calendar_sync_service`, and
+`api/chat.py`) have been retired — they each had the same two bugs:
+rotated refresh tokens were silently dropped, and every non-200
+response was treated as "please reconnect" without distinguishing
+`invalid_grant` from a transient 5xx.
+
+- `ensure_valid_google_token(db, GoogleConnection)`,
+  `ensure_valid_microsoft_token(db, MicrosoftConnection)`,
+  `ensure_valid_google_integration_token(db, GoogleIntegration)`, and
+  `ensure_valid_calendar_connection_token(db, CalendarConnection)` all
+  share two primitives (`_refresh_google`, `_refresh_microsoft`).
+- Revocation signalling per model:
+  - Nullable `refresh_token` columns are cleared (raises
+    `RefreshTokenRevokedError`).
+  - `GoogleIntegration.refresh_token` is NOT NULL, so it's marked
+    `is_active=False` + `last_error="refresh_token_revoked"`.
+  - Booking `CalendarConnection` additionally flips `sync_enabled=False`.
+- Microsoft refresh re-requests stored scopes for developer connections
+  and the narrow `Calendars.ReadWrite offline_access` pair for booking
+  calendars.
+- 16 new tests cover rotation, no-op-when-fresh, `invalid_grant`
+  clearing, transient 5xx preserving state, scope propagation, and
+  the CalendarConnection dispatch-by-provider behaviour.
+
+#### Surface workspace-view picker on the Appearance settings page
+The persona/preset selector that filters sidebar sections and chooses
+dashboard widgets was previously reachable only via the Dashboard
+"Customize" modal. It now also lives at `/settings/appearance`, wired
+to the same `useDashboardPreferences` hook so Dashboard and Settings
+stay in sync.
+
+#### Create projects inline from /sprints
+The `/sprints` empty-state and top action bar now open an inline
+project creation modal instead of redirecting to
+`/settings/projects`. On create, the user lands directly on
+`/sprints/{newProjectId}/board`. The shared
+`CreateProjectModal` component is used by both pages.
+
+### Fixed
+
+#### Next.js 16 async dynamic route params
+Next 16 made `params` in `[projectId]/board/page.tsx` (and siblings) an
+async Promise. Fixed across 12 dynamic routes under `/sprints` and
+`/crm/agents`: client components use `React.use(params)`, server
+components `await params`.
+
+#### Onboarding: workspace switcher post-onboarding
+"Create workspace" link in the sidebar (`WorkspaceSwitcher`) routed to
+`/onboarding/workspace`, which the `OnboardingGuard` redirected back to
+`/dashboard` for already-onboarded users — making workspace creation
+impossible. The guard now lets `/onboarding/workspace` through, stale
+`localStorage` state is cleared on visit, and the newly created
+workspace is auto-selected via `switchWorkspace()` so the sidebar
+updates immediately.
+
+#### Hydration mismatch from the Redeviation browser extension
+Added `suppressHydrationWarning` on `<html>` in the root layout — the
+Redeviation DevTools extension injects `data-redeviation-bs-uid` onto
+the tag before React hydrates.
+
+#### `create project` / `New project` flow no longer bounces through
+`/settings/projects`; it creates the project in-place and jumps to
+the new board.
+
+### Changed
+
+#### docker-compose no longer hardcodes LLM env vars
+`docker-compose.yml` and `docker-compose.dev.yml` no longer set
+`LLM_PROVIDER`, `LLM_MODEL`, or any `*_API_KEY` — pydantic reads them
+from `backend/.env` by itself. Previously compose set empty strings
+that silently shadowed `.env`, so switching providers required editing
+compose instead of `.env`. Production compose keeps the injected-via-
+shell pattern it was designed for.
+
+#### npm audit vulnerabilities (15 → 0)
+`npm audit fix` cleared the 8 non-breaking advisories (critical axios,
+high next/rollup/picomatch, moderate brace-expansion/follow-redirects/
+markdown-it/next-intl open-redirect). Upgraded vitest 1.2.1 → 4.1.4
+to clear the remaining vite path-traversal + esbuild dev-server
+issues; tightened `vitest.config.ts` include/exclude so vitest 4's
+stricter scanner doesn't pull in Playwright e2e specs from
+`.next/standalone/`. Pinned `node-fetch ^2.7.0` via `overrides`
+rather than downgrading face-api.js (which `npm audit fix --force`
+wanted to do to no actual security benefit).
+
+---
 
 ## [0.7.1] - 2026-04-14
 

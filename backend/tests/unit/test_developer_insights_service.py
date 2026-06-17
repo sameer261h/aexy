@@ -18,6 +18,7 @@ from aexy.models.developer_insights import (
     PeriodType,
     TeamMetricsSnapshot,
 )
+from aexy.models.repository import Repository, WorkspaceRepository
 from aexy.models.workspace import Workspace, WorkspaceMember
 from aexy.services.developer_insights_service import (
     DeveloperInsightsService,
@@ -201,6 +202,184 @@ class TestVelocityMetrics:
 
         assert result.prs_merged == 2
         assert result.pr_throughput > 0
+
+
+class TestRepositoryInsights:
+
+    @pytest.mark.asyncio
+    async def test_repository_insights_scopes_adopted_repos_to_workspace(
+        self, db_session, workspace, dev, dev2
+    ):
+        other_workspace = Workspace(
+            id=str(uuid4()),
+            name="Other Workspace",
+            slug=f"other-{uuid4().hex[:8]}",
+            owner_id=dev2.id,
+        )
+        db_session.add(other_workspace)
+        db_session.add(
+            WorkspaceMember(
+                workspace_id=workspace.id,
+                developer_id=dev.id,
+                role="member",
+                status="active",
+            )
+        )
+
+        in_scope_repo = Repository(
+            id=str(uuid4()),
+            github_id=91001,
+            full_name="org/in-scope",
+            name="in-scope",
+            owner_login="org",
+            owner_type="Organization",
+        )
+        leaked_repo = Repository(
+            id=str(uuid4()),
+            github_id=91002,
+            full_name="personal/leaked",
+            name="leaked",
+            owner_login="personal",
+            owner_type="User",
+        )
+        db_session.add_all([in_scope_repo, leaked_repo])
+        await db_session.flush()
+
+        db_session.add_all(
+            [
+                WorkspaceRepository(
+                    id=str(uuid4()),
+                    workspace_id=workspace.id,
+                    repository_id=in_scope_repo.id,
+                    adopted_by_developer_id=dev.id,
+                    is_active=True,
+                ),
+                WorkspaceRepository(
+                    id=str(uuid4()),
+                    workspace_id=other_workspace.id,
+                    repository_id=leaked_repo.id,
+                    adopted_by_developer_id=dev2.id,
+                    is_active=True,
+                ),
+                Commit(
+                    sha=f"scope-{uuid4().hex}",
+                    developer_id=dev.id,
+                    repository="org/in-scope",
+                    message="in workspace",
+                    additions=10,
+                    deletions=1,
+                    files_changed=1,
+                    committed_at=_utc(2024, 1, 10),
+                ),
+                Commit(
+                    sha=f"leak-{uuid4().hex}",
+                    developer_id=dev2.id,
+                    repository="personal/leaked",
+                    message="other workspace",
+                    additions=20,
+                    deletions=2,
+                    files_changed=1,
+                    committed_at=_utc(2024, 1, 10),
+                ),
+            ]
+        )
+        await db_session.flush()
+
+        service = DeveloperInsightsService(db_session)
+        repos = await service.compute_repository_insights(
+            [dev.id],
+            _utc(2024, 1, 1),
+            _utc(2024, 1, 31),
+            include_external=True,
+            workspace_id=workspace.id,
+        )
+
+        assert [r["repository"] for r in repos] == ["org/in-scope"]
+
+    @pytest.mark.asyncio
+    async def test_member_activity_in_non_adopted_repo_is_excluded(
+        self, db_session, workspace, dev
+    ):
+        """Regression test: a workspace member's commits/PRs to a repo
+        the workspace has NOT adopted must not appear in repository
+        insights. Earlier behavior leaked these via the Commit/PR
+        repository scan even when WorkspaceRepository was scoped to the
+        right workspace."""
+        db_session.add(
+            WorkspaceMember(
+                workspace_id=workspace.id,
+                developer_id=dev.id,
+                role="member",
+                status="active",
+            )
+        )
+
+        adopted_repo = Repository(
+            id=str(uuid4()),
+            github_id=92001,
+            full_name="org/adopted",
+            name="adopted",
+            owner_login="org",
+            owner_type="Organization",
+        )
+        personal_repo = Repository(
+            id=str(uuid4()),
+            github_id=92002,
+            full_name="dev/personal-side-project",
+            name="personal-side-project",
+            owner_login="dev",
+            owner_type="User",
+        )
+        db_session.add_all([adopted_repo, personal_repo])
+        await db_session.flush()
+
+        db_session.add_all(
+            [
+                WorkspaceRepository(
+                    id=str(uuid4()),
+                    workspace_id=workspace.id,
+                    repository_id=adopted_repo.id,
+                    adopted_by_developer_id=dev.id,
+                    is_active=True,
+                ),
+                # Member commits to BOTH adopted and personal repos.
+                # Only the adopted one should surface.
+                Commit(
+                    sha=f"adopted-{uuid4().hex}",
+                    developer_id=dev.id,
+                    repository="org/adopted",
+                    message="work commit",
+                    additions=5,
+                    deletions=0,
+                    files_changed=1,
+                    committed_at=_utc(2024, 1, 10),
+                ),
+                Commit(
+                    sha=f"personal-{uuid4().hex}",
+                    developer_id=dev.id,
+                    repository="dev/personal-side-project",
+                    message="weekend hack",
+                    additions=50,
+                    deletions=10,
+                    files_changed=3,
+                    committed_at=_utc(2024, 1, 11),
+                ),
+            ]
+        )
+        await db_session.flush()
+
+        service = DeveloperInsightsService(db_session)
+        repos = await service.compute_repository_insights(
+            [dev.id],
+            _utc(2024, 1, 1),
+            _utc(2024, 1, 31),
+            include_external=True,
+            workspace_id=workspace.id,
+        )
+
+        repo_names = [r["repository"] for r in repos]
+        assert "org/adopted" in repo_names
+        assert "dev/personal-side-project" not in repo_names
 
 
 # ---------------------------------------------------------------------------
@@ -563,6 +742,168 @@ class TestTeamDistribution:
         assert result.top_contributor_share == pytest.approx(0.5, abs=0.01)
         assert len(result.member_metrics) == 2
         assert result.bottleneck_developers == []
+
+    @pytest.mark.asyncio
+    async def test_ghost_dedup_collapses_email_match(self, db_session, workspace):
+        """Active member + ghost (sharing email) should produce ONE row.
+
+        Regression for 0.7.90: previously `_build_developer_alias_map`
+        received the activity-expanded list as both `member_ids` and
+        `ghost_pool`, so the NOT IN filter excluded the ghosts we were
+        trying to bridge. Splitting them lets the alias kick in.
+        """
+        # Canonical workspace member.
+        member = Developer(
+            id=str(uuid4()),
+            email="ritesh@example.com",
+            name="Ritesh Real",
+        )
+        # Ghost with same email — auto-created during commit sync.
+        ghost = Developer(
+            id=str(uuid4()),
+            email="ritesh@example.com",
+            name="Ritesh Ghost",
+        )
+        db_session.add_all([member, ghost])
+        await db_session.flush()
+        db_session.add(WorkspaceMember(
+            workspace_id=workspace.id,
+            developer_id=member.id,
+            role="member",
+            status="active",
+        ))
+        # Activity attributed to the ghost (the case the alias map must repair).
+        for i in range(3):
+            db_session.add(Commit(
+                sha=f"ghost-{i}",
+                developer_id=ghost.id,
+                repository="repo-a",
+                message=f"c{i}",
+                additions=10,
+                deletions=2,
+                committed_at=_utc(2024, 1, 5 + i, 10, 0),
+            ))
+        await db_session.flush()
+
+        service = DeveloperInsightsService(db_session)
+        result = await service.compute_team_distribution(
+            [member.id, ghost.id],
+            _utc(2024, 1, 1),
+            _utc(2024, 1, 31),
+            workspace_id=workspace.id,
+            member_ids=[member.id],
+        )
+
+        # One row, three commits, canonical name wins.
+        assert len(result.member_metrics) == 1
+        assert result.member_metrics[0].developer_id == member.id
+        assert result.member_metrics[0].commits_count == 3
+
+    @pytest.mark.asyncio
+    async def test_ghost_dedup_via_commit_github_login(self, db_session, workspace):
+        """Two ghosts that share a `Commit.author_github_login` should
+        collapse via the github_login fallback even when their own emails
+        differ. Catches the Mobashir two-ghost case where one row has
+        commit activity and another has only review activity, both
+        carrying the same github author login."""
+        from aexy.models.developer import GitHubConnection
+
+        # Active member without a GitHubConnection — the bridge is via
+        # commit author login, not member-side GH config.
+        member = Developer(
+            id=str(uuid4()),
+            email="mobashir@bimaplan.co",
+            name="Mobashir Real",
+        )
+        # Ghost A: noreply email but author_github_login on commits.
+        ghost_a = Developer(
+            id=str(uuid4()),
+            email="123+mobashir-gh@users.noreply.github.com",
+            name="Mobashir Ghost A",
+        )
+        # Ghost B: no email, only reviews — won't have commit author login
+        # of its own, but its identity_key falls back to a derived gh login
+        # if we parse its noreply name correctly; here we leave name only.
+        db_session.add_all([member, ghost_a])
+        await db_session.flush()
+        db_session.add(WorkspaceMember(
+            workspace_id=workspace.id,
+            developer_id=member.id,
+            role="member",
+            status="active",
+        ))
+        # GitHubConnection on member so member_gh_logins picks it up.
+        db_session.add(GitHubConnection(
+            developer_id=member.id,
+            github_id=99,
+            github_username="mobashir-gh",
+        ))
+        # Ghost A commits carry the matching author_github_login.
+        for i in range(5):
+            db_session.add(Commit(
+                sha=f"gha-{i}",
+                developer_id=ghost_a.id,
+                repository="repo-a",
+                message=f"c{i}",
+                additions=20,
+                deletions=4,
+                author_github_login="mobashir-gh",
+                committed_at=_utc(2024, 1, 5 + i, 10, 0),
+            ))
+        await db_session.flush()
+
+        service = DeveloperInsightsService(db_session)
+        result = await service.compute_team_distribution(
+            [member.id, ghost_a.id],
+            _utc(2024, 1, 1),
+            _utc(2024, 1, 31),
+            workspace_id=workspace.id,
+            member_ids=[member.id],
+        )
+
+        assert len(result.member_metrics) == 1
+        assert result.member_metrics[0].developer_id == member.id
+        assert result.member_metrics[0].commits_count == 5
+
+    @pytest.mark.asyncio
+    async def test_hide_zero_contribution(self, db_session, workspace, dev, dev2):
+        """`hide_zero_contribution=True` drops members whose four
+        counters are all zero. Default keeps them (preserves picker UX)."""
+        db_session.add_all([
+            WorkspaceMember(workspace_id=workspace.id, developer_id=dev.id, role="member", status="active"),
+            WorkspaceMember(workspace_id=workspace.id, developer_id=dev2.id, role="member", status="active"),
+        ])
+        # Only `dev` has activity; `dev2` is the zero-contribution row.
+        for i in range(2):
+            db_session.add(Commit(
+                sha=f"z-{i}",
+                developer_id=dev.id,
+                repository="repo-a",
+                message=f"c{i}",
+                additions=10,
+                deletions=2,
+                committed_at=_utc(2024, 1, 5 + i, 10, 0),
+            ))
+        await db_session.flush()
+
+        service = DeveloperInsightsService(db_session)
+
+        kept_all = await service.compute_team_distribution(
+            [dev.id, dev2.id], _utc(2024, 1, 1), _utc(2024, 1, 31),
+            workspace_id=workspace.id,
+            member_ids=[dev.id, dev2.id],
+            hide_zero_contribution=False,
+        )
+        assert len(kept_all.member_metrics) == 2
+
+        kept_active = await service.compute_team_distribution(
+            [dev.id, dev2.id], _utc(2024, 1, 1), _utc(2024, 1, 31),
+            workspace_id=workspace.id,
+            member_ids=[dev.id, dev2.id],
+            hide_zero_contribution=True,
+        )
+        assert len(kept_active.member_metrics) == 1
+        assert kept_active.member_metrics[0].developer_id == dev.id
 
     @pytest.mark.asyncio
     async def test_distribution_detects_bottleneck(self, db_session, dev, dev2, dev3):

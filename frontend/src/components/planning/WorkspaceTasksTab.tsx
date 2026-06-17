@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { AnimatePresence } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   DndContext,
   DragEndEvent,
@@ -20,11 +20,16 @@ import {
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import {
   AlertCircle,
+  ArchiveRestore,
   ChevronDown,
   Filter,
   Folder,
   Layers,
+  LayoutGrid,
+  Plus,
   Search,
+  Settings2,
+  Table2,
   User,
   X,
 } from "lucide-react";
@@ -34,13 +39,27 @@ import { TaskCardPremium } from "@/components/planning/TaskCardPremium";
 import {
   useWorkspaceTasks,
   WorkspaceTaskWithMeta,
+  WorkspaceTasksView,
 } from "@/hooks/useWorkspaceTasks";
+import { useUnarchiveTask } from "@/hooks/useUnarchiveTask";
 import {
   SprintTask,
   TaskPriority,
   TaskStatus,
 } from "@/lib/api";
 import { TASK_STATUS_COLORS } from "@/lib/statusColors";
+import {
+  AddWorkspaceTaskModal,
+  InlineQuickAddRow,
+} from "@/components/planning/AddWorkspaceTaskModal";
+import { useWorkspaceMembers } from "@/hooks/useWorkspace";
+import { useShortcut } from "@/hooks/useKeyboardShortcuts";
+import { useTaskStatuses } from "@/hooks/useTaskConfig";
+import { useTasksLayout } from "@/hooks/useTasksLayout";
+import { TaskTableView } from "@/components/planning/TaskTableView";
+
+const KANBAN_ROW_CLASSES =
+  "flex flex-col gap-3 md:flex-row md:overflow-x-auto md:pb-4";
 
 interface WorkspaceTasksTabProps {
   workspaceId: string | null;
@@ -246,7 +265,9 @@ function PriorityDropdown({
 
 /**
  * Single Kanban column for the workspace board. Droppable for drag-drop
- * status transitions.
+ * status transitions. Also hosts:
+ *   - a header "+" button that opens the full modal pre-filtered to this column
+ *   - an inline quick-add row at the bottom (Trello/Linear pattern)
  */
 function KanbanColumn({
   status,
@@ -254,39 +275,70 @@ function KanbanColumn({
   emptyLabel,
   tasks,
   onTaskClick,
+  onOpenAddModal,
+  onInlineCreate,
+  isCreating,
+  defaultProjectId,
+  selectedIds,
+  onToggleSelected,
 }: {
   status: TaskStatus;
   label: string;
   emptyLabel: string;
   tasks: WorkspaceTaskWithMeta[];
   onTaskClick: (task: SprintTask) => void;
+  onOpenAddModal: (status: TaskStatus) => void;
+  onInlineCreate: (payload: {
+    title: string;
+    project_id: string;
+    status: TaskStatus;
+  }) => Promise<unknown>;
+  isCreating: boolean;
+  defaultProjectId: string | null;
+  selectedIds: Set<string>;
+  onToggleSelected: (taskId: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status });
-  const tone = TASK_STATUS_COLORS[status];
+  const tone = TASK_STATUS_COLORS[status] ?? TASK_STATUS_COLORS.backlog;
   const totalPoints = tasks.reduce((sum, t) => sum + (t.story_points || 0), 0);
 
   return (
     <div
       ref={setNodeRef}
       className={cn(
-        "flex-shrink-0 w-[320px] rounded-xl transition-all duration-200",
+        "group/col flex-shrink-0 w-full md:w-[320px] rounded-xl transition-all duration-200",
         tone.bg,
         isOver && "ring-2 ring-primary-500/50 bg-primary-900/20",
       )}
     >
-      <div className="flex items-center justify-between px-3 py-3 border-b border-border/30">
+      <div className="sticky top-0 z-10 flex items-center justify-between px-3 py-3 border-b border-border/30 backdrop-blur-md bg-background/40 rounded-t-xl">
         <div className="flex items-center gap-2">
           <h3 className={cn("font-medium text-sm", tone.text)}>{label}</h3>
           <Badge variant="default" size="sm">
             {tasks.length}
           </Badge>
         </div>
-        {totalPoints > 0 && (
-          <span className="text-xs text-muted-foreground">{totalPoints} SP</span>
-        )}
+        <div className="flex items-center gap-2">
+          {totalPoints > 0 && (
+            <span className="text-xs text-muted-foreground">{totalPoints} SP</span>
+          )}
+          <button
+            type="button"
+            onClick={() => onOpenAddModal(status)}
+            className={cn(
+              "opacity-0 group-hover/col:opacity-100 transition-opacity",
+              "p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/50",
+              "focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-primary-500/60",
+            )}
+            title={`Add to ${label}`}
+            aria-label={`Add task to ${label}`}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
       <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-        <div className="p-2 space-y-2 min-h-[200px] max-h-[calc(100vh-340px)] overflow-y-auto">
+        <div className="p-2 space-y-2 min-h-[120px] md:min-h-[200px] md:max-h-[calc(100vh-340px)] md:overflow-y-auto">
           <AnimatePresence mode="popLayout">
             {tasks.map((task) => (
               <TaskCardPremium
@@ -295,14 +347,24 @@ function KanbanColumn({
                 onClick={onTaskClick}
                 showSprintBadge
                 showTeamBadge
+                isSelected={selectedIds.has(task.id)}
+                onSelect={onToggleSelected}
               />
             ))}
           </AnimatePresence>
           {tasks.length === 0 && (
-            <div className="text-center py-8 text-muted-foreground text-sm">
+            <div className="text-center py-6 text-muted-foreground/70 text-xs">
               {emptyLabel}
             </div>
           )}
+          <InlineQuickAddRow
+            defaultProjectId={defaultProjectId}
+            status={status}
+            onSubmit={async (payload) => {
+              await onInlineCreate(payload);
+            }}
+            isSubmitting={isCreating}
+          />
         </div>
       </SortableContext>
     </div>
@@ -314,6 +376,17 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
   const tStatus = useTranslations("sprints.taskStatus");
   const tPriority = useTranslations("sprints.priority");
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  // Active vs archived task view. Persisted in the URL via `?view=archived` so
+  // refresh and link-share round-trip cleanly. Archived view forces table
+  // layout — kanban columns make no sense for archived rows.
+  const [view, setView] = useState<WorkspaceTasksView>(
+    (searchParams.get("view") as WorkspaceTasksView) === "archived"
+      ? "archived"
+      : "active",
+  );
 
   const {
     filteredTasks,
@@ -325,19 +398,188 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
     filterOptions,
     isLoading,
     updateTaskStatus,
+    createTask,
+    isCreatingTask,
+    projects,
+    sprints,
     truncated,
-  } = useWorkspaceTasks(workspaceId);
+  } = useWorkspaceTasks(workspaceId, view);
+
+  const unarchiveMutation = useUnarchiveTask(workspaceId);
+
+  const { members } = useWorkspaceMembers(workspaceId);
+
+  // The default project drives the inline quick-add (which doesn't show a
+  // project picker). Order of precedence:
+  //   1. If a single project is filtered in, use it.
+  //   2. Else read the last project the user successfully added to from
+  //      localStorage (set by AddWorkspaceTaskModal).
+  //   3. Else the first project in the workspace.
+  const defaultProjectId = useMemo(() => {
+    if (filters.teams.length === 1) return filters.teams[0];
+    try {
+      const stored = typeof window !== "undefined"
+        ? localStorage.getItem("aexy:workspaceTasks:lastProjectId")
+        : null;
+      if (stored && projects.some((p) => p.id === stored)) return stored;
+    } catch {
+      // localStorage unavailable — fall through.
+    }
+    return projects[0]?.id ?? null;
+  }, [filters.teams, projects]);
+
+  // When exactly one project is filtered in we scope the kanban to that
+  // project's statuses (including any custom buckets); otherwise we render
+  // the workspace defaults. `task.status` is still a slug string, so the
+  // tasksByStatus map indexes the right column regardless.
+  const scopedProjectId =
+    filters.teams.length === 1 ? filters.teams[0] : null;
+  const { statuses: projectStatuses } = useTaskStatuses(workspaceId, scopedProjectId);
+
+  // Layout state is per-workspace (one preference for the All-Tasks tab,
+  // independent of any project-board layout pick).
+  const [tasksLayout, setTasksLayout] = useTasksLayout("workspaceTasks", "board");
+
+  const [addModalStatus, setAddModalStatus] = useState<TaskStatus | null>(null);
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const toggleSelected = (taskId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  };
+  const clearSelection = () => setSelectedIds(new Set());
+  const applyBulkStatus = async (next: TaskStatus) => {
+    // Fire N updates in parallel. Cost is N round-trips; a workspace-level
+    // bulk-status endpoint would collapse to one — tracked as a follow-up.
+    await Promise.allSettled(
+      Array.from(visibleSelectedIds).map((taskId) =>
+        updateTaskStatus({ taskId, status: next }),
+      ),
+    );
+    clearSelection();
+  };
+
+  // Drop selected ids that aren't in the current filtered view so the
+  // toolbar's "N selected" count matches what the user can see and the
+  // bulk action doesn't no-op on hidden rows.
+  const visibleSelectedIds = useMemo(() => {
+    if (selectedIds.size === 0) return selectedIds;
+    const visible = new Set(filteredTasks.map((t) => t.id));
+    const next = new Set<string>();
+    selectedIds.forEach((id) => {
+      if (visible.has(id)) next.add(id);
+    });
+    return next;
+  }, [selectedIds, filteredTasks]);
+
+  const handleUnarchive = async (task: SprintTask) => {
+    if (!task.team_id) return;
+    await unarchiveMutation.mutateAsync({ teamId: task.team_id, taskId: task.id });
+  };
+  const applyBulkUnarchive = async () => {
+    const toRestore = filteredTasks.filter(
+      (t) => visibleSelectedIds.has(t.id) && t.team_id,
+    );
+    await Promise.allSettled(
+      toRestore.map((t) =>
+        unarchiveMutation.mutateAsync({ teamId: t.team_id!, taskId: t.id }),
+      ),
+    );
+    clearSelection();
+  };
+
+  // Sync filter state ↔ URL. We persist a small whitelist of filter dimensions
+  // (`q`, `assignee`, `priority`, `team`, `sprint`) plus the `tab` so refreshing
+  // the page or sharing the link reproduces the same view. Reading happens on
+  // mount; writing happens whenever filters change.
+  const initialUrlSyncedRef = useRef(false);
+  useEffect(() => {
+    if (initialUrlSyncedRef.current) return;
+    initialUrlSyncedRef.current = true;
+    const q = searchParams.get("q") || "";
+    const assignees = searchParams.getAll("assignee");
+    const priorities = searchParams.getAll("priority") as TaskPriority[];
+    const teams = searchParams.getAll("team");
+    const sprintsFromUrl = searchParams.getAll("sprint");
+    if (q || assignees.length || priorities.length || teams.length || sprintsFromUrl.length) {
+      updateFilters({
+        search: q,
+        assignees,
+        priorities,
+        teams,
+        sprints: sprintsFromUrl,
+      });
+    }
+    // We deliberately depend on nothing beyond searchParams — we hydrate once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Debounce the URL write so the search field doesn't push a `router.replace`
+  // on every keystroke. We deliberately don't take `searchParams` as a
+  // dep — it changes after every replace and would create a feedback loop;
+  // we re-read the current URL inline.
+  useEffect(() => {
+    if (!initialUrlSyncedRef.current) return;
+    const handle = setTimeout(() => {
+      const current = window.location.search.replace(/^\?/, "");
+      const params = new URLSearchParams(current);
+      params.delete("q");
+      params.delete("assignee");
+      params.delete("priority");
+      params.delete("team");
+      params.delete("sprint");
+      params.delete("view");
+      if (filters.search) params.set("q", filters.search);
+      filters.assignees.forEach((a) => params.append("assignee", a));
+      filters.priorities.forEach((p) => params.append("priority", p));
+      filters.teams.forEach((t) => params.append("team", t));
+      filters.sprints.forEach((s) => params.append("sprint", s));
+      if (view === "archived") params.set("view", "archived");
+      const next = params.toString();
+      if (next !== current) {
+        router.replace(`${pathname}${next ? `?${next}` : ""}`, { scroll: false });
+      }
+    }, 200);
+    return () => clearTimeout(handle);
+  }, [filters, view, pathname, router]);
+
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // `n` opens the add-task modal pre-filtered to "To Do"; `/` focuses search.
+  // The modal handles its own Esc.
+  const hotkeysEnabled = addModalStatus === null;
+  useShortcut("n", () => setAddModalStatus("todo"), { enabled: hotkeysEnabled });
+  useShortcut("/", () => searchInputRef.current?.focus(), { enabled: hotkeysEnabled });
 
   // Precompute localized labels so we pass plain strings down to dumb children.
-  const statusLabel = useMemo<Record<TaskStatus, string>>(
-    () => ({
+  // For canonical slugs we use the i18n catalog; custom project statuses fall
+  // through to the row's `name` (already user-supplied, not translatable).
+  const statusLabel = useMemo<Record<string, string>>(() => {
+    const labels: Record<string, string> = {
       backlog: tStatus(STATUS_I18N_KEY.backlog),
       todo: tStatus(STATUS_I18N_KEY.todo),
       in_progress: tStatus(STATUS_I18N_KEY.in_progress),
       review: tStatus(STATUS_I18N_KEY.review),
       done: tStatus(STATUS_I18N_KEY.done),
-    }),
-    [tStatus],
+    };
+    for (const s of projectStatuses) {
+      if (!(s.slug in labels)) labels[s.slug] = s.name;
+    }
+    return labels;
+  }, [tStatus, projectStatuses]);
+
+  // Status slugs in render order. Falls back to the canonical five only when
+  // the hook hasn't returned rows yet (mid-fetch on first paint).
+  const renderStatuses: string[] = useMemo(
+    () =>
+      projectStatuses.length > 0
+        ? projectStatuses.map((s) => s.slug)
+        : (STATUSES as string[]),
+    [projectStatuses],
   );
   const priorityLabel = useMemo<Record<TaskPriority, string>>(
     () => ({
@@ -373,7 +615,9 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
 
     const dropTargetId = over.id as string;
     // Either dropped directly on a column (status slug) or on a card inside one.
-    let targetStatus: TaskStatus | undefined = STATUSES.find((s) => s === dropTargetId);
+    let targetStatus: TaskStatus | undefined = (
+      renderStatuses.find((s) => s === dropTargetId) as TaskStatus | undefined
+    );
     if (!targetStatus) {
       const targetTask = filteredTasks.find((t) => t.id === dropTargetId);
       if (targetTask) targetStatus = targetTask.status;
@@ -411,6 +655,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
         <div className="relative flex-1 max-w-xs">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <input
+            ref={searchInputRef}
             type="text"
             placeholder={t("searchPlaceholder")}
             value={filters.search}
@@ -436,12 +681,14 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           emptyLabel={t("noOptions")}
         />
 
-        <PriorityDropdown
-          selected={filters.priorities}
-          onChange={(priorities) => updateFilters({ priorities })}
-          buttonLabel={t("priority")}
-          optionLabels={priorityLabel}
-        />
+        {view === "active" && (
+          <PriorityDropdown
+            selected={filters.priorities}
+            onChange={(priorities) => updateFilters({ priorities })}
+            buttonLabel={t("priority")}
+            optionLabels={priorityLabel}
+          />
+        )}
 
         <MultiSelectDropdown
           label={t("project")}
@@ -473,11 +720,102 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           </button>
         )}
 
-        <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-          <Filter className="h-3.5 w-3.5" />
-          {filteredTasks.length === 1
-            ? t("taskCount", { count: filteredTasks.length })
-            : t("taskCountPlural", { count: filteredTasks.length })}
+        <div className="ml-auto flex items-center gap-3">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Filter className="h-3.5 w-3.5" />
+            {filteredTasks.length === 1
+              ? t("taskCount", { count: filteredTasks.length })
+              : t("taskCountPlural", { count: filteredTasks.length })}
+          </div>
+
+          {/* Active vs Archived toggle */}
+          <div className="flex items-center bg-muted border border-border rounded-lg p-0.5 text-xs">
+            <button
+              onClick={() => setView("active")}
+              aria-pressed={view === "active"}
+              className={cn(
+                "px-2 py-1 rounded-md transition-all",
+                view === "active"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {t("viewActive")}
+            </button>
+            <button
+              onClick={() => setView("archived")}
+              aria-pressed={view === "archived"}
+              className={cn(
+                "px-2 py-1 rounded-md transition-all",
+                view === "archived"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {t("viewArchived")}
+            </button>
+          </div>
+
+          {/* Board vs Table layout toggle — hidden in archive view since
+              archived tasks are always rendered as a flat table. */}
+          {view === "active" && (
+            <div className="flex items-center bg-muted border border-border rounded-lg p-0.5">
+              <button
+                onClick={() => setTasksLayout("board")}
+                title={t("viewBoard")}
+                aria-pressed={tasksLayout === "board"}
+                className={cn(
+                  "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-all",
+                  tasksLayout === "board"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => setTasksLayout("table")}
+                title={t("viewTable")}
+                aria-pressed={tasksLayout === "table"}
+                className={cn(
+                  "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-all",
+                  tasksLayout === "table"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Table2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+
+          {view === "active" && filters.teams.length === 1 && (
+            <Link
+              href={`/settings/projects/${filters.teams[0]}/statuses`}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors"
+              title="Edit this project's status columns"
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+              Columns
+            </Link>
+          )}
+          {view === "active" && (
+          <button
+            type="button"
+            onClick={() => setAddModalStatus("todo")}
+            disabled={projects.length === 0}
+            className={cn(
+              "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold",
+              "bg-primary-500 text-white hover:bg-primary-400 transition-colors",
+              "ring-1 ring-primary-500/40",
+              "disabled:opacity-50 disabled:cursor-not-allowed",
+            )}
+            title="Add task — N"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            {t("addTask")}
+          </button>
+          )}
         </div>
       </div>
 
@@ -490,34 +828,74 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
 
       {/* Kanban */}
       {isLoading ? (
-        <div className="grid grid-cols-5 gap-3">
-          {STATUSES.map((s) => (
-            <div key={s} className="h-96 rounded-xl bg-muted/40 animate-pulse" />
+        <div className={KANBAN_ROW_CLASSES}>
+          {renderStatuses.map((s, colIdx) => (
+            <div
+              key={s}
+              className="flex-shrink-0 w-full md:w-[320px] rounded-xl bg-muted/30 border border-border/30 overflow-hidden"
+            >
+              <div className="flex items-center justify-between px-3 py-3 border-b border-border/30 bg-background/30">
+                <div className="h-3 w-20 rounded bg-muted/60 animate-pulse" />
+                <div className="h-3 w-6 rounded bg-muted/60 animate-pulse" />
+              </div>
+              <div className="p-2 space-y-2">
+                {Array.from({ length: 3 - (colIdx % 3) }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="h-20 rounded-lg bg-muted/50 animate-pulse"
+                    style={{ animationDelay: `${(colIdx * 3 + i) * 80}ms` }}
+                  />
+                ))}
+              </div>
+            </div>
           ))}
         </div>
-      ) : filteredTasks.length === 0 ? (
+      ) : view === "archived" ? (
+        <TaskTableView
+          tasks={filteredTasks}
+          statuses={projectStatuses}
+          onRowClick={handleTaskClick}
+          selectedIds={selectedIds}
+          onToggleSelected={toggleSelected}
+          showSprintColumn
+          emptyLabel={t("noArchivedTasks")}
+          rowActions={(task) => (
+            <button
+              type="button"
+              onClick={() => handleUnarchive(task)}
+              disabled={unarchiveMutation.isPending}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors disabled:opacity-50"
+              title={t("unarchive")}
+            >
+              <ArchiveRestore className="h-3.5 w-3.5" />
+              {t("unarchive")}
+            </button>
+          )}
+        />
+      ) : tasksLayout === "table" ? (
+        <TaskTableView
+          tasks={filteredTasks}
+          statuses={projectStatuses}
+          onRowClick={handleTaskClick}
+          selectedIds={selectedIds}
+          onToggleSelected={toggleSelected}
+          showSprintColumn
+        />
+      ) : filteredTasks.length === 0 && hasActiveFilters ? (
+        // Filters are active and matched nothing → offer to clear. We only
+        // hide the kanban here, not on a truly-empty workspace, so the user
+        // can always reach the per-column quick-add to create their first task.
         <div className="text-center py-20 bg-muted/30 rounded-xl border border-dashed border-border">
           <h3 className="text-foreground font-medium mb-2">{t("noTasksFound")}</h3>
           <p className="text-muted-foreground text-sm mb-4">
-            {hasActiveFilters
-              ? t("noTasksHintFiltered")
-              : t("noTasksHintEmpty")}
+            {t("noTasksHintFiltered")}
           </p>
-          {hasActiveFilters ? (
-            <button
-              onClick={clearFilters}
-              className="px-4 py-2 bg-primary-500 hover:bg-primary-400 text-white rounded-lg text-sm"
-            >
-              {t("clearFilters")}
-            </button>
-          ) : (
-            <Link
-              href="/sprints"
-              className="inline-block px-4 py-2 bg-primary-500 hover:bg-primary-400 text-white rounded-lg text-sm"
-            >
-              {t("goToProjects")}
-            </Link>
-          )}
+          <button
+            onClick={clearFilters}
+            className="px-4 py-2 bg-primary-500 hover:bg-primary-400 text-white rounded-lg text-sm"
+          >
+            {t("clearFilters")}
+          </button>
         </div>
       ) : (
         <DndContext
@@ -526,15 +904,23 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
-          <div className="flex gap-3 overflow-x-auto pb-4">
-            {STATUSES.map((status) => (
+          <div className={KANBAN_ROW_CLASSES}>
+            {renderStatuses.map((status) => (
               <KanbanColumn
                 key={status}
-                status={status}
-                label={statusLabel[status]}
+                status={status as TaskStatus}
+                label={statusLabel[status] ?? status}
                 emptyLabel={t("dropTasksHere")}
-                tasks={tasksByStatus[status]}
+                tasks={tasksByStatus[status] ?? []}
                 onTaskClick={handleTaskClick}
+                onOpenAddModal={(s) => setAddModalStatus(s)}
+                onInlineCreate={async (payload) => {
+                  await createTask(payload);
+                }}
+                isCreating={isCreatingTask}
+                defaultProjectId={defaultProjectId}
+                selectedIds={visibleSelectedIds}
+                onToggleSelected={toggleSelected}
               />
             ))}
           </div>
@@ -552,6 +938,87 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           </DragOverlay>
         </DndContext>
       )}
+
+      <AnimatePresence>
+        {visibleSelectedIds.size > 0 && (
+          <motion.div
+            initial={{ y: 24, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 24, opacity: 0 }}
+            transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+            className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-3 py-2 rounded-xl border border-border bg-muted/95 backdrop-blur-xl shadow-2xl ring-1 ring-white/5"
+            role="region"
+            aria-label="Bulk actions"
+          >
+            <span className="px-2 text-xs font-medium text-foreground">
+              {visibleSelectedIds.size} selected
+            </span>
+            <div className="h-4 w-px bg-border/60" />
+            {view === "archived" ? (
+              <button
+                type="button"
+                onClick={() => void applyBulkUnarchive()}
+                disabled={unarchiveMutation.isPending}
+                className="inline-flex items-center gap-1 bg-background/60 border border-border/60 rounded-md px-2 py-1 text-xs text-foreground hover:bg-accent/40 transition-colors disabled:opacity-50"
+              >
+                <ArchiveRestore className="h-3.5 w-3.5" />
+                {t("unarchiveBulk")}
+              </button>
+            ) : (
+              <select
+                defaultValue=""
+                onChange={(e) => {
+                  const next = e.target.value as TaskStatus;
+                  if (!next) return;
+                  void applyBulkStatus(next);
+                  e.target.value = "";
+                }}
+                className="bg-background/60 border border-border/60 rounded-md px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary-500/40"
+              >
+                <option value="" disabled>
+                  Move to…
+                </option>
+                {renderStatuses.map((s) => (
+                  <option key={s} value={s}>
+                    {statusLabel[s] ?? s}
+                  </option>
+                ))}
+              </select>
+            )}
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="ml-1 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors"
+            >
+              Clear
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {addModalStatus !== null && (
+          <AddWorkspaceTaskModal
+            onClose={() => setAddModalStatus(null)}
+            onSubmit={async (payload) => {
+              await createTask(payload);
+            }}
+            isSubmitting={isCreatingTask}
+            projects={projects.map((p) => ({ id: p.id, name: p.name, color: p.color }))}
+            sprints={sprints}
+            assignees={(members || [])
+              .filter((m) => m.developer_name)
+              .map((m) => ({
+                id: m.developer_id,
+                name: m.developer_name as string,
+                avatar: m.developer_avatar_url || undefined,
+              }))}
+            defaultProjectId={defaultProjectId || undefined}
+            defaultStatus={addModalStatus}
+            lockStatus
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

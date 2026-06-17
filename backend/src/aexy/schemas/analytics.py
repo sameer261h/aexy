@@ -521,6 +521,7 @@ class WorkloadRequest(BaseModel):
     """Request for workload distribution."""
 
     developer_ids: list[str]
+    days: int = 30
 
 
 class CollaborationRequest(BaseModel):

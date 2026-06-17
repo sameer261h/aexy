@@ -1,72 +1,31 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
 import {
-  ChevronLeft,
   Plus,
   Zap,
   Play,
   Pause,
   Trash2,
   Clock,
-  Edit2,
-  Building2,
-  Ticket,
-  Users,
-  Mail,
-  MonitorCheck,
-  Calendar,
-  FileText,
-  CalendarCheck,
-  Activity,
-  ShieldCheck,
 } from "lucide-react";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useAutomations } from "@/hooks/useAutomations";
 import { AutomationModule, Automation } from "@/lib/api";
+import { formatAbsolute, formatRelative } from "@/lib/datetime";
 import { EmptyState } from "@/components/EmptyState";
 import { SearchInput } from "@/components/ui/search-input";
-
-const moduleLabels: Record<AutomationModule, string> = {
-  crm: "CRM",
-  tickets: "Tickets",
-  hiring: "Hiring",
-  email_marketing: "Email",
-  uptime: "Uptime",
-  sprints: "Sprints",
-  forms: "Forms",
-  booking: "Booking",
-  tracking: "Tracking",
-  compliance: "Compliance",
-};
-
-const moduleIcons: Record<AutomationModule, React.ElementType> = {
-  crm: Building2,
-  tickets: Ticket,
-  hiring: Users,
-  email_marketing: Mail,
-  uptime: MonitorCheck,
-  sprints: Calendar,
-  forms: FileText,
-  booking: CalendarCheck,
-  tracking: Activity,
-  compliance: ShieldCheck,
-};
-
-const moduleColors: Record<AutomationModule, string> = {
-  crm: "bg-blue-500/20 text-blue-400",
-  tickets: "bg-orange-500/20 text-orange-400",
-  hiring: "bg-purple-500/20 text-purple-400",
-  email_marketing: "bg-pink-500/20 text-pink-400",
-  uptime: "bg-green-500/20 text-green-400",
-  sprints: "bg-yellow-500/20 text-yellow-400",
-  forms: "bg-cyan-500/20 text-cyan-400",
-  booking: "bg-indigo-500/20 text-indigo-400",
-  tracking: "bg-teal-500/20 text-teal-400",
-  compliance: "bg-red-500/20 text-red-400",
-};
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  ALL_MODULES,
+  moduleColors,
+  moduleIcons,
+  moduleLabels,
+} from "@/lib/automationTemplates";
 
 function ModuleBadge({ module }: { module: AutomationModule }) {
   const Icon = moduleIcons[module] || Zap;
@@ -85,52 +44,67 @@ function AutomationCard({
   automation,
   onToggle,
   onDelete,
-  onEdit,
+  editHref,
 }: {
   automation: Automation;
   onToggle: () => void;
   onDelete: () => void;
-  onEdit: () => void;
+  editHref: string;
 }) {
+  const t = useTranslations("automations");
+  // UX-AGT-DTL-009: wrap content in a real <Link> instead of
+  // <div onClick={onEdit}>. Middle-click / cmd-click now open in a
+  // new tab; right-click "Copy link" works; screen readers announce
+  // the row as a link. Nested action buttons keep their existing
+  // stopPropagation so they don't trigger the Link navigation.
   return (
-    <div
-      onClick={onEdit}
-      className="bg-muted/50 border border-border rounded-xl p-5 hover:border-blue-500/50 transition-colors cursor-pointer group"
+    <Link
+      href={editHref}
+      className="bg-muted/50 border border-border rounded-xl p-5 hover:border-blue-500/50 transition-colors cursor-pointer group block"
     >
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-lg ${automation.is_active ? "bg-green-500/20 text-green-400" : "bg-accent text-muted-foreground"}`}>
+          <div className={`p-2 rounded-lg ${automation.is_active ? "bg-green-500/20 text-green-700 dark:text-green-400" : "bg-accent text-muted-foreground"}`}>
             <Zap className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="text-foreground font-medium group-hover:text-blue-400 transition-colors">{automation.name}</h3>
+            <h3 className="text-foreground font-medium group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{automation.name}</h3>
             <div className="flex items-center gap-2 mt-1">
               <ModuleBadge module={automation.module as AutomationModule} />
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+        {/* Inline actions. preventDefault + stopPropagation each stop
+            the parent <Link> from navigating when the user wanted
+            Pause / Delete. The Edit-icon button is gone — the whole
+            card is already an edit-link, so it was redundant + nested
+            buttons inside <Link> is invalid HTML. */}
+        <div className="flex items-center gap-2">
           <button
-            onClick={onEdit}
-            className="p-2 rounded-lg bg-accent text-muted-foreground hover:bg-blue-500/20 hover:text-blue-400 transition-colors"
-            title="Edit automation"
-          >
-            <Edit2 className="h-4 w-4" />
-          </button>
-          <button
-            onClick={onToggle}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggle();
+            }}
+            aria-label={automation.is_active ? "Pause automation" : "Activate automation"}
+            title={automation.is_active ? "Pause automation" : "Activate automation"}
             className={`p-2 rounded-lg transition-colors ${
               automation.is_active
-                ? "bg-green-500/20 text-green-400 hover:bg-green-500/30"
+                ? "bg-green-500/20 text-green-700 dark:text-green-400 hover:bg-green-500/30"
                 : "bg-accent text-muted-foreground hover:bg-muted"
             }`}
-            title={automation.is_active ? "Pause automation" : "Activate automation"}
           >
             {automation.is_active ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
           </button>
           <button
-            onClick={onDelete}
-            className="p-2 rounded-lg bg-accent text-muted-foreground hover:bg-red-500/20 hover:text-red-400 transition-colors"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onDelete();
+            }}
+            aria-label="Delete automation"
+            title="Delete automation"
+            className="p-2 rounded-lg bg-accent text-muted-foreground hover:bg-red-500/20 hover:text-red-600 dark:hover:text-red-400 transition-colors"
           >
             <Trash2 className="h-4 w-4" />
           </button>
@@ -149,7 +123,7 @@ function AutomationCard({
         <div className="flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">Actions:</span>
           <span className="text-foreground">
-            {automation.actions.length} action{automation.actions.length !== 1 ? "s" : ""}
+            {t("card.actions", { count: automation.actions.length })}
           </span>
         </div>
       </div>
@@ -157,26 +131,37 @@ function AutomationCard({
       <div className="flex items-center gap-4 text-xs text-muted-foreground">
         <span className="flex items-center gap-1">
           <Play className="h-3 w-3" />
-          {automation.total_runs} runs
+          {t("card.runs", { count: automation.total_runs })}
         </span>
         {automation.last_run_at && (
-          <span className="flex items-center gap-1">
+          <span
+            className="flex items-center gap-1"
+            // UX-AUT-LST-010: title carries the absolute local time so
+            // users hovering can see the precise minute even though
+            // the visible label is relative ("3h ago"). Drops the
+            // date-only formatting that lost time-of-day in the prior
+            // implementation.
+            title={formatAbsolute(automation.last_run_at)}
+          >
             <Clock className="h-3 w-3" />
-            Last run: {new Date(automation.last_run_at).toLocaleDateString()}
+            Last run: {formatRelative(automation.last_run_at)}
           </span>
         )}
       </div>
-    </div>
+    </Link>
   );
 }
 
-const ALL_MODULES: AutomationModule[] = ["crm", "tickets", "hiring", "email_marketing", "uptime", "sprints", "forms", "booking", "tracking", "compliance"];
-
 export default function AutomationsPage() {
+  const t = useTranslations("automations");
   const router = useRouter();
   const searchParams = useSearchParams();
   const { currentWorkspace } = useWorkspace();
   const workspaceId = currentWorkspace?.id || null;
+  // Track the full automation so the confirm dialog can name it
+  // (UX-AUT-LST-007). The prior id-only state lost the name when the
+  // delete-target row scrolled off-screen or filters changed.
+  const [deleteTarget, setDeleteTarget] = useState<Automation | null>(null);
 
   // Get initial module filter from URL
   const initialModule = searchParams.get("module") as AutomationModule | null;
@@ -196,20 +181,29 @@ export default function AutomationsPage() {
 
   const handleModuleChange = (module: AutomationModule | null) => {
     setSelectedModule(module);
-    // Update URL without navigation
-    const url = new URL(window.location.href);
+    // Sync the filter through Next router so the back-button restores
+    // the prior filter. The earlier window.history.replaceState path
+    // worked visually but bypassed Next's navigation state, so going
+    // back from a deeper route landed on the unfiltered list.
+    const params = new URLSearchParams(searchParams.toString());
     if (module) {
-      url.searchParams.set("module", module);
+      params.set("module", module);
     } else {
-      url.searchParams.delete("module");
+      params.delete("module");
     }
-    window.history.replaceState({}, "", url.toString());
+    const qs = params.toString();
+    router.replace(qs ? `/automations?${qs}` : "/automations", {
+      scroll: false,
+    });
   };
 
-  const handleDeleteAutomation = async (id: string) => {
-    if (confirm("Delete this automation?")) {
-      await deleteAutomation(id);
-    }
+  const handleDeleteAutomation = (automation: Automation) => {
+    setDeleteTarget(automation);
+  };
+
+  const confirmDeleteAutomation = async () => {
+    if (!deleteTarget) return;
+    await deleteAutomation(deleteTarget.id);
   };
 
   const handleCreateNew = () => {
@@ -224,26 +218,18 @@ export default function AutomationsPage() {
       <div className="p-8">
         <div className="max-w-6xl mx-auto">
           {/* Header */}
-          <div className="flex items-center gap-4 mb-6">
-            <button
-              onClick={() => router.push("/dashboard")}
-              className="p-2 hover:bg-muted rounded-lg text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <ChevronLeft className="h-5 w-5" />
-            </button>
-            <div className="flex w-full sm:flex-row flex-col sm:items-center sm:justify-between items-start">
-              <div className="flex-1">
-              <h1 className="text-2xl font-bold text-foreground">Automations</h1>
-              <p className="text-sm text-muted-foreground">Automate workflows across all Aexy modules</p>
+          <div className="flex w-full sm:flex-row flex-col sm:items-center sm:justify-between items-start mb-6 gap-3">
+            <div className="flex-1">
+              <h1 className="text-2xl font-bold text-foreground">{t("title")}</h1>
+              <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
             </div>
             <button
               onClick={handleCreateNew}
               className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-medium"
             >
               <Plus className="h-4 w-4" />
-              Create Automation
+              {t("createAutomation")}
             </button>
-            </div>
           </div>
 
           <UpgradeBanner trigger="automation_limit" compact />
@@ -256,7 +242,7 @@ export default function AutomationsPage() {
                 selectedModule === null ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              All Modules
+              {t("filter.allModules")}
             </button>
             {ALL_MODULES.map((module) => {
               const Icon = moduleIcons[module];
@@ -280,7 +266,7 @@ export default function AutomationsPage() {
             <SearchInput
               value={searchQuery}
               onChange={setSearchQuery}
-              placeholder="Search automations..."
+              placeholder={t("search.placeholder")}
               wrapperClassName="flex-1"
             />
           </div>
@@ -293,17 +279,42 @@ export default function AutomationsPage() {
               ))}
             </div>
           ) : filteredAutomations.length === 0 ? (
-            <EmptyState
-              icon={Zap}
-              title={selectedModule ? `No ${moduleLabels[selectedModule]} automations yet` : "No automations yet"}
-              description={selectedModule
-                ? `Create your first ${moduleLabels[selectedModule]} automation to streamline your workflows`
-                : "Create your first automation to streamline your workflows"}
-              actions={[
-                { label: "Create Automation", onClick: handleCreateNew },
-              ]}
-              templateHref="/templates?category=automations"
-            />
+            // UX-AUT-LST-009: distinguish three empty cases — search miss
+            // (user knows results exist somewhere, just not matching this
+            // query), module-scoped empty (user knows this module is
+            // empty but other modules may have content), and global
+            // empty. Search miss wins over module filter because clearing
+            // the search is the smaller corrective action.
+            searchQuery ? (
+              <EmptyState
+                icon={Zap}
+                title={t("empty.searchTitle", { query: searchQuery })}
+                description={t("empty.searchDescription")}
+                actions={[
+                  { label: t("search.clear"), onClick: () => setSearchQuery("") },
+                ]}
+              />
+            ) : selectedModule ? (
+              <EmptyState
+                icon={Zap}
+                title={t("empty.moduleTitle", { module: moduleLabels[selectedModule] })}
+                description={t("empty.moduleDescription", { module: moduleLabels[selectedModule] })}
+                actions={[
+                  { label: t("createAutomation"), onClick: handleCreateNew },
+                ]}
+                templateHref="/templates?category=automations"
+              />
+            ) : (
+              <EmptyState
+                icon={Zap}
+                title={t("empty.title")}
+                description={t("empty.description")}
+                actions={[
+                  { label: t("createAutomation"), onClick: handleCreateNew },
+                ]}
+                templateHref="/templates?category=automations"
+              />
+            )
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {filteredAutomations.map((automation) => (
@@ -311,14 +322,31 @@ export default function AutomationsPage() {
                   key={automation.id}
                   automation={automation}
                   onToggle={() => toggleAutomation(automation.id)}
-                  onDelete={() => handleDeleteAutomation(automation.id)}
-                  onEdit={() => router.push(`/automations/${automation.id}`)}
+                  onDelete={() => handleDeleteAutomation(automation)}
+                  editHref={`/automations/${automation.id}`}
                 />
               ))}
             </div>
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={t("delete.title")}
+        // UX-AUT-LST-007: name the automation in the destructive copy so
+        // users about to delete the wrong row catch it. Falls back to
+        // generic copy if name is empty (untitled / mid-rename).
+        description={
+          deleteTarget?.name
+            ? t("delete.descriptionNamed", { name: deleteTarget.name })
+            : t("delete.description")
+        }
+        confirmLabel={t("delete.confirm")}
+        onConfirm={confirmDeleteAutomation}
+        tone="danger"
+      />
     </div>
   );
 }

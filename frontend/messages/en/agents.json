@@ -141,7 +141,12 @@
     },
 
     "confirmations": {
-      "deleteAgentConfirm": "Are you sure you want to delete this agent? This action cannot be undone."
+      "deleteAgentConfirm": "Are you sure you want to delete this agent? This action cannot be undone.",
+      "deleteAgentTitle": "Delete this agent?",
+      "deleteAgentDescription": "Conversations, configuration, and execution history will be permanently removed. This cannot be undone.",
+      "deleteConversationTitle": "Delete this conversation?",
+      "deleteConversationDescription": "The conversation thread and all messages will be removed.",
+      "deleteConversationConfirm": "Delete conversation"
     },
 
     "search": {
@@ -154,6 +159,15 @@
       "pending": "Pending",
       "running": "Running",
       "cancelled": "Cancelled"
+    },
+
+    "chat": {
+      "tokensIn": "in",
+      "tokensOut": "out",
+      "sources": "Sources",
+      "untitledSource": "Untitled source",
+      "processing": "Processing...",
+      "generatePromptPlaceholder": "e.g. When a new deal closes in CRM, post to Slack and create a follow-up task"
     }
   }
 }

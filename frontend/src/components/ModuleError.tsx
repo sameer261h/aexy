@@ -1,7 +1,8 @@
 "use client";
 
 import { AlertTriangle, RefreshCw, Home, ChevronDown, ChevronUp } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { reportError } from "@/lib/reportError";
 
 interface ModuleErrorProps {
   error: Error & { digest?: string };
@@ -11,6 +12,17 @@ interface ModuleErrorProps {
 
 export function ModuleError({ error, reset, moduleName }: ModuleErrorProps) {
   const [showDetails, setShowDetails] = useState(false);
+
+  // UX-LE-005: Ship the error to whatever telemetry backend the
+  // deployment has wired (Sentry today, console.error fallback).
+  // Fires once on mount keyed by the error reference so a retry
+  // that re-mounts the boundary reports the new error too.
+  useEffect(() => {
+    reportError(error, {
+      digest: error.digest,
+      context: moduleName ? { module: moduleName } : undefined,
+    });
+  }, [error, moduleName]);
 
   return (
     <div role="alert" className="flex items-center justify-center min-h-[400px] p-6">
