@@ -19,6 +19,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Aexy"
 cp Packaging/Info.plist "$APP/Contents/Info.plist"
+[ -f Resources/AppIcon.icns ] || swift Packaging/generate-icon.swift
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 echo "→ ad-hoc code-signing"
 codesign --force --deep --sign - "$APP"
