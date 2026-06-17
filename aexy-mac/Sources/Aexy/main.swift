@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import UserNotifications
 import AexyCore
@@ -17,8 +18,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var headerItem: NSMenuItem?
     private var statusText = "Not signed in"
     private var client: TrackerClient?
-    private var capturing = false
     private var onboarding = false
+    private var cancellables = Set<AnyCancellable>()
     private let keychain = KeychainTokenStore()
     private var appState: AppState?
     private var mainWindow: NSWindow?
@@ -50,6 +51,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let stored = TrackerConfig.fromKeychain(store: keychain)
         let state = AppState(apiBaseURL: apiBaseURL(), keychain: keychain, config: stored)
         state.onCaptureReady = { [weak self] cfg in self?.startCapture(with: cfg) }
+        // Check-in drives the background capture loop; AppState is the source of
+        // truth so the menu and the in-app GUI card stay in sync.
+        state.onToggleCapture = { [weak self] on in
+            Task { if on { await self?.client?.start() } else { await self?.client?.stop() } }
+        }
+        state.$isCheckedIn
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] checkedIn in self?.applyCheckInState(checkedIn) }
+            .store(in: &cancellables)
         appState = state
 
         // Native notifications: request auth + poll every 60s (no-op when signed out).
@@ -125,11 +136,29 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func startCapture(with config: TrackerConfig) {
         client = TrackerClient(config: config)
-        capturing = true
-        updateTitle("● Aexy")
-        setHeader("Checked in — tracking")
         appState?.config = config
-        Task { await client?.start() }
+        // Flip check-in on; the AppState callback starts the capture loop and the
+        // $isCheckedIn sink updates the menu-bar glyph/header.
+        appState?.setCheckedIn(true)
+    }
+
+    /// Reflect check-in state in the menu bar. Single place that sets the
+    /// glyph/header for signed-in states (guards cover sign-out / not-enrolled).
+    private func applyCheckInState(_ checkedIn: Bool) {
+        guard appState?.isSignedIn == true else {
+            updateTitle("○ Aexy")
+            setHeader("Not signed in — Open Aexy to sign in")
+            rebuildMenu()
+            return
+        }
+        if client == nil {  // signed in, capture not enrolled
+            updateTitle("○ Aexy")
+            setHeader("Aexy")
+            rebuildMenu()
+            return
+        }
+        updateTitle(checkedIn ? "● Aexy" : "○ Aexy")
+        setHeader(checkedIn ? "Checked in — tracking" : "Checked out")
         rebuildMenu()
     }
 
@@ -162,7 +191,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(.separator())
             // Capture controls only when a device is enrolled for tracking.
             if client != nil {
-                let title = capturing ? "Check out" : "Check in"
+                let title = (appState?.isCheckedIn ?? false) ? "Check out" : "Check in"
                 menu.addItem(NSMenuItem(title: title, action: #selector(toggleCheckIn), keyEquivalent: "i"))
             }
             menu.addItem(NSMenuItem(title: "Sign out", action: #selector(signOut), keyEquivalent: ""))
@@ -219,20 +248,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Check in (start tracking) / Check out (stop) — the office metaphor for
     /// the capture loop. Data syncs automatically; there is no manual flush.
     @objc private func toggleCheckIn() {
-        guard let client else { return }
-        capturing.toggle()
-        updateTitle(capturing ? "● Aexy" : "○ Aexy")
-        setHeader(capturing ? "Checked in — tracking" : "Checked out")
-        Task {
-            if capturing { await client.start() } else { await client.stop() }
-        }
+        guard client != nil else { return }
+        appState?.toggleCheckIn()   // sink → applyCheckInState updates the menu bar
     }
 
     @objc private func signOut() {
         Task { @MainActor in
             await client?.stop()
             client = nil
-            capturing = false
             appState?.signOut()
             showSignedOut()
             rebuildMenu()

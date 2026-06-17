@@ -12,6 +12,9 @@ import { usePermissions, PERMISSIONS } from "@/hooks/usePermissions";
 import {
   useProjectTrackerConfig,
   useUpdateProjectTrackerConfig,
+  useTargetHours,
+  useUpsertTargetHours,
+  useDeleteTargetHours,
   DEFAULT_CAPTURE_CONFIG,
   TrackerCaptureConfig,
 } from "@/hooks/useTrackerAdmin";
@@ -32,6 +35,38 @@ export default function ProjectTrackerSettingsPage() {
   const [enabled, setEnabled] = useState(false);
   const [config, setConfig] = useState<TrackerCaptureConfig>(DEFAULT_CAPTURE_CONFIG);
   const [excludedText, setExcludedText] = useState("");
+
+  // Per-project target hours (overrides the workspace default for this project).
+  const { data: targets } = useTargetHours(workspaceId);
+  const upsertTarget = useUpsertTargetHours(workspaceId);
+  const deleteTarget = useDeleteTargetHours(workspaceId);
+  const projectTarget = targets?.find(
+    (t) => t.project_id === projectId && t.developer_id === null,
+  );
+  const [targetHours, setTargetHours] = useState("");
+  useEffect(() => {
+    setTargetHours(projectTarget ? String(projectTarget.target_hours_per_day) : "");
+  }, [projectTarget]);
+
+  const saveTarget = () => {
+    const n = Number(targetHours);
+    if (!Number.isFinite(n) || n <= 0 || n > 24) {
+      toast.error(t("saveError"));
+      return;
+    }
+    upsertTarget.mutate(
+      { project_id: projectId, target_hours_per_day: n },
+      { onSuccess: () => toast.success(t("targetSaved")), onError: () => toast.error(t("saveError")) },
+    );
+  };
+
+  const clearTarget = () => {
+    if (!projectTarget) return;
+    deleteTarget.mutate(projectTarget.id, {
+      onSuccess: () => toast.success(t("targetSaved")),
+      onError: () => toast.error(t("saveError")),
+    });
+  };
 
   useEffect(() => {
     if (data) {
@@ -222,6 +257,46 @@ export default function ProjectTrackerSettingsPage() {
 
             <p className="text-xs text-gray-400">{t("applyNote")}</p>
           </fieldset>
+
+          {/* Per-project target hours */}
+          <div className="space-y-3 rounded-xl border border-gray-200 bg-card p-4 dark:border-gray-800">
+            <div>
+              <h2 className="text-sm font-medium">{t("projectTargetTitle")}</h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400">{t("projectTargetHint")}</p>
+            </div>
+            <div className="flex items-end gap-3">
+              <label className="text-sm">
+                <span className="mb-1 block text-gray-600 dark:text-gray-400">{t("hoursPerDay")}</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={24}
+                  step={0.5}
+                  value={targetHours}
+                  onChange={(e) => setTargetHours(e.target.value)}
+                  placeholder="8"
+                  className="w-28 rounded-lg border border-gray-300 bg-transparent px-3 py-2 dark:border-gray-700"
+                />
+              </label>
+              <button
+                onClick={saveTarget}
+                disabled={upsertTarget.isPending}
+                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {upsertTarget.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+                {t("save")}
+              </button>
+              {projectTarget && (
+                <button
+                  onClick={clearTarget}
+                  disabled={deleteTarget.isPending}
+                  className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-accent disabled:opacity-50 dark:border-gray-700 dark:text-gray-300"
+                >
+                  {t("clear")}
+                </button>
+              )}
+            </div>
+          </div>
 
           <div className="flex justify-end">
             <button

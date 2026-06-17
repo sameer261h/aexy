@@ -585,7 +585,23 @@
       "noRecordsPermission": "You don't have permission to view others' tracker records.",
       "noActivity": "No tracked activity for this person in the selected range.",
       "adminAccessDenied": "You don't have access to Tracker administration.",
-      "totalTracked": "Total tracked"
+      "totalTracked": "Total tracked",
+      "tabTargets": "Target hours",
+      "targetsTitle": "Daily target hours",
+      "targetsSubtitle": "Set a daily target for check-in progress in the desktop app. Most specific wins: a developer override beats a project override, which beats the workspace default.",
+      "workspaceDefault": "Workspace default",
+      "workspaceDefaultHint": "Applies to everyone unless a project or developer override exists.",
+      "projectTargetTitle": "Target hours for this project",
+      "projectTargetHint": "Overrides the workspace default for everyone enrolled in this project. Leave blank to inherit.",
+      "developerOverrides": "Per-developer overrides",
+      "hoursPerDay": "Hours / day",
+      "addOverride": "Add override",
+      "remove": "Remove",
+      "clear": "Clear",
+      "targetSaved": "Target hours saved",
+      "noOverrides": "No per-developer overrides yet.",
+      "projectOverrides": "Per-project overrides",
+      "noProjectOverrides": "No per-project overrides — configure them on each project's Tracker page."
     }
   }
 }
