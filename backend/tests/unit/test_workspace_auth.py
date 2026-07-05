@@ -25,7 +25,10 @@ from aexy.models.workspace import Workspace, WorkspaceMember
 
 
 async def _make_workspace(db: AsyncSession, slug: str) -> Workspace:
-    ws = Workspace(name=f"WS {slug}", slug=slug)
+    owner = Developer(email=f"owner-{slug}@example.com", name=f"Owner {slug}")
+    db.add(owner)
+    await db.flush()
+    ws = Workspace(name=f"WS {slug}", slug=slug, owner_id=owner.id)
     db.add(ws)
     await db.commit()
     await db.refresh(ws)
@@ -33,7 +36,7 @@ async def _make_workspace(db: AsyncSession, slug: str) -> Workspace:
 
 
 async def _make_developer(db: AsyncSession, gh_id: int) -> Developer:
-    dev = Developer(github_id=gh_id, github_username=f"u{gh_id}", name=f"U{gh_id}")
+    dev = Developer(email=f"u{gh_id}@example.com", name=f"U{gh_id}")
     db.add(dev)
     await db.commit()
     await db.refresh(dev)

@@ -28,7 +28,10 @@ from aexy.models.workspace import Workspace, WorkspaceMember
 
 
 async def _make_workspace(db: AsyncSession, slug: str) -> Workspace:
-    ws = Workspace(name=f"WS {slug}", slug=slug)
+    owner = Developer(email=f"owner-{slug}@example.com", name=f"Owner {slug}")
+    db.add(owner)
+    await db.flush()
+    ws = Workspace(name=f"WS {slug}", slug=slug, owner_id=owner.id)
     db.add(ws)
     await db.commit()
     await db.refresh(ws)
@@ -36,7 +39,7 @@ async def _make_workspace(db: AsyncSession, slug: str) -> Workspace:
 
 
 async def _make_developer(db: AsyncSession, gh_id: int) -> Developer:
-    dev = Developer(github_id=gh_id, github_username=f"u{gh_id}", name=f"U{gh_id}")
+    dev = Developer(email=f"u{gh_id}@example.com", name=f"U{gh_id}")
     db.add(dev)
     await db.commit()
     await db.refresh(dev)
@@ -61,8 +64,11 @@ async def _make_story(
     story = UserStory(
         id=str(uuid.uuid4()),
         workspace_id=ws.id,
+        key=f"STORY-{uuid.uuid4().hex[:8]}",
         title=title,
-        status="todo",
+        as_a="user",
+        i_want="a feature",
+        status="draft",
     )
     db.add(story)
     await db.commit()
@@ -93,11 +99,12 @@ async def _make_story_dependency(
 ) -> StoryDependency:
     dep = StoryDependency(
         id=str(uuid.uuid4()),
+        workspace_id=dependent.workspace_id,
         dependent_story_id=dependent.id,
         blocking_story_id=blocking.id,
         dependency_type="blocks",
         status="active",
-        created_by=creator.id,
+        created_by_id=creator.id,
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
@@ -112,11 +119,12 @@ async def _make_task_dependency(
 ) -> TaskDependency:
     dep = TaskDependency(
         id=str(uuid.uuid4()),
+        workspace_id=dependent.workspace_id,
         dependent_task_id=dependent.id,
         blocking_task_id=blocking.id,
         dependency_type="blocks",
         status="active",
-        created_by=creator.id,
+        created_by_id=creator.id,
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )

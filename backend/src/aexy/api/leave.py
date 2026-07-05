@@ -155,6 +155,15 @@ async def create_leave_policy(
     service = LeavePolicyService(db)
     try:
         policy = await service.create(workspace_id=workspace_id, **data.model_dump())
+        await log_activity(
+            db,
+            workspace_id=workspace_id,
+            entity_type="leave_policy",
+            entity_id=str(policy.id),
+            activity_type="created",
+            actor_id=str(current_developer.id),
+            title="Created leave policy",
+        )
         return LeavePolicyResponse.model_validate(policy)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

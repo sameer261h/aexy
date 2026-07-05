@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aexy.models.developer import Developer
 from aexy.models.project import Project
 from aexy.models.sprint import SprintTask
+from aexy.models.team import Team
 from aexy.models.workspace import Workspace
 from aexy.services.sprint_task_service import SprintTaskService
 
@@ -34,6 +35,10 @@ async def _setup(db: AsyncSession, slug: str) -> tuple[Workspace, Project]:
         slug=f"{slug}-p",
     )
     db.add(project)
+    # SprintTask.team_id FKs to teams.id but is populated with the project id.
+    # Postgres enforces the FK, so create a matching Team row.
+    team = Team(id=project.id, workspace_id=ws.id, name=f"P {slug}", slug=f"{slug}-p")
+    db.add(team)
     await db.commit()
     await db.refresh(ws)
     await db.refresh(project)

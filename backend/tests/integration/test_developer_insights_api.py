@@ -75,7 +75,7 @@ async def setup(db_session: AsyncSession):
     # Commits for owner (weekday commits)
     for i in range(5):
         db_session.add(Commit(
-            sha=f"int-{owner.id}-{i}",
+            sha=f"int-o-{owner.id[:8]}-{i}",
             developer_id=owner.id,
             repository="repo-main",
             message=f"feat: commit {i}",
@@ -88,7 +88,7 @@ async def setup(db_session: AsyncSession):
     # Commits for dev2
     for i in range(3):
         db_session.add(Commit(
-            sha=f"int-{dev2.id}-{i}",
+            sha=f"int-d-{dev2.id[:8]}-{i}",
             developer_id=dev2.id,
             repository="repo-main",
             message=f"fix: commit {i}",
@@ -194,7 +194,8 @@ class TestDeveloperInsightsEndpoint:
         response = await client.get(
             f"/api/v1/workspaces/{ws.id}/insights/developers/some-id",
         )
-        assert response.status_code == 403
+        # Unauthenticated requests return 401 (correct REST semantic), not 403.
+        assert response.status_code == 401
 
     @pytest.mark.asyncio
     async def test_developer_with_zero_activity(self, client, setup):
@@ -552,6 +553,10 @@ class TestE2ESmokeTests:
             params={
                 "start_date": "2024-01-01T00:00:00Z",
                 "end_date": "2024-01-31T00:00:00Z",
+                # The solo dev has no activity in this window; by default the
+                # endpoint hides zero-contribution members. Include them so the
+                # single-member roster is reflected in member_count.
+                "include_inactive": "true",
             },
         )
 

@@ -213,6 +213,7 @@ async def get_epic_detail(
         tasks_by_status=detail["tasks_by_status"],
         tasks_by_team=detail["tasks_by_team"],
         recent_completions=detail["recent_completions"],
+        tasks=detail.get("tasks", []),
     )
 
 

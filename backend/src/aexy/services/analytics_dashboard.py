@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import Integer, select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.models.activity import Commit, PullRequest, CodeReview
@@ -252,10 +252,14 @@ class AnalyticsDashboardService:
         commit_result = await db.execute(commit_stmt)
         commit_data = {str(row.period): row for row in commit_result}
 
-        # Get PR metrics
+        # Get PR metrics. Build the truncation expression once and reuse it in
+        # both SELECT and GROUP BY: Postgres treats two separate
+        # func.date_trunc(...) calls as distinct bind parameters and rejects
+        # the query ("must appear in the GROUP BY clause").
+        pr_trunc = func.date_trunc(group_by, PullRequest.created_at)
         pr_stmt = (
             select(
-                func.date_trunc(group_by, PullRequest.created_at).label("period"),
+                pr_trunc.label("period"),
                 func.count(PullRequest.id).label("prs_opened"),
                 func.sum(
                     func.cast(PullRequest.merged_at.isnot(None), type_=Integer)
@@ -268,16 +272,16 @@ class AnalyticsDashboardService:
                     PullRequest.created_at <= date_range.end_date,
                 )
             )
-            .group_by(func.date_trunc(group_by, PullRequest.created_at))
+            .group_by(pr_trunc)
         )
-        from sqlalchemy import Integer
         pr_result = await db.execute(pr_stmt)
         pr_data = {str(row.period): row for row in pr_result}
 
         # Get review metrics
+        review_trunc = func.date_trunc(group_by, CodeReview.submitted_at)
         review_stmt = (
             select(
-                func.date_trunc(group_by, CodeReview.submitted_at).label("period"),
+                review_trunc.label("period"),
                 func.count(CodeReview.id).label("reviews"),
             )
             .where(
@@ -287,7 +291,7 @@ class AnalyticsDashboardService:
                     CodeReview.submitted_at <= date_range.end_date,
                 )
             )
-            .group_by(func.date_trunc(group_by, CodeReview.submitted_at))
+            .group_by(review_trunc)
         )
         review_result = await db.execute(review_stmt)
         review_data = {str(row.period): row for row in review_result}
@@ -575,7 +579,6 @@ class AnalyticsDashboardService:
                     )
                 )
             )
-            from sqlalchemy import Integer
             result = await db.execute(pr_stmt)
             row = result.one()
 

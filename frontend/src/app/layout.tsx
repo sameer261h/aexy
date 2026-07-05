@@ -8,13 +8,68 @@ import { Toaster } from "sonner";
 
 const inter = Inter({ subsets: ["latin"] });
 
+const description =
+  "The AI company OS for engineering, CRM, GTM, people, docs, workflows, and agents. Open source and self-hostable for modern teams.";
+
 export const metadata: Metadata = {
+  metadataBase: new URL("https://aexy.io"),
   title: {
-    default: "Aexy | AI Superapp for Companies",
+    default: "Aexy — AI Company OS for Engineering, CRM, HR & GTM",
     template: "%s | Aexy",
   },
-  description:
-    "Aexy is an AI company operating system for engineering, CRM, GTM, people, docs, workflows, and AI agents. Open source, self-hostable, and built for modern teams.",
+  description,
+  alternates: {
+    canonical: "/",
+  },
+  openGraph: {
+    type: "website",
+    siteName: "Aexy",
+    url: "https://aexy.io",
+    title: "Aexy — AI Company OS for Engineering, CRM, HR & GTM",
+    description,
+    images: [
+      {
+        url: "/opengraph-image",
+        width: 1200,
+        height: 630,
+        alt: "Aexy — The AI Company OS",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Aexy — AI Company OS for Engineering, CRM, HR & GTM",
+    description,
+    images: ["/opengraph-image"],
+  },
+  icons: {
+    icon: "/icon.svg",
+  },
+};
+
+const webApplicationJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "WebApplication",
+  name: "Aexy",
+  url: "https://aexy.io",
+  applicationCategory: "BusinessApplication",
+  operatingSystem: "Web",
+  description,
+  offers: {
+    "@type": "Offer",
+    price: "0",
+    priceCurrency: "USD",
+    description: "Open-source, self-hostable company OS.",
+  },
+  featureList: [
+    "Engineering & Sprints",
+    "CRM",
+    "GTM intelligence",
+    "People & HR",
+    "Docs",
+    "Workflows",
+    "AI agents",
+  ],
 };
 
 export default async function RootLayout({
@@ -27,6 +82,10 @@ export default async function RootLayout({
   return (
     <html lang={locale} suppressHydrationWarning>
       <body className={inter.className}>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(webApplicationJsonLd) }}
+        />
         <Providers messages={messages} serverLocale={locale}>{children}</Providers>
         <Toaster richColors position="top-right" />
         {process.env.NEXT_PUBLIC_GTM_WORKSPACE_ID && (

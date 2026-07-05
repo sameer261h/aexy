@@ -15,6 +15,7 @@
     "noResults": "कोई परिणाम नहीं मिला",
     "error": "एक त्रुटि हुई",
     "success": "सफल",
+    "appDisabledForWorkspace": "यह मॉड्यूल इस वर्कस्पेस के लिए बंद है।",
     "status": {
       "active": "सक्रिय",
       "completed": "पूर्ण",

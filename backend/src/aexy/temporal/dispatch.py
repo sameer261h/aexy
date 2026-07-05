@@ -200,6 +200,9 @@ ACTIVITY_CONFIG: dict[str, dict[str, Any]] = {
     "check_expired_certifications": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
     "check_bulk_compliance_rates": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
 
+    # Tables / audit-log maintenance (scheduled)
+    "cleanup_expired_audit_logs": {"retry": STANDARD_RETRY, "timeout": timedelta(hours=1)},
+
     # Aexy Tracker — AI enrich/attribute loop (LLM)
     "enrich_attribute_tracker_events": {"retry": LLM_RETRY, "timeout": timedelta(minutes=15), "heartbeat": timedelta(minutes=2)},
     "generate_tracker_journal": {"retry": LLM_RETRY, "timeout": timedelta(minutes=15), "heartbeat": timedelta(minutes=2)},

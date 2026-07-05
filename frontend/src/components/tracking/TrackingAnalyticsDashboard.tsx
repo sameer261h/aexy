@@ -214,6 +214,10 @@ export function TrackingAnalyticsDashboard({
         totalTimeLogged: analytics.metrics.total_time_logged,
         totalBlockers: analytics.metrics.total_blockers_reported,
         resolvedBlockers: analytics.metrics.total_blockers_resolved,
+        activeBlockers: Math.max(
+          0,
+          analytics.metrics.total_blockers_reported - analytics.metrics.total_blockers_resolved
+        ),
         avgResolutionHours: analytics.metrics.avg_blocker_resolution_hours,
         avgSentiment: analytics.sentiment_analysis.average_score,
         sentimentDistribution: analytics.sentiment_analysis.distribution,
@@ -225,12 +229,17 @@ export function TrackingAnalyticsDashboard({
       .filter((s) => s.sentiment_score !== null && s.sentiment_score !== undefined)
       .map((s) => s.sentiment_score as number);
 
+    // The active-blockers endpoint also returns recently-resolved items (for
+    // resolution stats), so count only unresolved ones as active.
+    const activeBlockerCount = blockers.filter((b) => b.status !== "resolved").length;
+
     return {
       totalStandups: standups.length,
       participationRate: teamDashboard?.participation_rate || 0,
       totalTimeLogged: timeEntries.reduce((sum, e) => sum + e.duration_minutes, 0),
-      totalBlockers: blockers.length,
+      totalBlockers: activeBlockerCount,
       resolvedBlockers: blockers.filter((b) => b.status === "resolved").length,
+      activeBlockers: activeBlockerCount,
       avgResolutionHours: 0,
       avgSentiment: sentimentScores.length > 0
         ? sentimentScores.reduce((a, b) => a + b, 0) / sentimentScores.length
@@ -332,7 +341,7 @@ export function TrackingAnalyticsDashboard({
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <SprintHealthIndicator
           participationRate={metrics.participationRate}
-          blockerCount={metrics.totalBlockers - metrics.resolvedBlockers}
+          blockerCount={metrics.activeBlockers}
           avgSentiment={metrics.avgSentiment}
         />
 

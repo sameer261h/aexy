@@ -26,8 +26,53 @@ from aexy.schemas.entity_activity import (
     ActivityType,
 )
 from aexy.services.activity_feed_service import get_entity_url
+from aexy.services.app_access_service import AppAccessService
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/activities", tags=["Entity Activities"])
+
+# Maps each activity entity_type to the app whose access gates it. Used to
+# role-scope the feed: a member only sees activity for apps they can access.
+# Every EntityType must appear here or in ADMIN_ONLY_ENTITY_TYPES so nothing
+# leaks by omission.
+ENTITY_TYPE_TO_APP: dict[str, str] = {
+    "agent": "agents",
+    "assessment": "hiring",
+    "backlog": "sprints",
+    "bug": "sprints",
+    "campaign": "email_marketing",
+    "compliance": "compliance",
+    "crm_record": "crm",
+    "document": "docs",
+    "epic": "sprints",
+    "form": "forms",
+    "goal": "reviews",
+    "hiring_requirement": "hiring",
+    "project": "sprints",
+    "release": "sprints",
+    "review": "reviews",
+    "roadmap": "sprints",
+    "sprint": "sprints",
+    "story": "sprints",
+    "task": "sprints",
+    "template": "email_marketing",
+    "ticket": "tickets",
+    "workflow": "automations",
+}
+
+# Entity types with no user-facing app gate that are HR/admin-only (e.g. leave
+# requests, role changes). Non-admins never see these in the feed.
+ADMIN_ONLY_ENTITY_TYPES: frozenset[str] = frozenset(
+    {"leave_request", "leave_policy", "role"}
+)
+
+# The feed filter below is a *negative* filter (notin_), so an EntityType
+# missing from both maps would be visible to every role. Fail at import time
+# the moment the literal and the maps drift apart.
+assert set(ENTITY_TYPE_TO_APP) | set(ADMIN_ONLY_ENTITY_TYPES) == set(get_args(EntityType)), (
+    "ENTITY_TYPE_TO_APP / ADMIN_ONLY_ENTITY_TYPES out of sync with EntityType: "
+    f"unclassified={sorted(set(get_args(EntityType)) - set(ENTITY_TYPE_TO_APP) - set(ADMIN_ONLY_ENTITY_TYPES))}, "
+    f"stale={sorted((set(ENTITY_TYPE_TO_APP) | set(ADMIN_ONLY_ENTITY_TYPES)) - set(get_args(EntityType)))}"
+)
 
 
 async def check_workspace_permission(
@@ -239,6 +284,32 @@ async def list_activities(
         filters.append(EntityActivity.activity_type == activity_type)
     if actor_id:
         filters.append(EntityActivity.actor_id == actor_id)
+
+    # Role-scope the feed: non-admins must not see activity for apps they can't
+    # access (e.g. a Developer seeing HR leave requests or role changes). Admins
+    # see everything. This is a negative filter so unknown/future entity types
+    # remain visible unless explicitly gated.
+    #
+    # Admins are the common case on this hot path, so decide is_admin from the
+    # membership row alone (one light query, reusing AppAccessService's
+    # canonical admin predicate) and only pay for the full app-access
+    # resolution (extra queries + APP_CATALOG matrix) for non-admins.
+    access_service = AppAccessService(db)
+    member = await access_service._get_workspace_member(
+        workspace_id, str(current_developer.id)
+    )
+    is_admin = member is not None and await access_service._is_admin(member)
+    if not is_admin:
+        access = await access_service.get_effective_access(
+            workspace_id, str(current_developer.id)
+        )
+        excluded = set(ADMIN_ONLY_ENTITY_TYPES)
+        for et, app_id in ENTITY_TYPE_TO_APP.items():
+            app = access["apps"].get(app_id)
+            if not app or not app["enabled"]:
+                excluded.add(et)
+        if excluded:
+            filters.append(EntityActivity.entity_type.notin_(excluded))
 
     # Get total count (lightweight query without ORDER BY or eager loads)
     count_query = select(func.count()).select_from(EntityActivity).where(*filters)

@@ -319,17 +319,20 @@ class ReportBuilderService:
         creator_id: str,
         data: CustomReportCreate,
         db: AsyncSession,
+        organization_id: str | None = None,
     ) -> CustomReport:
         """Create a new custom report."""
         report = CustomReport(
             id=str(uuid4()),
             creator_id=creator_id,
-            organization_id=data.organization_id,
+            organization_id=organization_id,
             name=data.name,
             description=data.description,
             widgets=[w.model_dump() for w in data.widgets],
             filters=data.filters.model_dump() if data.filters else {},
-            layout=data.layout or {"columns": 12, "row_height": 40},
+            layout=data.layout.model_dump()
+            if data.layout
+            else {"columns": 12, "row_height": 40},
             is_template=data.is_template,
             is_public=data.is_public,
         )

@@ -37,6 +37,12 @@ async def _make_workspace(db: AsyncSession, slug: str) -> Workspace:
 async def _make_project(db: AsyncSession, ws: Workspace, slug: str) -> Project:
     p = Project(id=str(uuid.uuid4()), workspace_id=ws.id, name=f"P {slug}", slug=slug)
     db.add(p)
+    # SprintTask.team_id is a FK to teams.id but the task/service layer treats
+    # it as the project id. Postgres enforces the FK (SQLite ignores it), so a
+    # Team row whose id matches the project id must exist for task inserts to
+    # succeed.
+    team = Team(id=p.id, workspace_id=ws.id, name=f"P {slug}", slug=slug)
+    db.add(team)
     await db.commit()
     await db.refresh(p)
     return p

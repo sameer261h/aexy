@@ -12,14 +12,13 @@ Returns structured JSON parsed into `VideoAnnotationResult`.
 from __future__ import annotations
 
 import base64
-import json
 import logging
-import re
 from typing import Any
 
 import httpx
 
 from aexy.llm.base import LLMAPIError, LLMRateLimitError
+from aexy.llm.json_utils import extract_json_object
 from aexy.llm.vision_base import (
     VideoAnnotationItem,
     VideoAnnotationResult,
@@ -49,23 +48,6 @@ _VIDEO_PROMPT_TEMPLATE = (
     "}}\n"
     "Use millisecond integers for timestamps. {extra}"
 )
-
-
-def _extract_json(text: str) -> dict | None:
-    """Parse the first JSON object from a possibly-noisy LLM reply."""
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
-    return None
 
 
 class QwenOpenRouterVisionProvider(VisionProvider):
@@ -113,7 +95,7 @@ class QwenOpenRouterVisionProvider(VisionProvider):
                 {"type": "image_url", "image_url": {"url": url}},
             ]
         )
-        parsed = _extract_json(text) or {}
+        parsed = extract_json_object(text) or {}
         return VisionResult(
             description=str(parsed.get("description", text[:500])),
             tags=list(parsed.get("tags", [])),
@@ -175,7 +157,7 @@ class QwenOpenRouterVisionProvider(VisionProvider):
             content.append({"type": "image_url", "image_url": {"url": url}})
 
         text = await self._chat(content=content)
-        parsed = _extract_json(text) or {}
+        parsed = extract_json_object(text) or {}
         annotations_raw = parsed.get("annotations", []) or []
         annotations: list[VideoAnnotationItem] = []
         for item in annotations_raw[:max_annotations]:

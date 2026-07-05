@@ -1,9 +1,11 @@
 """Integrations API endpoints for Jira and Linear."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from aexy.core.database import get_db
+from aexy.core.database import get_db, get_async_session
 from aexy.api.developers import get_current_developer
 from aexy.models.developer import Developer
 from aexy.schemas.integrations import (
@@ -25,6 +27,8 @@ from aexy.services.linear_integration_service import LinearIntegrationService
 from aexy.services.workspace_service import WorkspaceService
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/integrations", tags=["Integrations"])
+
+logger = logging.getLogger(__name__)
 
 
 async def check_workspace_permission(
@@ -79,6 +83,34 @@ def linear_to_response(integration) -> LinearIntegrationResponse:
     )
 
 
+async def run_initial_jira_sync(workspace_id: str) -> None:
+    """Run the initial post-connect Jira sync in the background.
+
+    Executes after the connect response is sent, in a fresh session so a
+    sync failure can never poison the request session or fail the connect.
+    get_async_session commits on success and rolls back on any error.
+    """
+    try:
+        async with get_async_session() as session:
+            await JiraIntegrationService(session).sync_issues(workspace_id)
+    except Exception:
+        logger.exception("Initial Jira sync after connect failed")
+
+
+async def run_initial_linear_sync(workspace_id: str) -> None:
+    """Run the initial post-connect Linear sync in the background.
+
+    Executes after the connect response is sent, in a fresh session so a
+    sync failure can never poison the request session or fail the connect.
+    get_async_session commits on success and rolls back on any error.
+    """
+    try:
+        async with get_async_session() as session:
+            await LinearIntegrationService(session).sync_issues(workspace_id)
+    except Exception:
+        logger.exception("Initial Linear sync after connect failed")
+
+
 # ==================== Jira Integration Endpoints ====================
 
 @router.get("/jira", response_model=JiraIntegrationResponse | None)
@@ -103,6 +135,7 @@ async def get_jira_integration(
 async def create_jira_integration(
     workspace_id: str,
     data: JiraIntegrationCreate,
+    background_tasks: BackgroundTasks,
     current_user: Developer = Depends(get_current_developer),
     db: AsyncSession = Depends(get_db),
 ):
@@ -119,6 +152,9 @@ async def create_jira_integration(
             connected_by_id=str(current_user.id),
         )
         await db.commit()
+        # Kick off an initial sync in the background (own session) so the
+        # workspace has data soon without blocking or failing the connect.
+        background_tasks.add_task(run_initial_jira_sync, workspace_id)
         return jira_to_response(integration)
     except ValueError as e:
         raise HTTPException(
@@ -294,6 +330,7 @@ async def get_linear_integration(
 async def create_linear_integration(
     workspace_id: str,
     data: LinearIntegrationCreate,
+    background_tasks: BackgroundTasks,
     current_user: Developer = Depends(get_current_developer),
     db: AsyncSession = Depends(get_db),
 ):
@@ -308,6 +345,9 @@ async def create_linear_integration(
             connected_by_id=str(current_user.id),
         )
         await db.commit()
+        # Kick off an initial sync in the background (own session) so the
+        # workspace has data soon without blocking or failing the connect.
+        background_tasks.add_task(run_initial_linear_sync, workspace_id)
         return linear_to_response(integration)
     except ValueError as e:
         raise HTTPException(

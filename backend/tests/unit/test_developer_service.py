@@ -71,7 +71,9 @@ class TestDeveloperRetrieval:
         service = DeveloperService(db_session)
 
         with pytest.raises(DeveloperNotFoundError):
-            await service.get_by_id("nonexistent-id")
+            # Valid UUID form that doesn't exist (Postgres rejects a non-UUID
+            # string for a UUID column; SQLite would just not match).
+            await service.get_by_id("00000000-0000-0000-0000-000000000000")
 
     @pytest.mark.asyncio
     async def test_get_by_email(self, db_session):
@@ -140,7 +142,9 @@ class TestDeveloperUpdate:
         update_data = DeveloperUpdate(name="New Name")
 
         with pytest.raises(DeveloperNotFoundError):
-            await service.update("nonexistent-id", update_data)
+            await service.update(
+                "00000000-0000-0000-0000-000000000000", update_data
+            )
 
 
 class TestGitHubConnection:
@@ -312,6 +316,10 @@ class TestGetOrCreateByGitHub:
         )
 
         assert developer.id == existing.id
+        # get_or_create_by_github's connect-by-email branch refreshes the
+        # developer without eager-loading the relationship; load it explicitly
+        # within the session to avoid a lazy-load outside the async context.
+        await db_session.refresh(developer, ["github_connection"])
         assert developer.github_connection is not None
 
     @pytest.mark.asyncio

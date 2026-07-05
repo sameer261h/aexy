@@ -698,6 +698,10 @@ class WorkspaceService:
 
         await self.db.flush()
         await self.db.refresh(workspace)
+
+        from aexy.services.app_access_service import invalidate_app_settings_cache
+
+        await invalidate_app_settings_cache(workspace_id)
         return workspace
 
     def get_effective_app_permissions(

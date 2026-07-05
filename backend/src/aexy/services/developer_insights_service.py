@@ -32,6 +32,19 @@ from aexy.models.team import TeamMember
 from aexy.models.workspace import WorkspaceMember
 
 
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """Coerce a datetime to UTC-aware.
+
+    DB aggregates (e.g. func.min) and ORM-loaded columns can differ in
+    tz-awareness across backends (Postgres returns aware, SQLite naive), so
+    subtracting one from the other raises. Treat naive values as UTC and
+    normalize both sides before arithmetic.
+    """
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
 # ---------------------------------------------------------------------------
 # Data classes for structured return values
 # ---------------------------------------------------------------------------
@@ -405,7 +418,9 @@ class DeveloperInsightsService:
         # Cycle time: created_at_github → merged_at
         cycle_times = []
         for p in merged_prs:
-            dt = (p.merged_at - p.created_at_github).total_seconds() / 3600
+            dt = (
+                _as_utc(p.merged_at) - _as_utc(p.created_at_github)
+            ).total_seconds() / 3600
             cycle_times.append(dt)
 
         # Time to first review (batch query)
@@ -423,7 +438,9 @@ class DeveloperInsightsService:
         pr_created_map = {p.github_id: p.created_at_github for p in prs}
         for gh_id, first_review_at in first_review_map.items():
             if first_review_at and gh_id in pr_created_map:
-                dt = (first_review_at - pr_created_map[gh_id]).total_seconds() / 3600
+                dt = (
+                    _as_utc(first_review_at) - _as_utc(pr_created_map[gh_id])
+                ).total_seconds() / 3600
                 first_review_times.append(dt)
 
         # Average PR size

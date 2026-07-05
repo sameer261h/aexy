@@ -254,8 +254,11 @@ def get_all_activities() -> list:
         cleanup_ip_addresses,
         purge_behavioral_events,
     )
+    from aexy.temporal.activities.tables import cleanup_expired_audit_logs
 
     return [
+        # Tables / audit-log maintenance
+        cleanup_expired_audit_logs,
         # Analysis
         analyze_commit,
         analyze_pr,

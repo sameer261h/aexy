@@ -1,0 +1,20 @@
+{
+  "myWork": {
+    "title": "My Work",
+    "description": "Everything assigned to you across tasks, bugs, and stories.",
+    "showCompleted": "Show completed",
+    "empty": "Nothing assigned to you right now.",
+    "totalCount": "{count} total",
+    "points": "{count} pts",
+    "types": {
+      "task": "Task",
+      "bug": "Bug",
+      "story": "Story"
+    },
+    "typeCount": {
+      "task": "{count, plural, one {# task} other {# tasks}}",
+      "bug": "{count, plural, one {# bug} other {# bugs}}",
+      "story": "{count, plural, one {# story} other {# stories}}"
+    }
+  }
+}

@@ -520,11 +520,59 @@ class EpicService:
         result = await self.db.execute(stmt)
         recent_completions = result.scalar() or 0
 
+        # Get the linked tasks themselves so the UI can list them (not just
+        # counts). Select only the columns the UI needs (SprintTask carries
+        # heavy JSONB payloads) and cap the list. project_id is resolved via
+        # the task's sprint team (falling back to the task's own team for
+        # backlog tasks) so the frontend can build /sprints/{projectId}/...
+        # links; it is NULL for tasks whose team isn't linked to a project.
+        from aexy.models.project import ProjectTeam
+
+        project_id_subq = (
+            select(ProjectTeam.project_id)
+            .where(ProjectTeam.team_id == func.coalesce(Sprint.team_id, SprintTask.team_id))
+            .order_by(ProjectTeam.created_at)
+            .limit(1)
+            .correlate(Sprint, SprintTask)
+            .scalar_subquery()
+        )
+        stmt = (
+            select(
+                SprintTask.id,
+                SprintTask.title,
+                SprintTask.status,
+                SprintTask.priority,
+                SprintTask.story_points,
+                SprintTask.sprint_id,
+                SprintTask.assignee_id,
+                project_id_subq.label("project_id"),
+            )
+            .outerjoin(Sprint, SprintTask.sprint_id == Sprint.id)
+            .where(SprintTask.epic_id == epic_id)
+            .order_by(SprintTask.status, SprintTask.created_at, SprintTask.id)
+            .limit(200)
+        )
+        result = await self.db.execute(stmt)
+        tasks = [
+            {
+                "id": str(row.id),
+                "title": row.title,
+                "status": row.status,
+                "priority": row.priority,
+                "story_points": row.story_points,
+                "sprint_id": str(row.sprint_id) if row.sprint_id else None,
+                "assignee_id": str(row.assignee_id) if row.assignee_id else None,
+                "project_id": str(row.project_id) if row.project_id else None,
+            }
+            for row in result.all()
+        ]
+
         return {
             "epic": epic,
             "tasks_by_status": tasks_by_status,
             "tasks_by_team": tasks_by_team,
             "recent_completions": recent_completions,
+            "tasks": tasks,
         }
 
     # ==================== Timeline ====================

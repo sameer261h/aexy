@@ -2,14 +2,12 @@
   "sprints": {
     "title": "प्लानिंग",
     "description": "अपने प्रोजेक्ट्स में Sprint प्रबंधित करें और प्रगति ट्रैक करें",
-
     "tabs": {
       "projects": "प्रोजेक्ट्स",
       "epics": "Epics",
       "allTasks": "सभी कार्य",
       "automations": "ऑटोमेशन"
     },
-
     "actions": {
       "teamReviews": "टीम समीक्षा",
       "settings": "सेटिंग्स",
@@ -23,7 +21,6 @@
       "delete": "हटाएं",
       "cancel": "रद्द करें"
     },
-
     "taskTable": {
       "key": "की",
       "title": "शीर्षक",
@@ -35,7 +32,6 @@
       "updated": "अपडेट",
       "empty": "कोई कार्य फ़िल्टर से मेल नहीं खाता।"
     },
-
     "projectCard": {
       "public": "सार्वजनिक",
       "private": "निजी",
@@ -52,7 +48,6 @@
       "completed": "पूर्ण",
       "openTasks": "खुले कार्य"
     },
-
     "board": {
       "title": "बोर्ड",
       "backlog": "Backlog",
@@ -64,7 +59,6 @@
         "done": "पूर्ण"
       }
     },
-
     "sprintStatus": {
       "planning": "प्लानिंग",
       "active": "सक्रिय",
@@ -72,7 +66,6 @@
       "retrospective": "रेट्रोस्पेक्टिव",
       "completed": "पूर्ण"
     },
-
     "sprintCard": {
       "currentSprint": "वर्तमान Sprint",
       "daysLeft": "{count} दिन शेष",
@@ -84,7 +77,6 @@
       "storyPoints": "स्टोरी पॉइंट्स",
       "notSet": "निर्धारित नहीं"
     },
-
     "sprintPlanning": {
       "title": "Sprint प्लानिंग",
       "description": "Sprint प्रबंधित करें और प्रगति ट्रैक करें",
@@ -100,7 +92,6 @@
       "onTrack": "{count} सही दिशा में",
       "atRisk": "{count} जोखिम में"
     },
-
     "createModal": {
       "title": "Sprint बनाएं",
       "sprintName": "Sprint का नाम",
@@ -112,7 +103,6 @@
       "sprintNameRequired": "Sprint का नाम आवश्यक है",
       "failedToCreate": "Sprint बनाने में विफल"
     },
-
     "empty": {
       "noWorkspace": "अभी कोई वर्कस्पेस नहीं",
       "noWorkspaceDesc": "Sprint प्लानिंग शुरू करने के लिए वर्कस्पेस बनाएं और प्रोजेक्ट जोड़ें।",
@@ -122,7 +112,6 @@
       "noSprintsDesc": "कार्य की योजना बनाना और ट्रैक करना शुरू करने के लिए अपना पहला Sprint बनाएं।",
       "deleteConfirm": "क्या आप वाकई इस Sprint को हटाना चाहते हैं? यह क्रिया पूर्ववत नहीं की जा सकती।"
     },
-
     "epics": {
       "title": "Epics",
       "createEpic": "Epic बनाएं",
@@ -137,14 +126,12 @@
       "noEpicsDesc": "बड़ी पहलों को ट्रैक करना शुरू करने के लिए अपना पहला Epic बनाएं।",
       "totalEpics": "कुल Epics",
       "progress": "प्रगति",
-
       "status": {
         "open": "खुला",
         "inProgress": "प्रगति में",
         "done": "पूर्ण",
         "cancelled": "रद्द"
       },
-
       "form": {
         "title": "Epic बनाएं",
         "titleLabel": "शीर्षक",
@@ -155,13 +142,11 @@
         "colorLabel": "रंग"
       }
     },
-
     "backlog": {
       "title": "Backlog",
       "moveToTodo": "करने हैं में ले जाएं",
       "searchPlaceholder": "Backlog में खोजें..."
     },
-
     "taskStatus": {
       "backlog": "Backlog",
       "todo": "करने हैं",
@@ -169,14 +154,12 @@
       "review": "समीक्षा",
       "done": "पूर्ण"
     },
-
     "priority": {
       "critical": "अत्यावश्यक",
       "high": "उच्च",
       "medium": "मध्यम",
       "low": "निम्न"
     },
-
     "workspaceTasks": {
       "searchPlaceholder": "कार्य खोजें...",
       "assignee": "असाइनी",
@@ -205,10 +188,17 @@
       "unarchiveBulk": "चयनित को पुनःस्थापित करें",
       "noArchivedTasks": "कोई संग्रहीत कार्य नहीं।"
     },
-
     "move": {
       "statusLabel": "गंतव्य बोर्ड पर स्थिति",
       "statusHint": "प्रत्येक प्रोजेक्ट के स्थिति कॉलम अलग होते हैं — चुनें कि यह कार्य कहाँ रखा जाए।"
+    },
+    "githubLinks": {
+      "link": "लिंक करें",
+      "linkPullRequestPlaceholder": "Pull request लिंक करें…",
+      "repositoryPlaceholder": "Repository…",
+      "ownerRepoPlaceholder": "owner/repo",
+      "issueRepositoryAriaLabel": "GitHub issue की repository",
+      "issueNumberAriaLabel": "GitHub issue नंबर"
     }
   }
 }

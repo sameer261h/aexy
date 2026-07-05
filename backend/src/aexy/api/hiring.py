@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aexy.api.access_guard import ensure_app_enabled
 from aexy.api.developers import get_current_developer
 from aexy.core.database import get_db
 from aexy.llm.gateway import get_llm_gateway
@@ -58,6 +59,7 @@ async def _resolve_team_workspace_or_403(
         str(team.workspace_id), caller_id, "viewer"
     ):
         raise HTTPException(status_code=403, detail="Not a member of team's workspace")
+    await ensure_app_enabled(db, str(team.workspace_id), "hiring")
     return str(team.workspace_id)
 
 
@@ -66,6 +68,7 @@ async def _require_workspace_member(
 ) -> None:
     if not await WorkspaceService(db).check_permission(workspace_id, caller_id, role):
         raise HTTPException(status_code=403, detail="Workspace permission required")
+    await ensure_app_enabled(db, workspace_id, "hiring")
 
 
 async def _require_developers_visible(
@@ -455,6 +458,17 @@ async def create_hiring_requirement(
         priority=data.priority.value,
         timeline=data.timeline,
         roadmap_items=data.roadmap_items,
+    )
+
+    from aexy.services.activity_logger import log_activity
+    await log_activity(
+        db,
+        workspace_id=data.organization_id,
+        entity_type="hiring_requirement",
+        entity_id=str(requirement.id),
+        activity_type="created",
+        actor_id=str(current_user.id),
+        title=f"Created hiring requirement '{requirement.role_title}'",
     )
 
     return HiringRequirementResponse(

@@ -123,7 +123,9 @@ export const developerApi = {
 // My Assigned Task type
 export interface MyAssignedTask {
   id: string;
+  item_type: "task" | "bug" | "story";
   sprint_id: string | null;
+  project_id: string | null;
   sprint_name: string | null;
   title: string;
   description: string | null;
@@ -3330,6 +3332,26 @@ export const sprintApi = {
     await api.delete(`/sprints/${sprintId}/tasks/${taskId}/github-links/${linkId}`);
   },
 
+  linkGitHubPullRequest: async (sprintId: string, taskId: string, pullRequestId: string): Promise<TaskGitHubLink> => {
+    const response = await api.post(`/sprints/${sprintId}/tasks/${taskId}/github-links/pull-requests`, { pull_request_id: pullRequestId });
+    return response.data;
+  },
+
+  linkGitHubIssue: async (sprintId: string, taskId: string, data: { repository: string; issue_number: number; title?: string; state?: string; url?: string }): Promise<TaskGitHubLink> => {
+    const response = await api.post(`/sprints/${sprintId}/tasks/${taskId}/github-links/issues`, data);
+    return response.data;
+  },
+
+  listLinkablePullRequests: async (sprintId: string, query?: string): Promise<PullRequestSummary[]> => {
+    const response = await api.get(`/sprints/${sprintId}/tasks/github/pull-requests`, { params: query ? { query } : undefined });
+    return response.data;
+  },
+
+  listIssueRepositories: async (sprintId: string, taskId: string): Promise<string[]> => {
+    const response = await api.get(`/sprints/${sprintId}/tasks/${taskId}/github-links/issue-repositories`);
+    return response.data;
+  },
+
   // Activity Log
   getTaskActivities: async (sprintId: string, taskId: string, limit = 50, offset = 0): Promise<TaskActivityList> => {
     const response = await api.get(`/sprints/${sprintId}/tasks/${taskId}/activities`, {
@@ -4669,10 +4691,22 @@ export interface EpicListItem {
   progress_percentage: number;
 }
 
+export interface EpicLinkedTask {
+  id: string;
+  title: string;
+  status: string;
+  priority: string;
+  story_points: number | null;
+  sprint_id: string | null;
+  project_id: string | null;
+  assignee_id: string | null;
+}
+
 export interface EpicDetail extends Epic {
   tasks_by_status: Record<string, number>;
   tasks_by_team: Record<string, number>;
   recent_completions: number;
+  tasks: EpicLinkedTask[];
 }
 
 export interface EpicTimelineSprintItem {
@@ -13272,7 +13306,7 @@ export const okrGoalsApi = {
 
 // ============ Entity Activity Types ============
 
-export type EntityActivityType = "goal" | "task" | "backlog" | "story" | "release" | "roadmap" | "epic" | "bug" | "ticket" | "crm_record" | "document" | "assessment" | "compliance" | "project" | "sprint" | "workflow" | "agent" | "template" | "campaign" | "form" | "leave_request" | "review" | "role";
+export type EntityActivityType = "goal" | "task" | "backlog" | "story" | "release" | "roadmap" | "epic" | "bug" | "ticket" | "crm_record" | "document" | "assessment" | "compliance" | "project" | "sprint" | "workflow" | "agent" | "template" | "campaign" | "form" | "leave_request" | "review" | "role" | "hiring_requirement" | "leave_policy";
 export type ActivityActionType = "created" | "updated" | "comment" | "status_changed" | "assigned" | "progress_updated" | "linked" | "unlinked" | "published" | "archived" | "resolved" | "escalated" | "deleted" | "completed" | "started" | "paused" | "resumed" | "submitted" | "approved" | "rejected" | "duplicated" | "toggled" | "withdrawn" | "cancelled";
 
 export interface ActorInfo {

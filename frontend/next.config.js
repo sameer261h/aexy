@@ -5,6 +5,9 @@ const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 const nextConfig = {
   reactStrictMode: true,
   output: 'standalone',
+  // Compress responses at the Next server. A reverse proxy in front may also
+  // compress; this ensures the app container never ships uncompressed HTML.
+  compress: true,
   images: {
     remotePatterns: [
       {
@@ -54,6 +57,10 @@ const nextConfig = {
         { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
         { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
         { key: "X-Content-Type-Options", value: "nosniff" },
+        {
+          key: "Strict-Transport-Security",
+          value: "max-age=63072000; includeSubDomains; preload",
+        },
       ],
     };
     const allowEmbedFrame = {
@@ -65,6 +72,10 @@ const nextConfig = {
         { key: "Content-Security-Policy", value: "frame-ancestors *" },
         { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
         { key: "X-Content-Type-Options", value: "nosniff" },
+        {
+          key: "Strict-Transport-Security",
+          value: "max-age=63072000; includeSubDomains; preload",
+        },
       ],
     };
     return [denyFrame, allowEmbedFrame];

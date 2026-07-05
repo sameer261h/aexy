@@ -12,6 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.models.integrations import LinearIntegration
 from aexy.models.sprint import Sprint, SprintTask
+from aexy.services.remote_team_matching import (
+    match_remote_items_to_teams,
+    normalize_remote_pairs,
+)
 from aexy.schemas.integrations import (
     ConnectionTestResponse,
     RemoteTeam,
@@ -71,13 +75,19 @@ class LinearIntegrationService:
         # Generate webhook secret
         webhook_secret = secrets.token_urlsafe(32)
 
+        # Auto-discover a default team mapping from the connection test so the
+        # integration can sync immediately (admins refine via the PATCH endpoint).
+        default_team_mappings = await self._default_team_mappings(
+            workspace_id, test_result.get("teams", [])
+        )
+
         integration = LinearIntegration(
             id=str(uuid4()),
             workspace_id=workspace_id,
             api_key=api_key,  # TODO: Encrypt at rest
             organization_id=test_result.get("organization_id"),
             organization_name=test_result.get("organization_name"),
-            team_mappings={},
+            team_mappings=default_team_mappings,
             status_mappings={},
             field_mappings={},
             webhook_secret=webhook_secret,
@@ -89,6 +99,19 @@ class LinearIntegrationService:
         await self.db.flush()
         await self.db.refresh(integration)
         return integration
+
+    async def _default_team_mappings(self, workspace_id: str, teams: list) -> dict:
+        """Auto-build team mappings for a freshly-connected integration.
+
+        Matches remote Linear teams to workspace teams by name (case-insensitive;
+        remote names come through as "Name (KEY)" so a startswith match is used).
+        Teams with no name match produce no mapping — mappings are never guessed,
+        so an unmatched connect starts with {} and admins configure mappings via
+        the PATCH endpoint.
+        """
+        pairs = normalize_remote_pairs(teams, "id")
+        matches = await match_remote_items_to_teams(self.db, workspace_id, pairs)
+        return {team_id: {"linear_team_id": tid} for team_id, tid in matches.items()}
 
     async def update_integration(
         self,

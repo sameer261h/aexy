@@ -189,5 +189,5 @@ async def get_collaboration_network(
     return await service.get_collaboration_network(
         developer_ids=request.developer_ids,
         db=db,
-        days=request.days,
+        days=request.date_range_days,
     )

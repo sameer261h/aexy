@@ -1,0 +1,20 @@
+{
+  "myWork": {
+    "title": "मेरा काम",
+    "description": "Tasks, bugs और stories — आपको सौंपा गया सारा काम एक जगह।",
+    "showCompleted": "पूर्ण किए गए दिखाएं",
+    "empty": "फ़िलहाल आपको कुछ भी असाइन नहीं है।",
+    "totalCount": "कुल {count}",
+    "points": "{count} pts",
+    "types": {
+      "task": "Task",
+      "bug": "Bug",
+      "story": "Story"
+    },
+    "typeCount": {
+      "task": "{count, plural, one {# task} other {# tasks}}",
+      "bug": "{count, plural, one {# bug} other {# bugs}}",
+      "story": "{count, plural, one {# story} other {# stories}}"
+    }
+  }
+}

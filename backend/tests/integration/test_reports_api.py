@@ -8,8 +8,42 @@ These tests verify:
 - Widget data fetching
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from httpx import AsyncClient
+from jose import jwt
+
+from aexy.core.config import get_settings
+
+settings = get_settings()
+
+# A syntactically valid UUID that is guaranteed absent from the DB. Used for
+# "not found" paths (the routes take str ids, so a malformed value would just
+# 404 too, but a real UUID keeps the intent unambiguous).
+ABSENT_UUID = "00000000-0000-0000-0000-000000000000"
+
+
+def _auth(developer_id: str) -> dict:
+    """Bearer header for the given developer id (JWT, matches app auth)."""
+    payload = {
+        "sub": str(developer_id),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
+        "type": "access",
+    }
+    token = jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _widget(wid: str = "w1") -> dict:
+    """A valid WidgetConfig payload (id/type/title are required)."""
+    return {
+        "id": wid,
+        "type": "heatmap",
+        "title": "Skill Heatmap",
+        "config": {},
+        "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+    }
 
 
 class TestReportsAPI:
@@ -23,13 +57,12 @@ class TestReportsAPI:
     ):
         """Test POST /reports endpoint."""
         response = await client.post(
-            "/api/reports",
+            "/api/v1/reports",
+            headers=_auth(sample_developer.id),
             json={
-                "creator_id": str(sample_developer.id),
                 "name": sample_report_config["name"],
                 "description": sample_report_config["description"],
                 "widgets": sample_report_config["widgets"],
-                "filters": sample_report_config["filters"],
             },
         )
 
@@ -45,27 +78,34 @@ class TestReportsAPI:
         """Test GET /reports/{id} endpoint."""
         # First create a report
         create_response = await client.post(
-            "/api/reports",
+            "/api/v1/reports",
+            headers=_auth(sample_developer.id),
             json={
-                "creator_id": str(sample_developer.id),
                 "name": sample_report_config["name"],
                 "widgets": sample_report_config["widgets"],
-                "filters": {},
             },
         )
         report_id = create_response.json()["id"]
 
         # Then fetch it
-        response = await client.get(f"/api/reports/{report_id}")
+        response = await client.get(
+            f"/api/v1/reports/{report_id}",
+            headers=_auth(sample_developer.id),
+        )
 
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == report_id
 
     @pytest.mark.asyncio
-    async def test_get_report_not_found(self, client: AsyncClient):
+    async def test_get_report_not_found(
+        self, client: AsyncClient, sample_developer
+    ):
         """Test GET /reports/{id} with non-existent ID."""
-        response = await client.get("/api/reports/nonexistent-id")
+        response = await client.get(
+            f"/api/v1/reports/{ABSENT_UUID}",
+            headers=_auth(sample_developer.id),
+        )
 
         assert response.status_code == 404
 
@@ -76,19 +116,19 @@ class TestReportsAPI:
         """Test PUT /reports/{id} endpoint."""
         # Create report
         create_response = await client.post(
-            "/api/reports",
+            "/api/v1/reports",
+            headers=_auth(sample_developer.id),
             json={
-                "creator_id": str(sample_developer.id),
                 "name": "Original Name",
-                "widgets": [],
-                "filters": {},
+                "widgets": sample_report_config["widgets"],
             },
         )
         report_id = create_response.json()["id"]
 
         # Update it
         response = await client.put(
-            f"/api/reports/{report_id}",
+            f"/api/v1/reports/{report_id}",
+            headers=_auth(sample_developer.id),
             json={
                 "name": "Updated Name",
                 "description": "New description",
@@ -102,50 +142,54 @@ class TestReportsAPI:
 
     @pytest.mark.asyncio
     async def test_delete_report(
-        self, client: AsyncClient, sample_developer
+        self, client: AsyncClient, sample_developer, sample_report_config
     ):
         """Test DELETE /reports/{id} endpoint."""
         # Create report
         create_response = await client.post(
-            "/api/reports",
+            "/api/v1/reports",
+            headers=_auth(sample_developer.id),
             json={
-                "creator_id": str(sample_developer.id),
                 "name": "Report to Delete",
-                "widgets": [],
-                "filters": {},
+                "widgets": sample_report_config["widgets"],
             },
         )
         report_id = create_response.json()["id"]
 
         # Delete it
-        response = await client.delete(f"/api/reports/{report_id}")
+        response = await client.delete(
+            f"/api/v1/reports/{report_id}",
+            headers=_auth(sample_developer.id),
+        )
         assert response.status_code == 204
 
         # Verify deletion
-        get_response = await client.get(f"/api/reports/{report_id}")
+        get_response = await client.get(
+            f"/api/v1/reports/{report_id}",
+            headers=_auth(sample_developer.id),
+        )
         assert get_response.status_code == 404
 
     @pytest.mark.asyncio
     async def test_list_reports(
-        self, client: AsyncClient, sample_developer
+        self, client: AsyncClient, sample_developer, sample_report_config
     ):
         """Test GET /reports endpoint."""
         # Create multiple reports
         for i in range(3):
             await client.post(
-                "/api/reports",
+                "/api/v1/reports",
+                headers=_auth(sample_developer.id),
                 json={
-                    "creator_id": str(sample_developer.id),
                     "name": f"Report {i}",
-                    "widgets": [],
-                    "filters": {},
+                    "widgets": sample_report_config["widgets"],
                 },
             )
 
         # List reports
         response = await client.get(
-            "/api/reports",
-            params={"creator_id": str(sample_developer.id)},
+            "/api/v1/reports",
+            headers=_auth(sample_developer.id),
         )
 
         assert response.status_code == 200
@@ -160,23 +204,23 @@ class TestReportsAPI:
         """Test POST /reports/{id}/clone endpoint."""
         # Create original
         create_response = await client.post(
-            "/api/reports",
+            "/api/v1/reports",
+            headers=_auth(sample_developer.id),
             json={
-                "creator_id": str(sample_developer.id),
                 "name": "Original Report",
                 "widgets": sample_report_config["widgets"],
-                "filters": sample_report_config["filters"],
             },
         )
         report_id = create_response.json()["id"]
 
-        # Clone it
+        # Clone it (new_name is a query parameter)
         response = await client.post(
-            f"/api/reports/{report_id}/clone",
-            json={"name": "Cloned Report"},
+            f"/api/v1/reports/{report_id}/clone",
+            headers=_auth(sample_developer.id),
+            params={"new_name": "Cloned Report"},
         )
 
-        assert response.status_code == 201
+        assert response.status_code == 200
         data = response.json()
         assert data["name"] == "Cloned Report"
         assert data["id"] != report_id
@@ -184,9 +228,12 @@ class TestReportsAPI:
     # Template Tests
 
     @pytest.mark.asyncio
-    async def test_list_templates(self, client: AsyncClient):
-        """Test GET /reports/templates endpoint."""
-        response = await client.get("/api/reports/templates")
+    async def test_list_templates(self, client: AsyncClient, sample_developer):
+        """Test GET /reports/templates/list endpoint."""
+        response = await client.get(
+            "/api/v1/reports/templates/list",
+            headers=_auth(sample_developer.id),
+        )
 
         assert response.status_code == 200
         data = response.json()
@@ -197,10 +244,13 @@ class TestReportsAPI:
             assert "name" in template
 
     @pytest.mark.asyncio
-    async def test_list_templates_by_category(self, client: AsyncClient):
+    async def test_list_templates_by_category(
+        self, client: AsyncClient, sample_developer
+    ):
         """Test filtering templates by category."""
         response = await client.get(
-            "/api/reports/templates",
+            "/api/v1/reports/templates/list",
+            headers=_auth(sample_developer.id),
             params={"category": "team"},
         )
 
@@ -213,23 +263,23 @@ class TestReportsAPI:
     async def test_create_from_template(
         self, client: AsyncClient, sample_developer
     ):
-        """Test POST /reports/from-template endpoint."""
+        """Test POST /reports/templates/{id}/create endpoint."""
         # Get templates first
-        templates_response = await client.get("/api/reports/templates")
+        templates_response = await client.get(
+            "/api/v1/reports/templates/list",
+            headers=_auth(sample_developer.id),
+        )
         templates = templates_response.json()
 
         if templates:
             template_id = templates[0]["id"]
 
             response = await client.post(
-                "/api/reports/from-template",
-                json={
-                    "template_id": template_id,
-                    "creator_id": str(sample_developer.id),
-                },
+                f"/api/v1/reports/templates/{template_id}/create",
+                headers=_auth(sample_developer.id),
             )
 
-            assert response.status_code == 201
+            assert response.status_code == 200
 
     # Widget Data Tests
 
@@ -237,29 +287,26 @@ class TestReportsAPI:
     async def test_get_report_data(
         self, client: AsyncClient, sample_developer, sample_developers
     ):
-        """Test GET /reports/{id}/data endpoint."""
+        """Test POST /reports/{id}/data endpoint."""
         developer_ids = [str(dev.id) for dev in sample_developers]
 
         # Create report with widgets
         create_response = await client.post(
-            "/api/reports",
+            "/api/v1/reports",
+            headers=_auth(sample_developer.id),
             json={
-                "creator_id": str(sample_developer.id),
                 "name": "Data Report",
-                "widgets": [
-                    {
-                        "type": "skill_heatmap",
-                        "config": {},
-                        "position": {"x": 0, "y": 0, "w": 2, "h": 1},
-                    },
-                ],
+                "widgets": [_widget("data-w1")],
                 "filters": {"developer_ids": developer_ids},
             },
         )
         report_id = create_response.json()["id"]
 
-        # Get report data
-        response = await client.get(f"/api/reports/{report_id}/data")
+        # Get report data (endpoint is POST; developer_ids overrides are optional)
+        response = await client.post(
+            f"/api/v1/reports/{report_id}/data",
+            headers=_auth(sample_developer.id),
+        )
 
         assert response.status_code == 200
         data = response.json()
@@ -269,25 +316,26 @@ class TestReportsAPI:
 
     @pytest.mark.asyncio
     async def test_create_schedule(
-        self, client: AsyncClient, sample_developer
+        self, client: AsyncClient, sample_developer, sample_report_config
     ):
         """Test POST /reports/{id}/schedules endpoint."""
         # Create report
         create_response = await client.post(
-            "/api/reports",
+            "/api/v1/reports",
+            headers=_auth(sample_developer.id),
             json={
-                "creator_id": str(sample_developer.id),
                 "name": "Scheduled Report",
-                "widgets": [],
-                "filters": {},
+                "widgets": sample_report_config["widgets"],
             },
         )
         report_id = create_response.json()["id"]
 
-        # Create schedule
+        # Create schedule (report_id is required in the body too)
         response = await client.post(
-            f"/api/reports/{report_id}/schedules",
+            f"/api/v1/reports/{report_id}/schedules",
+            headers=_auth(sample_developer.id),
             json={
+                "report_id": report_id,
                 "schedule": "weekly",
                 "day_of_week": 1,
                 "time_utc": "09:00",
@@ -303,24 +351,25 @@ class TestReportsAPI:
 
     @pytest.mark.asyncio
     async def test_list_schedules(
-        self, client: AsyncClient, sample_developer
+        self, client: AsyncClient, sample_developer, sample_report_config
     ):
-        """Test GET /reports/{id}/schedules endpoint."""
+        """Test GET /reports/schedules/list endpoint."""
         # Create report with schedule
         create_response = await client.post(
-            "/api/reports",
+            "/api/v1/reports",
+            headers=_auth(sample_developer.id),
             json={
-                "creator_id": str(sample_developer.id),
                 "name": "Report with Schedules",
-                "widgets": [],
-                "filters": {},
+                "widgets": sample_report_config["widgets"],
             },
         )
         report_id = create_response.json()["id"]
 
         await client.post(
-            f"/api/reports/{report_id}/schedules",
+            f"/api/v1/reports/{report_id}/schedules",
+            headers=_auth(sample_developer.id),
             json={
+                "report_id": report_id,
                 "schedule": "daily",
                 "time_utc": "08:00",
                 "recipients": ["team@example.com"],
@@ -330,7 +379,11 @@ class TestReportsAPI:
         )
 
         # List schedules
-        response = await client.get(f"/api/reports/{report_id}/schedules")
+        response = await client.get(
+            "/api/v1/reports/schedules/list",
+            headers=_auth(sample_developer.id),
+            params={"report_id": report_id},
+        )
 
         assert response.status_code == 200
         data = response.json()
@@ -338,24 +391,25 @@ class TestReportsAPI:
 
     @pytest.mark.asyncio
     async def test_delete_schedule(
-        self, client: AsyncClient, sample_developer
+        self, client: AsyncClient, sample_developer, sample_report_config
     ):
         """Test DELETE /reports/schedules/{id} endpoint."""
         # Create report and schedule
         create_response = await client.post(
-            "/api/reports",
+            "/api/v1/reports",
+            headers=_auth(sample_developer.id),
             json={
-                "creator_id": str(sample_developer.id),
                 "name": "Report to Unschedule",
-                "widgets": [],
-                "filters": {},
+                "widgets": sample_report_config["widgets"],
             },
         )
         report_id = create_response.json()["id"]
 
         schedule_response = await client.post(
-            f"/api/reports/{report_id}/schedules",
+            f"/api/v1/reports/{report_id}/schedules",
+            headers=_auth(sample_developer.id),
             json={
+                "report_id": report_id,
                 "schedule": "monthly",
                 "day_of_month": 1,
                 "time_utc": "10:00",
@@ -367,7 +421,10 @@ class TestReportsAPI:
         schedule_id = schedule_response.json()["id"]
 
         # Delete schedule
-        response = await client.delete(f"/api/reports/schedules/{schedule_id}")
+        response = await client.delete(
+            f"/api/v1/reports/schedules/{schedule_id}",
+            headers=_auth(sample_developer.id),
+        )
         assert response.status_code == 204
 
 
@@ -376,15 +433,14 @@ class TestReportsAPIValidation:
 
     @pytest.mark.asyncio
     async def test_create_report_missing_name(
-        self, client: AsyncClient, sample_developer
+        self, client: AsyncClient, sample_developer, sample_report_config
     ):
         """Test creating report without name."""
         response = await client.post(
-            "/api/reports",
+            "/api/v1/reports",
+            headers=_auth(sample_developer.id),
             json={
-                "creator_id": str(sample_developer.id),
-                "widgets": [],
-                "filters": {},
+                "widgets": sample_report_config["widgets"],
             },
         )
 
@@ -392,25 +448,26 @@ class TestReportsAPIValidation:
 
     @pytest.mark.asyncio
     async def test_create_schedule_invalid_day(
-        self, client: AsyncClient, sample_developer
+        self, client: AsyncClient, sample_developer, sample_report_config
     ):
         """Test creating schedule with invalid day_of_week."""
         create_response = await client.post(
-            "/api/reports",
+            "/api/v1/reports",
+            headers=_auth(sample_developer.id),
             json={
-                "creator_id": str(sample_developer.id),
                 "name": "Test Report",
-                "widgets": [],
-                "filters": {},
+                "widgets": sample_report_config["widgets"],
             },
         )
         report_id = create_response.json()["id"]
 
         response = await client.post(
-            f"/api/reports/{report_id}/schedules",
+            f"/api/v1/reports/{report_id}/schedules",
+            headers=_auth(sample_developer.id),
             json={
+                "report_id": report_id,
                 "schedule": "weekly",
-                "day_of_week": 10,  # Invalid
+                "day_of_week": 10,  # Invalid (ge=0, le=6)
                 "time_utc": "09:00",
                 "recipients": ["test@example.com"],
                 "delivery_method": "email",
@@ -419,4 +476,3 @@ class TestReportsAPIValidation:
         )
 
         assert response.status_code in [400, 422]
-

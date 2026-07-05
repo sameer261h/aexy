@@ -16,6 +16,12 @@ BugStatus = Literal[
 BugEnvironment = Literal["production", "staging", "development", "testing"]
 BugSourceType = Literal["jira", "linear", "github", "manual"]
 
+# Statuses in which a bug needs no further work. Note that "fixed" is NOT
+# terminal — a fixed bug stays open until someone verifies the fix.
+TERMINAL_BUG_STATUSES: frozenset[str] = frozenset(
+    {"verified", "closed", "wont_fix", "duplicate", "cannot_reproduce"}
+)
+
 
 # ==================== Reproduction Steps ====================
 

@@ -200,20 +200,23 @@ class SyncService:
                     repository_id,
                     repo_language,
                     sync_branches=repo.sync_branches,
+                    heartbeat_fn=heartbeat_fn,
                 )
 
                 if heartbeat_fn:
                     heartbeat_fn(f"Synced {commits_synced} commits, fetching PRs...")
 
                 prs_synced = await self._sync_pull_requests_with_session(
-                    self.db, gh, owner, repo_name, developer_id, repository_id
+                    self.db, gh, owner, repo_name, developer_id, repository_id,
+                    heartbeat_fn=heartbeat_fn,
                 )
 
                 if heartbeat_fn:
                     heartbeat_fn(f"Synced {prs_synced} PRs, fetching reviews...")
 
                 reviews_synced = await self._sync_reviews_with_session(
-                    self.db, gh, owner, repo_name, developer_id, repository_id
+                    self.db, gh, owner, repo_name, developer_id, repository_id,
+                    heartbeat_fn=heartbeat_fn,
                 )
 
             # Update status
@@ -597,6 +600,7 @@ class SyncService:
         repository_id: str,
         repo_language: str | None = None,
         sync_branches: list[str] | None = None,
+        heartbeat_fn: Any = None,
     ) -> int:
         """Sync commits from repository (all contributors).
 
@@ -644,7 +648,15 @@ class SyncService:
                 if not commits:
                     break
 
-                for commit_data in commits:
+                if heartbeat_fn:
+                    heartbeat_fn(f"Commits: {synced} synced so far...")
+
+                for idx, commit_data in enumerate(commits):
+                    # get_commit_details below is a per-commit network call; keep the
+                    # Temporal activity heartbeat alive through large pages so the
+                    # activity isn't killed mid-sync (which would strand the data).
+                    if heartbeat_fn and idx % 25 == 0:
+                        heartbeat_fn(f"Commits: {synced} synced so far...")
                     sha = commit_data["sha"]
                     if sha in seen_shas:
                         continue
@@ -740,6 +752,7 @@ class SyncService:
         repo: str,
         developer_id: str,
         repository_id: str,
+        heartbeat_fn: Any = None,
     ) -> int:
         """Sync pull requests from repository (all contributors)."""
         synced = 0
@@ -753,6 +766,9 @@ class SyncService:
 
             if not prs:
                 break
+
+            if heartbeat_fn:
+                heartbeat_fn(f"Pull requests: {synced} synced so far...")
 
             for pr_data in prs:
                 # Check if PR already exists
@@ -829,6 +845,7 @@ class SyncService:
         repo: str,
         developer_id: str,
         repository_id: str,
+        heartbeat_fn: Any = None,
     ) -> int:
         """Sync code reviews from repository (all contributors)."""
         synced = 0
@@ -844,7 +861,11 @@ class SyncService:
             if not prs:
                 break
 
-            for pr_data in prs:
+            for idx, pr_data in enumerate(prs):
+                # get_pull_request_reviews is a per-PR network call; heartbeat
+                # through large pages so the activity isn't killed mid-sync.
+                if heartbeat_fn and idx % 10 == 0:
+                    heartbeat_fn(f"Reviews: {synced} synced so far...")
                 try:
                     reviews = await gh.get_pull_request_reviews(owner, repo, pr_data["number"])
                 except GitHubAPIError:

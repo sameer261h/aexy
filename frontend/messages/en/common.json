@@ -15,6 +15,7 @@
     "noResults": "No results found",
     "error": "An error occurred",
     "success": "Success",
+    "appDisabledForWorkspace": "That module is disabled for this workspace.",
     "status": {
       "active": "Active",
       "completed": "Completed",

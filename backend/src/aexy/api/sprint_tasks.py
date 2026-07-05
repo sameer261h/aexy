@@ -4,10 +4,11 @@ import logging
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.core.database import get_db
+from aexy.api.access_guard import ensure_app_enabled
 from aexy.api.developers import get_current_developer
 from aexy.models.activity import PullRequest
 from aexy.models.developer import Developer
@@ -144,6 +145,8 @@ async def get_sprint_and_check_permission(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not a member of this workspace",
         )
+
+    await ensure_app_enabled(db, str(sprint.workspace_id), "sprints")
 
     return sprint
 
@@ -710,6 +713,132 @@ async def unlink_github_link_from_task(
     await db.commit()
 
 
+class LinkPullRequestRequest(BaseModel):
+    pull_request_id: str
+
+
+class LinkIssueRequest(BaseModel):
+    repository: str
+    issue_number: int
+    title: str | None = None
+    state: str | None = None
+    url: str | None = None
+
+
+async def _load_task_or_404(db: AsyncSession, sprint_id: str, task_id: str) -> SprintTask:
+    task = await db.get(SprintTask, task_id)
+    if not task or str(task.sprint_id) != sprint_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    return task
+
+
+async def _github_link_response(db: AsyncSession, link_id: str) -> TaskGitHubLinkResponse:
+    # Re-select so the selectin `pull_request` relationship is loaded for the response.
+    link = (
+        await db.execute(select(TaskGitHubLink).where(TaskGitHubLink.id == link_id))
+    ).scalar_one()
+    return github_link_to_response(link)
+
+
+@router.post(
+    "/{task_id}/github-links/pull-requests",
+    response_model=TaskGitHubLinkResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def link_pull_request_to_task(
+    sprint_id: str,
+    task_id: str,
+    data: LinkPullRequestRequest,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually link a synced pull request to a task."""
+    await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+    await _load_task_or_404(db, sprint_id, task_id)
+
+    service = GitHubTaskSyncService(db)
+    link = await service.link_pr_manually(task_id, data.pull_request_id)
+    if not link:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Pull request is already linked or could not be found",
+        )
+    await db.commit()
+    return await _github_link_response(db, str(link.id))
+
+
+@router.post(
+    "/{task_id}/github-links/issues",
+    response_model=TaskGitHubLinkResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def link_issue_to_task(
+    sprint_id: str,
+    task_id: str,
+    data: LinkIssueRequest,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually link a GitHub issue to a task."""
+    await get_sprint_and_check_permission(sprint_id, current_user, db, "member")
+    await _load_task_or_404(db, sprint_id, task_id)
+
+    service = GitHubTaskSyncService(db)
+    link = await service.link_issue_manually(
+        task_id,
+        data.repository,
+        data.issue_number,
+        title=data.title,
+        state=data.state,
+        url=data.url,
+    )
+    if not link:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Issue is already linked to this task",
+        )
+    await db.commit()
+    return await _github_link_response(db, str(link.id))
+
+
+@router.get("/{task_id}/github-links/issue-repositories", response_model=list[str])
+async def list_issue_repositories(
+    sprint_id: str,
+    task_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Repositories available for linking GitHub issues to this task."""
+    sprint = await get_sprint_and_check_permission(sprint_id, current_user, db, "viewer")
+    service = GitHubTaskSyncService(db)
+    return await service.get_project_issue_repositories(str(sprint.team_id))
+
+
+@router.get("/github/pull-requests", response_model=list[PullRequestSummary])
+async def list_linkable_pull_requests(
+    sprint_id: str,
+    query: str | None = None,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """List synced pull requests (in this project's repos) that can be linked."""
+    sprint = await get_sprint_and_check_permission(sprint_id, current_user, db, "viewer")
+    service = GitHubTaskSyncService(db)
+    repos = await service.get_project_issue_repositories(str(sprint.team_id))
+    if not repos:
+        return []
+    stmt = select(PullRequest).where(PullRequest.repository.in_(repos))
+    if query:
+        like = f"%{query.strip()}%"
+        conds = [PullRequest.title.ilike(like)]
+        if query.strip().isdigit():
+            conds.append(PullRequest.number == int(query.strip()))
+        stmt = stmt.where(or_(*conds))
+    stmt = stmt.order_by(PullRequest.updated_at_github.desc()).limit(50)
+    prs = (await db.execute(stmt)).scalars().all()
+    return [pull_request_to_summary(pr) for pr in prs]
+
+
 # Task CRUD with path parameters (must come after specific routes)
 @router.get("/{task_id}", response_model=SprintTaskResponse)
 async def get_task(
@@ -1093,6 +1222,8 @@ async def export_sprint_tasks(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have permission to access this sprint",
         )
+
+    await ensure_app_enabled(db, str(sprint.workspace_id), "sprints")
 
     # Get all tasks for the sprint
     tasks = await task_service.get_sprint_tasks(sprint_id)

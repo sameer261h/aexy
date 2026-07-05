@@ -70,7 +70,10 @@ export default function TrackingAnalyticsPage() {
         dashboard: teamDashboard.data,
         standups: standups.data?.standups?.length || 0,
         timeEntries: timeEntries.data?.entries?.length || 0,
-        blockers: blockers.data?.blockers?.length || 0,
+        // The active-blockers endpoint also returns recently-resolved items,
+        // so filter them out of the active count.
+        blockers:
+          blockers.data?.blockers?.filter((b) => b.status !== "resolved").length || 0,
       };
       exportToJSON(exportData, `team_analytics_${dateRange.startDate.toISOString().split("T")[0]}`);
     }

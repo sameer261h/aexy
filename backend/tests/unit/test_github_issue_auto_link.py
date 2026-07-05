@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aexy.models.developer import Developer
 from aexy.models.repository import Repository, WorkspaceRepository
 from aexy.models.sprint import SprintTask, TaskGitHubLink
 from aexy.models.workspace import Workspace
@@ -22,10 +23,14 @@ async def _make_workspace(
     *,
     adopt_repo: str | None = "owner/repo",
 ) -> Workspace:
+    owner = Developer(email=f"owner-{slug}-{uuid4().hex[:8]}@example.com", name="Owner")
+    db.add(owner)
+    await db.flush()
     ws = Workspace(
         id=str(uuid4()),
         name="Acme",
         slug=slug,
+        owner_id=owner.id,
         next_task_key=10,
     )
     db.add(ws)

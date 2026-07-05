@@ -197,8 +197,10 @@ class DeveloperService:
                     setattr(developer, field, value)
 
         await self.db.flush()
-        await self.db.refresh(developer)
-        return developer
+        # Re-fetch (not refresh): a blanket db.refresh() expires the
+        # eager-loaded github/google/microsoft connections, so serializing the
+        # response would lazy-load them in async context -> MissingGreenlet.
+        return await self.get_by_id(developer_id)
 
     async def connect_github(
         self,

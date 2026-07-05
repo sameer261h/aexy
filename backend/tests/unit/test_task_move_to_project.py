@@ -20,6 +20,7 @@ from aexy.models.dependency import TaskDependency
 from aexy.models.developer import Developer
 from aexy.models.project import Project, ProjectMember
 from aexy.models.sprint import SprintTask, TaskActivity
+from aexy.models.team import Team
 from aexy.models.workspace import Workspace
 from aexy.services.sprint_task_service import (
     SprintTaskService,
@@ -42,6 +43,12 @@ async def _make_workspace(db: AsyncSession, slug: str) -> Workspace:
 async def _make_project(db: AsyncSession, ws: Workspace, slug: str) -> Project:
     p = Project(id=str(uuid.uuid4()), workspace_id=ws.id, name=f"P {slug}", slug=slug)
     db.add(p)
+    # SprintTask.team_id FKs to teams.id but the service treats it as the
+    # project id (move_to_project sets team_id=target_project_id, and tests
+    # assert new_task.team_id == project.id). Postgres enforces the FK
+    # (SQLite ignores it), so a Team row with id==project.id must exist.
+    team = Team(id=p.id, workspace_id=ws.id, name=f"P {slug}", slug=slug)
+    db.add(team)
     await db.commit()
     await db.refresh(p)
     return p

@@ -1,7 +1,12 @@
 """API routes for Aexy."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from aexy.api.access_guard import (
+    require_app_access,
+    require_app_access_document_scoped,
+    require_app_access_sprint_scoped,
+)
 from aexy.api.admin import router as admin_router
 from aexy.api.platform_admin import router as platform_admin_router
 from aexy.api.admin_rate_limits import router as admin_rate_limits_router
@@ -199,7 +204,7 @@ api_router.include_router(career_router, tags=["career"])
 api_router.include_router(learning_router, tags=["learning"])
 api_router.include_router(learning_activities_router, tags=["learning-activities"])
 api_router.include_router(gamification_router, tags=["gamification"])
-api_router.include_router(compliance_router, tags=["compliance"])
+api_router.include_router(compliance_router, tags=["compliance"], dependencies=[Depends(require_app_access("compliance"))])
 api_router.include_router(manager_learning_router, tags=["learning-manager"])
 api_router.include_router(learning_analytics_router, tags=["learning-analytics"])
 api_router.include_router(learning_integrations_router, tags=["learning-integrations"])
@@ -221,11 +226,13 @@ api_router.include_router(workspaces_router, tags=["workspaces"])
 api_router.include_router(invites_router, tags=["invites"])
 api_router.include_router(workspace_teams_router, tags=["workspace-teams"])
 # Sprint Planning
-api_router.include_router(sprints_router, tags=["sprints"])
+api_router.include_router(sprints_router, tags=["sprints"], dependencies=[Depends(require_app_access("sprints"))])
+# sprint_tasks enforces the sprints toggle inside get_sprint_and_check_permission
+# (its paths carry {sprint_id}, not {workspace_id}).
 api_router.include_router(sprint_tasks_router, tags=["sprint-tasks"])
-api_router.include_router(sprint_analytics_router, tags=["sprint-analytics"])
-api_router.include_router(planning_poker_router, tags=["planning-poker"])
-api_router.include_router(retrospectives_router, tags=["retrospectives"])
+api_router.include_router(sprint_analytics_router, tags=["sprint-analytics"], dependencies=[Depends(require_app_access_sprint_scoped("sprints"))])
+api_router.include_router(planning_poker_router, tags=["planning-poker"], dependencies=[Depends(require_app_access_sprint_scoped("sprints"))])
+api_router.include_router(retrospectives_router, tags=["retrospectives"], dependencies=[Depends(require_app_access_sprint_scoped("sprints"))])
 api_router.include_router(project_tasks_router, tags=["project-tasks"])
 api_router.include_router(workspace_tasks_router, tags=["workspace-tasks"])
 api_router.include_router(task_templates_router, tags=["task-templates"])
@@ -236,17 +243,17 @@ api_router.include_router(task_config_router, tags=["task-config"])
 api_router.include_router(integrations_router, tags=["integrations"])
 api_router.include_router(integration_webhooks_router, tags=["integration-webhooks"])
 # Epics
-api_router.include_router(epics_router, tags=["epics"])
+api_router.include_router(epics_router, tags=["epics"], dependencies=[Depends(require_app_access("sprints"))])
 # User Stories
-api_router.include_router(stories_router, tags=["stories"])
+api_router.include_router(stories_router, tags=["stories"], dependencies=[Depends(require_app_access("sprints"))])
 # Releases
-api_router.include_router(releases_router, tags=["releases"])
+api_router.include_router(releases_router, tags=["releases"], dependencies=[Depends(require_app_access("sprints"))])
 # Goals/OKRs
 api_router.include_router(goals_router, tags=["goals"])
 # Entity Activities (Timeline)
 api_router.include_router(entity_activity_router, tags=["entity-activities"])
 # Bugs
-api_router.include_router(bugs_router, tags=["bugs"])
+api_router.include_router(bugs_router, tags=["bugs"], dependencies=[Depends(require_app_access("sprints"))])
 # Dependencies
 api_router.include_router(dependencies_router, tags=["dependencies"])
 # Reviews
@@ -254,23 +261,27 @@ api_router.include_router(reviews_router, tags=["reviews"])
 # Notifications
 api_router.include_router(notifications_router, tags=["notifications"])
 # On-Call Scheduling
-api_router.include_router(oncall_router, tags=["oncall"])
+api_router.include_router(oncall_router, tags=["oncall"], dependencies=[Depends(require_app_access("oncall"))])
 api_router.include_router(google_calendar_router, tags=["google-calendar"])
 # Documentation
-api_router.include_router(documents_router, tags=["documents"])
+api_router.include_router(documents_router, tags=["documents"], dependencies=[Depends(require_app_access("docs"))])
+# templates_router mixes system templates (no workspace) with workspace-owned
+# ones, so the docs toggle is enforced per-endpoint inside documents.py
+# (ensure_app_enabled) rather than as a blanket router dependency.
 api_router.include_router(templates_router, tags=["templates"])
-api_router.include_router(collaboration_router, tags=["collaboration"])
-api_router.include_router(document_spaces_router, tags=["document-spaces"])
-# Tracking
+api_router.include_router(collaboration_router, tags=["collaboration"], dependencies=[Depends(require_app_access_document_scoped("docs"))])
+api_router.include_router(document_spaces_router, tags=["document-spaces"], dependencies=[Depends(require_app_access("docs"))])
+# Tracking: most paths carry no workspace_id param, so the toggle is enforced
+# inside tracking.py where the workspace is resolved server-side.
 api_router.include_router(tracking_router, tags=["tracking"])
 # Ticketing
-api_router.include_router(ticket_forms_router, tags=["ticket-forms"])
-api_router.include_router(tickets_router, tags=["tickets"])
+api_router.include_router(ticket_forms_router, tags=["ticket-forms"], dependencies=[Depends(require_app_access("tickets"))])
+api_router.include_router(tickets_router, tags=["tickets"], dependencies=[Depends(require_app_access("tickets"))])
 api_router.include_router(public_forms_router, tags=["public-forms"])
-api_router.include_router(escalation_router, tags=["escalation"])
-api_router.include_router(escalation_ticket_router, tags=["escalation"])
+api_router.include_router(escalation_router, tags=["escalation"], dependencies=[Depends(require_app_access("tickets"))])
+api_router.include_router(escalation_ticket_router, tags=["escalation"], dependencies=[Depends(require_app_access("tickets"))])
 # Forms (Standalone Module with CRM/Ticketing integration)
-api_router.include_router(forms_router, tags=["forms"])
+api_router.include_router(forms_router, tags=["forms"], dependencies=[Depends(require_app_access("forms"))])
 api_router.include_router(public_forms_new_router, tags=["forms-public"])
 # Assessment Platform
 api_router.include_router(assessments_router, tags=["assessments"])
@@ -278,10 +289,12 @@ api_router.include_router(assessment_take_router, tags=["assessment-take"])
 api_router.include_router(questions_router, tags=["questions"])
 api_router.include_router(question_bank_router, tags=["question-bank"])
 # CRM
-api_router.include_router(crm_router, tags=["crm"])
-api_router.include_router(crm_automation_router, tags=["crm-automation"])
+api_router.include_router(
+    crm_router, tags=["crm"], dependencies=[Depends(require_app_access("crm"))]
+)
+api_router.include_router(crm_automation_router, tags=["crm-automation"], dependencies=[Depends(require_app_access("crm"))])
 # Platform-wide Automations
-api_router.include_router(automations_router, tags=["automations"])
+api_router.include_router(automations_router, tags=["automations"], dependencies=[Depends(require_app_access("automations"))])
 # Visual Workflow Builder
 api_router.include_router(workflows_router, tags=["workflows"])
 api_router.include_router(workflows_list_router, tags=["workflows"])
@@ -292,10 +305,10 @@ api_router.include_router(workflow_events_router, tags=["workflow-events"])
 api_router.include_router(google_integration_router, tags=["google-integration"])
 api_router.include_router(google_callback_router, tags=["google-integration"])
 # AI Agents
-api_router.include_router(agents_router, tags=["agents"])
+api_router.include_router(agents_router, tags=["agents"], dependencies=[Depends(require_app_access("agents"))])
 api_router.include_router(writing_style_router, tags=["writing-style"])
 # Agent Policy Engine
-api_router.include_router(agent_policies_router, tags=["agent-policies"])
+api_router.include_router(agent_policies_router, tags=["agent-policies"], dependencies=[Depends(require_app_access("agents"))])
 api_router.include_router(agent_audit_router, tags=["agent-audit"])
 # Automation-Agent Integration
 api_router.include_router(automation_agents_router, tags=["automation-agents"])
@@ -308,7 +321,7 @@ api_router.include_router(public_projects_router, tags=["public-projects"])
 # App Access Control
 api_router.include_router(app_access_router, tags=["app-access"])
 # Email Marketing
-api_router.include_router(email_marketing_router, tags=["email-marketing"])
+api_router.include_router(email_marketing_router, tags=["email-marketing"], dependencies=[Depends(require_app_access("email_marketing"))])
 # Email Infrastructure (Multi-domain sending, warming, routing)
 api_router.include_router(email_infrastructure_router, tags=["email-infrastructure"])
 api_router.include_router(email_webhooks_router, tags=["email-webhooks"])
@@ -327,20 +340,20 @@ api_router.include_router(public_booking_router, tags=["booking-public"])
 api_router.include_router(rsvp_booking_router, tags=["booking-rsvp"])
 api_router.include_router(calendar_callback_booking_router, tags=["booking-calendar-callback"])
 # Uptime Monitoring
-api_router.include_router(uptime_router, tags=["uptime"])
+api_router.include_router(uptime_router, tags=["uptime"], dependencies=[Depends(require_app_access("uptime"))])
 # GitHub Intelligence
 api_router.include_router(intelligence_router, tags=["intelligence"])
 # Developer Insights
-api_router.include_router(developer_insights_router, tags=["developer-insights"])
+api_router.include_router(developer_insights_router, tags=["developer-insights"], dependencies=[Depends(require_app_access("insights"))])
 # Recurring Reminders
 api_router.include_router(reminders_router, tags=["reminders"])
 # Questionnaire Import
 api_router.include_router(questionnaires_router, tags=["questionnaires"])
 # Compliance Document Center
-api_router.include_router(compliance_documents_router, tags=["compliance-documents"])
+api_router.include_router(compliance_documents_router, tags=["compliance-documents"], dependencies=[Depends(require_app_access("compliance"))])
 api_router.include_router(compliance_folders_router, tags=["compliance-folders"])
 # Drive
-api_router.include_router(drive_router, tags=["drive"])
+api_router.include_router(drive_router, tags=["drive"], dependencies=[Depends(require_app_access("drive"))])
 # Workspace file search + per-file metadata (polymorphic across all sources)
 api_router.include_router(file_search_router, tags=["file-search"])
 # Super-admin plan editor + AI backfill
@@ -356,7 +369,7 @@ api_router.include_router(tracker_qa_router, tags=["tracker-qa"])
 api_router.include_router(tracker_admin_router, tags=["tracker-admin"])
 api_router.include_router(tracker_target_router, tags=["tracker-target-hours"])
 # Standalone Tables
-api_router.include_router(tables_router, tags=["tables"])
+api_router.include_router(tables_router, tags=["tables"], dependencies=[Depends(require_app_access("tables"))])
 api_router.include_router(custom_field_types_router, tags=["custom-field-types"])
 api_router.include_router(public_tables_router, tags=["tables-public"])
 # Saved Views (cross-module)

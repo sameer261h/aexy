@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { usePageVisitTracker } from "@/hooks/usePageVisitTracker";
 import { useRecentApps } from "@/hooks/useRecentApps";
 import { AppShell } from "@/components/layout/AppShell";
+import { WorkspaceAppToggleGuard } from "@/components/layout/WorkspaceAppToggleGuard";
 import { GlobalShortcuts } from "@/components/GlobalShortcuts";
 import { CommandPalette } from "@/components/CommandPalette";
 import { KeyboardShortcutsHelp } from "@/components/KeyboardShortcutsHelp";
@@ -80,7 +81,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 <CommandPalette />
                 <KeyboardShortcutsHelp />
                 <WorkspaceSearchPalette />
-                {children}
+                <WorkspaceAppToggleGuard>{children}</WorkspaceAppToggleGuard>
                 <FloatingChatWidget />
             </AppShell>
         </ChatWebSocketProvider>
