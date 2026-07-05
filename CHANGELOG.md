@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.41] - 2026-07-05
+
+### Marketing site is now crawlable and shareable (SEO)
+
+The homepage shipped almost no server-rendered content — it gated its
+entire body behind a client-side `isChecking` spinner, so a crawler
+(or any no-JS fetch) saw only the page title and zero links. The
+content now renders unconditionally in the server response (real
+headings, the FAQ, and the full internal link graph including the
+GitHub repo); logged-in visitors are redirected to the app at the
+edge (middleware, `aexy_authed` cookie) instead of behind a render
+gate.
+
+Alongside that:
+
+- **robots.txt and sitemap.xml** now exist (`app/robots.ts`,
+  `app/sitemap.ts`) — robots allows the public marketing routes and
+  disallows the authenticated app; the sitemap lists the real public
+  URLs.
+- **Open Graph & Twitter Card** tags, a **canonical** link, and
+  **`WebApplication` JSON-LD** (with `offers`/`featureList`) were
+  added to the root metadata, so shared links render a card and
+  Google can build a rich result. The title now includes the ICP
+  keywords (engineering, CRM, HR, GTM) within the display limit and
+  the meta description fits in ~130 characters.
+- **favicon** (`favicon.ico` + `icon.svg`) and a dynamic **Open
+  Graph image** were added — all previously 404'd.
+- **HSTS** (`Strict-Transport-Security`) is now emitted by the app,
+  and responses are **gzip-compressed** (`compress`). Hashed
+  `/_next/static/*` chunks are served `immutable` so repeat visitors
+  stop re-downloading the JS bundles.
+
+The nginx template also gained a `www → apex` redirect, immutable
+static-asset caching, and a broader gzip type list. Note: `www`
+still needs a DNS record to resolve, and the marketing HTML itself
+remains dynamically rendered (a consequence of per-request i18n) —
+tracked for a future locale-routing change.
+
 ## [0.8.40] - 2026-07-05
 
 ### Workspace module toggles are now enforced on the API

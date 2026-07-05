@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { safeInternalPath, stashPostLoginRedirect } from "@/lib/oauth";
 import { setAuthPresenceCookie, clearAuthPresenceCookie } from "@/lib/authCookie";
@@ -120,20 +120,26 @@ const platformLinks = [
 
 export default function Home() {
   const router = useRouter();
-  const [isChecking, setIsChecking] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
   const googleLoginUrl = `${API_BASE_URL}/auth/google/login`;
   const githubLoginUrl = `${API_BASE_URL}/auth/github/login`;
   const microsoftLoginUrl = `${API_BASE_URL}/auth/microsoft/login`;
 
-  const searchParams = useSearchParams();
+  // The marketing content below is rendered unconditionally so it is present
+  // in the server HTML (crawlable). Logged-in visitors are bounced to the app:
+  // the common case is handled at the edge (middleware redirects "/" when the
+  // aexy_authed cookie is set); this effect covers the localStorage-token /
+  // deep-link (?next=) cases without hiding content behind a client gate.
   useEffect(() => {
     // Honour ?next= from the middleware auth gate. Two cases:
     //  1. User is already authed (e.g., they clicked a deep link in a new
     //     tab while logged in) — redirect them straight to their target.
     //  2. User is logged out — stash it in sessionStorage so the OAuth
     //     callback can complete the redirect after token exchange.
-    const rawNext = searchParams?.get("next") ?? null;
+    const rawNext =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("next")
+        : null;
     const nextPath = safeInternalPath(rawNext);
     const token = localStorage.getItem("token");
     if (token) {
@@ -158,30 +164,19 @@ export default function Home() {
           const status = (err as { response?: { status?: number } })
             ?.response?.status;
           if (status === 401 || status === 403) {
+            // Dead token — clear it and leave the visitor on the landing
+            // page (already rendered) with the login CTA.
             localStorage.removeItem("token");
             clearAuthPresenceCookie();
             if (nextPath) stashPostLoginRedirect(nextPath);
-            setIsChecking(false);
-          } else {
-            // Transient — show the loader's idle state so the user
-            // can retry from the landing UI rather than landing on
-            // a half-rendered shell.
-            setIsChecking(false);
           }
+          // Any other error (network blip, 5xx) is transient — keep the
+          // visitor on the landing page and let the next click retry.
         });
     } else {
       if (nextPath) stashPostLoginRedirect(nextPath);
-      setIsChecking(false);
     }
-  }, [router, searchParams]);
-
-  if (isChecking) {
-    return (
-      <main className="min-h-screen bg-[#08090d] flex items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-      </main>
-    );
-  }
+  }, [router]);
 
   return (
     <main className="min-h-screen bg-[#08090d] text-white overflow-hidden">

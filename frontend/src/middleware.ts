@@ -77,6 +77,17 @@ export function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
+  // Logged-in visitors landing on "/" are sent straight to the app. This runs
+  // at the edge on the aexy_authed presence cookie, so the marketing homepage
+  // can render its full (crawlable) content unconditionally for everyone else
+  // without a client-side redirect flash or gating spinner.
+  if (pathname === "/" && request.cookies.get("aexy_authed")?.value) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/dashboard";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
+
   // Auth gate: redirect unauthenticated requests to the landing page before
   // any auth-required shell HTML is rendered. The cookie is a *presence*
   // signal mirrored from localStorage by useAuth — the JWT itself remains
