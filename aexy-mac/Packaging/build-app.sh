@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Package the Aexy executable into a proper .app bundle (with a bundle id, so
+# UNUserNotificationCenter + Keychain behave) and ad-hoc code-sign it so it runs
+# + notifies locally. For distribution, replace the ad-hoc identity with a
+# Developer ID and notarize.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+CONFIG="${1:-release}"
+APP="Aexy.app"
+
+echo "→ swift build -c $CONFIG"
+swift build -c "$CONFIG"
+BIN=".build/$CONFIG/Aexy"
+[ -f "$BIN" ] || { echo "build output not found: $BIN" >&2; exit 1; }
+
+echo "→ assembling $APP"
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
+cp "$BIN" "$APP/Contents/MacOS/Aexy"
+cp Packaging/Info.plist "$APP/Contents/Info.plist"
+[ -f Resources/AppIcon.icns ] || swift Packaging/generate-icon.swift
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+
+# Embed Sparkle.framework (and its XPC services) if the dependency resolved.
+# SwiftPM stages it under .build/<config>/Sparkle.framework.
+SPARKLE_FW=".build/$CONFIG/Sparkle.framework"
+if [ -d "$SPARKLE_FW" ]; then
+    echo "→ embedding Sparkle.framework"
+    cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
+    # SwiftPM links Sparkle via @rpath but doesn't add the standard app rpath, so
+    # dyld can't find Contents/Frameworks at launch. Add it (idempotent).
+    install_name_tool -add_rpath "@executable_path/../Frameworks" \
+        "$APP/Contents/MacOS/Aexy" 2>/dev/null || true
+    # Sign frameworks first (inside-out), then the app bundle.
+    codesign --force --options runtime --sign - \
+        "$APP/Contents/Frameworks/Sparkle.framework"
+else
+    echo "→ Sparkle.framework not found ($SPARKLE_FW) — building without self-update"
+fi
+
+echo "→ ad-hoc code-signing"
+codesign --force --deep --sign - "$APP"
+
+echo "✓ Built $APP  (open with: open $APP)"

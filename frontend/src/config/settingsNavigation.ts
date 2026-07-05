@@ -127,6 +127,15 @@ export const settingsNavigation: SettingsNavCategory[] = [
         adminOnly: true,
         keywords: ["metrics", "analytics", "developer", "performance", "hours"],
       },
+      {
+        id: "tracker",
+        label: "Tracker",
+        href: "/settings/tracker",
+        icon: Activity,
+        description: "Enable the Aexy Tracker per project and view team tracker records",
+        adminOnly: true,
+        keywords: ["tracker", "timesheet", "capture", "screenshots", "activity", "macos"],
+      },
     ],
   },
   {

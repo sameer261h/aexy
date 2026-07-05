@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   FolderGit2,
   FolderKanban,
+  Activity,
   Save,
   Trash2,
   RefreshCw,
@@ -277,6 +278,13 @@ export default function ProjectSettingsPage() {
           >
             <Workflow className="h-4 w-4" />
             Statuses
+          </Link>
+          <Link
+            href={`/settings/projects/${projectId}/tracker`}
+            className="px-4 py-2 bg-muted hover:bg-accent text-foreground rounded-lg text-sm font-medium transition flex items-center gap-2"
+          >
+            <Activity className="h-4 w-4" />
+            Tracker
           </Link>
         </div>
 

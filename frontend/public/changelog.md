@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.41] - 2026-07-05
+## [0.8.42] - 2026-07-05
 
 ### Marketing site is now crawlable and shareable (SEO)
 
@@ -43,7 +43,7 @@ still needs a DNS record to resolve, and the marketing HTML itself
 remains dynamically rendered (a consequence of per-request i18n) —
 tracked for a future locale-routing change.
 
-## [0.8.40] - 2026-07-05
+## [0.8.41] - 2026-07-05
 
 ### Workspace module toggles are now enforced on the API
 
@@ -128,6 +128,31 @@ The backend test suite can now run against real Postgres (set
 `TEST_DATABASE_URL`), catching pgvector/JSONB/UUID/`date_trunc` and
 foreign-key behavior SQLite silently ignores; the full unit and
 integration suites pass on both SQLite and Postgres.
+## [0.8.40] - 2026-06-17
+
+### Added
+
+#### Aexy Tracker — macOS work tracker + AI auto-attribution
+A local-first macOS menu-bar app that captures lightweight semantic signals (frontmost app, window title, file/git context, dev/browser context, idle state) and uploads them as append-only, idempotent event batches. A downstream Temporal/LLM pipeline enriches, attributes, and narrates the activity so time tracking happens with no manual entry.
+
+- **macOS client** (`aexy-mac/`, Swift): durable local buffer, batched idempotent upload, OAuth device-code onboarding, Keychain-persisted config, and best-effort nil-safe collectors. Events are removed from the buffer only after the server confirms them.
+- **Ingest API** (`/tracker/*`): device enrollment, partial-success batch ingest (idempotent on `event_id`), heartbeat/config pull, sync high-water mark, and evidence presign. Sliding-window rate limiting (fail-open) and a 30d-past/5m-future timestamp guard. `category`/`attribution` are server-derived only — never accepted from the client.
+- **Enrich/attribute loop** (Temporal + LLM): collapses consecutive samples into spans, categorizes them (productive/neutral/personal), and attributes each to a candidate task — rolled up into inferred `TimeEntry` rows that show in the existing tracking module. Fire-and-forget per-batch dispatch (time-bucketed `workflow_id` coalescing) plus a 5-min safety-net sweep.
+- **Daily journal + proactive insights**: an LLM narrative per developer per day (idempotent `WorkLog` upsert), and deterministic insight signals (context switching, meeting load, after-hours, focus fragmentation) surfaced as deduped in-app notifications.
+- **Q&A + auto-attributed timesheet** (`/tracker/qa`, `/tracker/timesheet`): individual-scoped natural-language Q&A over one's own journals + inferred time, and a day-grouped timesheet view with confidence badges. New `/tracking/tracker` UI page + `useTrackerTimesheet` hook.
+- **Confirm / correct attribution**: the timesheet is now a review queue — confirm the AI's task guess, reassign it (`TaskSelect` fed by `GET /tracker/candidate-tasks`), or dismiss it, via `PATCH /tracker/timesheet/entries/{id}` and a new `attribution_status` column. Dismissed entries drop out of totals. Page fully localized (`tracking.tracker` namespace, en/hi); Q&A now follows the selected date range and the date picker no longer shifts a day in non-UTC zones.
+- **Browser sign-in (macOS app)**: **Sign in → GitHub / Google / Microsoft** opens the system browser to the new `GET /auth/device/login?provider=&port=`, captures the developer JWT on a `127.0.0.1` loopback listener (RFC 8252), exchanges it for a long-lived `aexy_…` API token (`POST /developers/me/api-tokens`), and enrolls — no env vars or manual code entry. Replaces the dead device-code default that 404'd.
+- **Docs**: `docs/aexy-tracker.md` (feature + macOS client + sign-in) and `docs/api/tracker-ingest.md` (ingest + device-login contract), linked into the handbook nav; code references repointed to them.
+- **Desktop companion (Aexy for macOS)**: the macOS app (renamed to **Aexy**, in `aexy-mac/`) is now a hybrid companion — web sign-in, native Today/Board(Kanban)/Table/Docs/Time/Standups, native notifications, and embedded web for everything else. The web app gains a **chromeless `?embed=true` mode** — `AppShell` hides its sidebar, and the **docs layout + `DocumentEditor`** hide the docs sidebar/title-header so the embedded editor is editor-only — letting the desktop app's native sidebar be the sole navigation with full web parity.
+
+### Fixed
+
+- **Security (OAuth redirect):** the post-login redirect now delivers the developer JWT only to an allowlisted target — the configured frontend, local dev, ops-configured `OAUTH_EXTRA_REDIRECT_HOSTS`, or a `127.0.0.1`/`localhost` loopback (native apps). All provider login/connect entry points reject a disallowed `redirect_url` with `400`, and every callback funnels through one guarded chokepoint, closing a token-exfiltration vector where an attacker-supplied `redirect_url` could capture a victim's token.
+- Tracker enrich now locks pending event rows (`FOR UPDATE SKIP LOCKED`) and is backstopped by a partial unique index on inferred `time_entries` dedupe keys, so the per-batch dispatch and the periodic sweep can't double-attribute the same events into duplicate time entries.
+- Tracker enrich tolerates non-numeric LLM `confidence` values instead of crashing (and Temporal-retrying) the whole activity.
+- Tracker timesheet no longer leaks daily journals dated after the requested `end` date (added the missing upper `logged_at` bound).
+- Tracker ingest counts within-batch duplicates so `accepted + duplicates + rejected` reconciles to events sent; insight runs no longer overcount notifications suppressed by recipient preferences.
+- macOS client: onboarding completes when the server mints no enroll token (falls back to the device-code token), the local buffer is capped to bound offline growth, and the sample interval is clamped to the server's accepted `1…600s` range.
 
 ## [0.8.39] - 2026-05-28
 

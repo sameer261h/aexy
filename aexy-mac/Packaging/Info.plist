@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Aexy</string>
+    <key>CFBundleDisplayName</key>
+    <string>Aexy</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.aexy.desktop</string>
+    <key>CFBundleExecutable</key>
+    <string>Aexy</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <!-- Menu-bar accessory: no Dock icon at launch (the app promotes to a
+         regular activation policy when the main window opens). -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <!-- Sparkle self-update. SUPublicEDKey is the EdDSA *public* key; its private
+         counterpart lives in the release signer's keychain (generate_keys /
+         sign_update). Replace SUFeedURL once the appcast is hosted — until then a
+         manual check reaches the URL and reports "up to date"/error gracefully
+         (it no longer fails to start). -->
+    <key>SUFeedURL</key>
+    <string>https://aexy.io/desktop/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>RpWhSwHyF3eBBPbYaz2Evv1k0cetJCgSL8hFLWnI0AY=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
+</dict>
+</plist>

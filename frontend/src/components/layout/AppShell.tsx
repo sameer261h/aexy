@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { cn } from "@/lib/utils";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -18,6 +19,25 @@ import { Menu } from "lucide-react";
 import { Button } from "../ui/button";
 
 export function AppShell({ children, user, logout }: AppShellProps) {
+    // Chromeless / embedded mode for the macOS desktop app: when loaded with
+    // ?embed=true the native app's own sidebar is the navigation, so we hide the
+    // web sidebar + mobile header and render content full-width. The flag is
+    // persisted so client-side route changes within the embed stay chromeless.
+    const [embedded, setEmbedded] = useState(false);
+    useEffect(() => {
+        try {
+            const isEmbed =
+                new URLSearchParams(window.location.search).get("embed") === "true" ||
+                window.localStorage.getItem("aexy_embed") === "1";
+            if (isEmbed) {
+                window.localStorage.setItem("aexy_embed", "1");
+                setEmbedded(true);
+            }
+        } catch {
+            /* SSR / no storage — render normal chrome */
+        }
+    }, []);
+
     return (
         <div className="flex h-screen overflow-hidden bg-background">
             {/* UX-A11Y-007: skip-to-content link. Hidden until focused;
@@ -32,26 +52,31 @@ export function AppShell({ children, user, logout }: AppShellProps) {
                 Skip to main content
             </a>
             {/* Mobile Navigation */}
-            <header className="md:hidden fixed top-0 left-0 right-0 z-40 flex items-center h-16 px-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-                <Sheet>
-                    <SheetTrigger asChild>
-                        <Button variant="ghost" size="icon" className="mr-2">
-                            <Menu className="h-5 w-5" />
-                            <span className="sr-only">Toggle menu</span>
-                        </Button>
-                    </SheetTrigger>
-                    <SheetContent side="left" className="p-0 w-[240px] max-w-[85vw]">
-                        <Sidebar user={user} logout={logout} className="border-none w-full h-full" />
-                    </SheetContent>
-                </Sheet>
-                <div className="font-semibold text-lg">Aexy</div>
-            </header>
+            {!embedded && (
+                <header className="md:hidden fixed top-0 left-0 right-0 z-40 flex items-center h-16 px-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+                    <Sheet>
+                        <SheetTrigger asChild>
+                            <Button variant="ghost" size="icon" className="mr-2">
+                                <Menu className="h-5 w-5" />
+                                <span className="sr-only">Toggle menu</span>
+                            </Button>
+                        </SheetTrigger>
+                        <SheetContent side="left" className="p-0 w-[240px] max-w-[85vw]">
+                            <Sidebar user={user} logout={logout} className="border-none w-full h-full" />
+                        </SheetContent>
+                    </Sheet>
+                    <div className="font-semibold text-lg">Aexy</div>
+                </header>
+            )}
 
-            <Sidebar user={user} logout={logout} className="hidden md:flex" />
+            {!embedded && <Sidebar user={user} logout={logout} className="hidden md:flex" />}
             <main
                 id="main-content"
                 tabIndex={-1}
-                className="flex-1 overflow-y-auto md:pt-0 pt-16 focus:outline-none"
+                className={cn(
+                    "flex-1 overflow-y-auto focus:outline-none",
+                    embedded ? "pt-0" : "md:pt-0 pt-16"
+                )}
             >
                 <div className="mx-0 p-0">
                     <ErrorBoundary>

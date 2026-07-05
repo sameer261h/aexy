@@ -175,6 +175,27 @@
     ]
   },
   {
+    "slug": "api/tracker-ingest",
+    "title": "Tracker ingest API",
+    "section": "API Reference",
+    "description": "Aexy Tracker device enrollment + idempotent event ingest contract",
+    "headings": [
+      "Tracker Ingest API",
+      "Sign-in (native app)",
+      "`GET /auth/device/login?provider={github|google|microsoft}&port={1024..65535}`",
+      "Endpoints",
+      "`GET /tracker/projects`",
+      "`POST /tracker/devices:enroll`",
+      "`POST /tracker/events:batch`",
+      "`POST /tracker/devices:heartbeat?device_id=…`",
+      "`GET /tracker/sync/status?device_id=…`",
+      "`POST /tracker/evidence:presign?device_id=…`",
+      "Capture config (`DeviceConfig`)",
+      "Rate limits (sliding window, fail-open)",
+      "Privacy"
+    ]
+  },
+  {
     "slug": "guides/getting-started",
     "title": "Getting Started",
     "section": "Getting started & operations",
@@ -1043,6 +1064,23 @@
       "Temporal activities",
       "Frontend",
       "Common pitfalls"
+    ]
+  },
+  {
+    "slug": "aexy-tracker",
+    "title": "Aexy Tracker",
+    "section": "Modules — Work & planning",
+    "description": "macOS work tracker + AI auto-attribution (timesheet, journals, insights)",
+    "headings": [
+      "Aexy Tracker",
+      "Architecture",
+      "Triggering",
+      "Data model",
+      "Enabling the module",
+      "The timesheet UI (`/tracking/tracker`)",
+      "macOS client (`aexy-tracker-mac/`)",
+      "Browser sign-in (RFC 8252 loopback)",
+      "Related"
     ]
   },
   {

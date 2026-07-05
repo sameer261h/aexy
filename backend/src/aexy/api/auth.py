@@ -4,7 +4,7 @@ import json
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 import redis
@@ -39,6 +39,66 @@ def get_redis_client():
 
 # OAuth state TTL (10 minutes)
 OAUTH_STATE_TTL = 600
+
+# --------------------------------------------------------------------------- #
+# Post-OAuth redirect allowlist
+# --------------------------------------------------------------------------- #
+# After login we append the developer JWT to a redirect_url. To prevent token
+# exfiltration via an attacker-supplied redirect_url, only deliver the token to
+# an allowlisted origin: the configured frontend, local dev, any ops-configured
+# extra origins, or a native-app loopback (127.0.0.1 / localhost, any port).
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _allowed_redirect_origins() -> set[str]:
+    """`scheme://host[:port]` origins a post-OAuth redirect may target."""
+    candidates = {
+        settings.frontend_url,
+        "http://localhost:3000",
+        "http://localhost:3003",
+    }
+    extra = getattr(settings, "oauth_extra_redirect_hosts", "") or ""
+    candidates.update(part.strip() for part in extra.split(",") if part.strip())
+    origins = set()
+    for c in candidates:
+        if not c:
+            continue
+        p = urlsplit(c)
+        if p.scheme and p.netloc:
+            origins.add(f"{p.scheme}://{p.netloc}")
+    return origins
+
+
+def is_allowed_redirect_url(url: str | None) -> bool:
+    """True if it's safe to deliver the JWT to ``url`` (None ⇒ use default)."""
+    if not url:
+        return True
+    try:
+        p = urlsplit(url)
+    except ValueError:
+        return False
+    if p.scheme not in ("http", "https") or not p.hostname:
+        return False
+    # Native-app loopback (any port), http only.
+    if p.scheme == "http" and p.hostname in _LOOPBACK_HOSTS:
+        return True
+    return f"{p.scheme}://{p.netloc}" in _allowed_redirect_origins()
+
+
+def _validate_redirect_or_400(redirect_url: str | None) -> None:
+    """Reject an attacker-supplied redirect_url early (fail fast at login)."""
+    if redirect_url and not is_allowed_redirect_url(redirect_url):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "redirect_url not allowed")
+
+
+def _post_oauth_redirect(custom_redirect_url: str | None, token: str) -> RedirectResponse:
+    """Deliver the JWT to an allowlisted redirect, else the default frontend
+    callback. Single chokepoint so the token can never reach a disallowed URL."""
+    frontend_url = settings.frontend_url or "http://localhost:3000"
+    if custom_redirect_url and is_allowed_redirect_url(custom_redirect_url):
+        separator = "&" if "?" in custom_redirect_url else "?"
+        return RedirectResponse(url=f"{custom_redirect_url}{separator}token={token}")
+    return RedirectResponse(url=f"{frontend_url}/auth/callback?token={token}")
 
 # Google OAuth configuration
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -110,9 +170,33 @@ def create_access_token(developer_id: str) -> str:
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
 
 
+_DEVICE_PROVIDERS = {"github", "google", "microsoft"}
+
+
+@router.get("/device/login")
+async def device_login(provider: str, port: int) -> RedirectResponse:
+    """Native-app sign-in entry point (Aexy Tracker desktop, RFC 8252 loopback).
+
+    Validates the provider + loopback port, then redirects into the normal
+    browser OAuth flow with a ``127.0.0.1`` ``redirect_url``. After the user
+    signs in, the provider callback 302s the developer JWT to that loopback
+    address, where the desktop app's local listener captures it (and exchanges
+    it for a long-lived API token). The host is server-forced to loopback so the
+    JWT can only ever be delivered to the local machine.
+    """
+    if provider not in _DEVICE_PROVIDERS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unsupported provider")
+    if not 1024 <= port <= 65535:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Port out of range")
+    redirect_url = f"http://127.0.0.1:{port}/callback"
+    query = urlencode({"redirect_url": redirect_url})
+    return RedirectResponse(url=f"/api/v1/auth/{provider}/login?{query}")
+
+
 @router.get("/github/login")
 async def github_login(redirect_url: str | None = None) -> RedirectResponse:
     """Initiate GitHub OAuth flow."""
+    _validate_redirect_or_400(redirect_url)
     state = secrets.token_urlsafe(32)
 
     # Store state in Redis with TTL (auto-expires, no cleanup needed)
@@ -244,14 +328,8 @@ async def github_callback(
     # Create JWT
     access_token = create_access_token(developer.id)
 
-    # Redirect to frontend callback with token
-    if custom_redirect_url:
-        # Use custom redirect URL (e.g., from public project page)
-        separator = "&" if "?" in custom_redirect_url else "?"
-        return RedirectResponse(url=f"{custom_redirect_url}{separator}token={access_token}")
-    else:
-        # Default: redirect to frontend callback
-        return RedirectResponse(url=f"{frontend_url}/auth/callback?token={access_token}")
+    # Redirect to an allowlisted redirect_url (else the default frontend callback).
+    return _post_oauth_redirect(custom_redirect_url, access_token)
 
 
 # ============================================================================
@@ -272,6 +350,7 @@ async def google_login(redirect_url: str | None = None) -> RedirectResponse:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Google OAuth is not configured",
         )
+    _validate_redirect_or_400(redirect_url)
 
     state = secrets.token_urlsafe(32)
 
@@ -311,6 +390,7 @@ async def google_connect_crm(redirect_url: str | None = None) -> RedirectRespons
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Google OAuth is not configured",
         )
+    _validate_redirect_or_400(redirect_url)
 
     state = secrets.token_urlsafe(32)
 
@@ -433,15 +513,8 @@ async def google_callback(
             # Create JWT
             jwt_token = create_access_token(developer.id)
 
-            # Determine redirect URL
-            if custom_redirect_url:
-                # Use custom redirect URL (e.g., from onboarding)
-                # Append token as query param
-                separator = "&" if "?" in custom_redirect_url else "?"
-                return RedirectResponse(url=f"{custom_redirect_url}{separator}token={jwt_token}")
-            else:
-                # Default: redirect to frontend callback
-                return RedirectResponse(url=f"{frontend_url}/auth/callback?token={jwt_token}")
+            # Deliver the token only to an allowlisted redirect.
+            return _post_oauth_redirect(custom_redirect_url, jwt_token)
 
     except httpx.RequestError as e:
         logger.error(f"Google OAuth request error: {e}", exc_info=True)
@@ -461,6 +534,7 @@ def _microsoft_authorize_redirect(scope_type: str, redirect_url: str | None) -> 
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Microsoft OAuth is not configured",
         )
+    _validate_redirect_or_400(redirect_url)
 
     state = secrets.token_urlsafe(32)
     redis_client = get_redis_client()
@@ -599,10 +673,8 @@ async def microsoft_callback(
 
             jwt_token = create_access_token(developer.id)
 
-            if custom_redirect_url:
-                separator = "&" if "?" in custom_redirect_url else "?"
-                return RedirectResponse(url=f"{custom_redirect_url}{separator}token={jwt_token}")
-            return RedirectResponse(url=f"{frontend_url}/auth/callback?token={jwt_token}")
+            # Deliver the token only to an allowlisted redirect.
+            return _post_oauth_redirect(custom_redirect_url, jwt_token)
 
     except httpx.RequestError as e:
         logger.error(f"Microsoft OAuth request error: {e}", exc_info=True)

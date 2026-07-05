@@ -39,9 +39,21 @@ export default function DocsLayoutClient({
 
   const contentRef = useRef<HTMLDivElement>(null);
 
+  // Chromeless / embedded mode (macOS app): hide the docs NotionSidebar + top
+  // bar so the embed is editor-only (the native app provides the doc tree).
+  const [embedded, setEmbedded] = useState(false);
+
   // Handle hydration
   useEffect(() => {
     setMounted(true);
+    try {
+      setEmbedded(
+        new URLSearchParams(window.location.search).get("embed") === "true" ||
+          window.localStorage.getItem("aexy_embed") === "1"
+      );
+    } catch {
+      /* SSR / no storage */
+    }
   }, []);
 
   // Cmd+K in /docs scope must reach the doc-scoped SearchModal, not
@@ -144,6 +156,11 @@ export default function DocsLayoutClient({
         </div>
       </div>
     );
+  }
+
+  // Editor-only: the native app's tree is the sole navigation.
+  if (embedded) {
+    return <div className="h-screen bg-background overflow-y-auto">{children}</div>;
   }
 
   return (

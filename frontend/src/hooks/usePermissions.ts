@@ -180,6 +180,7 @@ export const PERMISSIONS = {
   CAN_MANAGE_TRACKING: "can_manage_tracking",
   CAN_VIEW_TIME_ENTRIES: "can_view_time_entries",
   CAN_MANAGE_TIME_ENTRIES: "can_manage_time_entries",
+  CAN_VIEW_TRACKER_RECORDS: "can_view_tracker_records",
 
   // Billing
   CAN_VIEW_BILLING: "can_view_billing",

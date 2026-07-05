@@ -201,6 +201,11 @@ PERMISSIONS: dict[str, dict] = {
         "description": "Submit daily standups",
         "default_for": ["admin", "manager", "developer"],
     },
+    "can_view_tracker_records": {
+        "category": PermissionCategory.TRACKING,
+        "description": "View other developers' Aexy Tracker records (timesheets, journals)",
+        "default_for": ["admin", "manager"],
+    },
     # Reviews
     "can_view_reviews": {
         "category": PermissionCategory.REVIEWS,
