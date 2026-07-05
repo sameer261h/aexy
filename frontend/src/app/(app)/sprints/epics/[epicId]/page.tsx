@@ -334,6 +334,44 @@ export default function EpicDetailPage() {
             )}
           </div>
 
+          {/* Linked Tasks */}
+          <div className="lg:col-span-2 bg-muted rounded-xl border border-border p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-4">
+              Linked Tasks{epicDetail?.tasks?.length ? ` (${epicDetail.tasks.length})` : ""}
+            </h2>
+            {epicDetail?.tasks && epicDetail.tasks.length > 0 ? (
+              <div className="divide-y divide-border">
+                {epicDetail.tasks.map((task) => {
+                  const row = (
+                    <div className="flex items-center justify-between gap-3 py-2.5">
+                      <span className="text-sm text-foreground truncate">{task.title}</span>
+                      <div className="flex items-center gap-3 shrink-0 text-xs text-muted-foreground">
+                        {task.story_points != null && (
+                          <span className="px-1.5 py-0.5 bg-accent rounded">{task.story_points} pts</span>
+                        )}
+                        <span className="capitalize">{task.priority}</span>
+                        <span className="capitalize">{task.status.replace("_", " ")}</span>
+                      </div>
+                    </div>
+                  );
+                  return task.sprint_id && task.project_id ? (
+                    <Link key={task.id} href={`/sprints/${task.project_id}/${task.sprint_id}`} className="block hover:bg-accent/40 -mx-2 px-2 rounded transition">
+                      {row}
+                    </Link>
+                  ) : (
+                    <div key={task.id}>{row}</div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-muted-foreground">
+                <Layers className="h-12 w-12 mx-auto mb-3 text-muted-foreground" />
+                <p>No tasks linked to this epic yet</p>
+                <p className="text-sm mt-1">Set the Epic field on a task to link it here</p>
+              </div>
+            )}
+          </div>
+
           {/* Sprint Timeline */}
           <div className="bg-muted rounded-xl border border-border p-6">
             <h2 className="text-lg font-semibold text-foreground mb-4">Sprint Timeline</h2>

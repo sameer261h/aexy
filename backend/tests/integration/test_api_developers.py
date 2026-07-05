@@ -50,10 +50,12 @@ class TestDeveloperMeEndpoint:
 
     @pytest.mark.asyncio
     async def test_get_me_unauthenticated(self, client):
-        """Should return 403 when not authenticated."""
+        """Should return 401 when not authenticated."""
         response = await client.get("/api/v1/developers/me")
 
-        assert response.status_code == 403
+        # 401 is the correct REST semantic for a missing credential
+        # (not authenticated), which is what the API now returns.
+        assert response.status_code == 401
 
     @pytest.mark.asyncio
     async def test_get_me_invalid_token(self, client):
@@ -68,7 +70,10 @@ class TestDeveloperMeEndpoint:
     @pytest.mark.asyncio
     async def test_get_me_not_found(self, client):
         """Should return 404 when developer not in database."""
-        token = create_test_token("nonexistent-id")
+        # Use a valid-but-absent UUID: the id column is a Postgres UUID, so a
+        # non-UUID sentinel raises a DataError (500) instead of exercising the
+        # real 404 not-found path.
+        token = create_test_token("00000000-0000-0000-0000-000000000000")
 
         response = await client.get(
             "/api/v1/developers/me",
@@ -172,8 +177,29 @@ class TestGetDeveloperEndpoint:
 
         token = create_test_token(auth_dev.id)
 
+        # Valid-but-absent UUID so we hit the 404 path, not a UUID DataError.
         response = await client.get(
-            "/api/v1/developers/nonexistent-id",
+            "/api/v1/developers/00000000-0000-0000-0000-000000000000",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_developer_malformed_uuid(self, client, db_session):
+        """A malformed UUID path param should return 404, not a 500.
+
+        The id column is a Postgres UUID, so a non-UUID value would raise an
+        asyncpg DataError; the route validates the param up front instead.
+        """
+        service = DeveloperService(db_session)
+        auth_dev = await service.create(DeveloperCreate(email="auth@example.com"))
+        await db_session.commit()
+
+        token = create_test_token(auth_dev.id)
+
+        response = await client.get(
+            "/api/v1/developers/not-a-valid-uuid",
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -228,4 +254,6 @@ class TestListDevelopersEndpoint:
         """Should require authentication."""
         response = await client.get("/api/v1/developers/")
 
-        assert response.status_code == 403
+        # 401 (not authenticated) is the correct REST semantic for a missing
+        # credential, which is what the API now returns.
+        assert response.status_code == 401

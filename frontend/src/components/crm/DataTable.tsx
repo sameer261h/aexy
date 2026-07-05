@@ -121,8 +121,12 @@ export function DataTable({
     });
     return ordered
       .map((slug) => attributes.find((a) => a.slug === slug))
-      .filter((a): a is CRMAttribute => a !== undefined);
-  }, [attributes, visibleColumns, columnOrder]);
+      .filter((a): a is CRMAttribute => a !== undefined)
+      // The hardcoded "Name" column already renders the record's primary/system
+      // name; drop any system attribute here so it isn't shown a second time
+      // when a saved view's visible columns include it.
+      .filter((a) => !(showNameColumn && a.is_system));
+  }, [attributes, visibleColumns, columnOrder, showNameColumn]);
 
   // Drag and drop sensors
   const sensors = useSensors(

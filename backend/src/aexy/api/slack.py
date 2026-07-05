@@ -71,6 +71,20 @@ def get_slack_service() -> SlackIntegrationService:
     return SlackIntegrationService()
 
 
+def _slack_signature_headers(request: Request) -> tuple[str, str]:
+    """Extract and validate the Slack signature headers.
+
+    A missing or non-numeric ``X-Slack-Request-Timestamp`` would otherwise
+    reach ``verify_request`` and blow up on ``int("")``; reject it as an
+    unauthenticated request (401) instead of 500-ing.
+    """
+    timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
+    signature = request.headers.get("X-Slack-Signature", "")
+    if not timestamp.lstrip("-").isdigit():
+        raise HTTPException(status_code=401, detail="Invalid request signature")
+    return timestamp, signature
+
+
 async def _require_workspace_admin(
     workspace_id: str | None,
     developer_id: str,
@@ -281,8 +295,7 @@ async def handle_slash_command(
     body = await request.body()
 
     # Verify the request came from Slack
-    timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
-    signature = request.headers.get("X-Slack-Signature", "")
+    timestamp, signature = _slack_signature_headers(request)
 
     if not service.verify_request(timestamp, signature, body):
         raise HTTPException(status_code=401, detail="Invalid request signature")
@@ -314,15 +327,17 @@ async def handle_events(
 ):
     """Handle incoming Slack events."""
     body = await request.body()
-    data = json.loads(body)
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Malformed JSON body")
 
     # Handle URL verification challenge
     if data.get("type") == "url_verification":
         return {"challenge": data.get("challenge")}
 
     # Verify the request came from Slack
-    timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
-    signature = request.headers.get("X-Slack-Signature", "")
+    timestamp, signature = _slack_signature_headers(request)
 
     if not service.verify_request(timestamp, signature, body):
         raise HTTPException(status_code=401, detail="Invalid request signature")
@@ -348,8 +363,7 @@ async def handle_interactions(
     body = await request.body()
 
     # Verify the request came from Slack
-    timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
-    signature = request.headers.get("X-Slack-Signature", "")
+    timestamp, signature = _slack_signature_headers(request)
 
     if not service.verify_request(timestamp, signature, body):
         raise HTTPException(status_code=401, detail="Invalid request signature")

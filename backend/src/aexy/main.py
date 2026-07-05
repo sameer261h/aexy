@@ -44,9 +44,27 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logging.getLogger(__name__).warning(f"Platform org setup failed: {e}")
 
+    # Keep each worker's app_settings cache fresh across processes: clear the
+    # local entry whenever any worker toggles a workspace module. Best-effort —
+    # runs only if Redis is reachable, otherwise toggles fall back to TTL.
+    import asyncio
+
+    from aexy.services.app_settings_pubsub import (
+        run_app_settings_invalidation_subscriber,
+    )
+
+    app_settings_subscriber = asyncio.create_task(
+        run_app_settings_invalidation_subscriber()
+    )
+
     yield
 
     # Cleanup on shutdown
+    app_settings_subscriber.cancel()
+    try:
+        await app_settings_subscriber
+    except asyncio.CancelledError:
+        pass
     await engine.dispose()
 
 

@@ -209,13 +209,19 @@ class CustomReportResponse(CustomReportBase):
 
 
 class ReportTemplateResponse(BaseModel):
-    """Report template response."""
+    """Report template response.
+
+    Mirrors the `ReportTemplate` client type: a lightweight gallery entry with
+    a category, a small widget preview, and the total widget count (not the
+    full widget list).
+    """
 
     id: str
     name: str
     description: str | None = None
-    widgets: list[WidgetConfig]
-    preview_url: str | None = None
+    category: str = "general"
+    preview_widgets: list[WidgetConfig] = []
+    widget_count: int = 0
 
 
 # Scheduled report schemas
@@ -507,6 +513,7 @@ class SkillHeatmapRequest(BaseModel):
 
     developer_ids: list[str]
     skills: list[str] | None = None  # None = auto-detect top skills
+    max_skills: int = 15  # Cap on number of skills included when auto-detecting
 
 
 class ProductivityRequest(BaseModel):
@@ -515,6 +522,7 @@ class ProductivityRequest(BaseModel):
     developer_ids: list[str]
     date_range: DateRange
     metrics: list[MetricType] = [MetricType.COMMITS, MetricType.PULL_REQUESTS, MetricType.CODE_REVIEWS]
+    group_by: str = "week"  # Grouping interval: "day", "week", or "month"
 
 
 class WorkloadRequest(BaseModel):

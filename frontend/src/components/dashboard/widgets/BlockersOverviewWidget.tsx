@@ -46,7 +46,9 @@ export function BlockersOverviewWidget() {
     );
   }
 
-  const blockers = blockerData?.blockers || [];
+  // The blockers list now also carries recently-resolved items (for the board's
+  // Resolved column); this widget only surfaces open blockers.
+  const blockers = (blockerData?.blockers || []).filter((b) => b.status !== "resolved");
   const activeCount = blockerData?.active_count || 0;
   const escalatedCount = blockerData?.escalated_count || 0;
 

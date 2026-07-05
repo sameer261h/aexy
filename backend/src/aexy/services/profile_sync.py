@@ -1,6 +1,7 @@
 """Profile Sync Service - Analyzes activity and updates developer profiles."""
 
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -513,11 +514,18 @@ class ProfileSyncService:
             "learning_velocity": round(velocity, 2),
         }
 
-    async def sync_all_profiles(self, db: AsyncSession) -> int:
+    async def sync_all_profiles(
+        self,
+        db: AsyncSession,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> int:
         """Sync all developer profiles.
 
         Args:
             db: Database session
+            progress_callback: Optional ``(processed, total)`` hook invoked once
+                per developer — used e.g. to emit Temporal activity heartbeats
+                so long runs aren't killed by heartbeat timeouts.
 
         Returns:
             Number of profiles synced
@@ -526,8 +534,11 @@ class ProfileSyncService:
         result = await db.execute(stmt)
         developer_ids = [row[0] for row in result.all()]
 
+        total = len(developer_ids)
         count = 0
-        for dev_id in developer_ids:
+        for processed, dev_id in enumerate(developer_ids, start=1):
+            if progress_callback is not None:
+                progress_callback(processed, total)
             try:
                 await self.sync_developer_profile(dev_id, db)
                 count += 1

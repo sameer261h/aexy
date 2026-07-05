@@ -16,6 +16,33 @@ import {
   FieldMapping,
 } from "@/lib/api";
 
+// Surface the actual sync outcome instead of a blanket "sync started" toast.
+// A sync can return success=false (e.g. no project/team mappings configured) or
+// success=true with 0 items — both previously looked identical to the user.
+function reportSyncResult(result: SyncResult | undefined, label: string) {
+  if (!result) {
+    toast.success(`${label} sync started`);
+    return;
+  }
+  if (!result.success) {
+    toast.error(result.message || `${label} sync failed`);
+    return;
+  }
+  if (result.error_count > 0) {
+    toast.warning(
+      `${label}: ${result.message}` +
+        (result.errors?.[0] ? ` — ${result.errors[0]}` : "")
+    );
+    return;
+  }
+  if (result.synced_count === 0) {
+    // Success but nothing came in — usually means mappings aren't configured yet.
+    toast.message(result.message || `${label}: nothing to sync yet`);
+    return;
+  }
+  toast.success(`${label}: ${result.message}`);
+}
+
 // Jira Integration Hook
 export function useJiraIntegration(workspaceId: string | null) {
   const queryClient = useQueryClient();
@@ -90,8 +117,8 @@ export function useJiraIntegration(workspaceId: string | null) {
 
   const syncMutation = useMutation({
     mutationFn: (teamId?: string) => integrationsApi.syncJira(workspaceId!, teamId),
-    onSuccess: () => {
-      toast.success("Jira sync started");
+    onSuccess: (result) => {
+      reportSyncResult(result, "Jira");
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Failed to start Jira sync");
@@ -247,8 +274,8 @@ export function useLinearIntegration(workspaceId: string | null) {
 
   const syncMutation = useMutation({
     mutationFn: (teamId?: string) => integrationsApi.syncLinear(workspaceId!, teamId),
-    onSuccess: () => {
-      toast.success("Linear sync started");
+    onSuccess: (result) => {
+      reportSyncResult(result, "Linear");
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Failed to start Linear sync");

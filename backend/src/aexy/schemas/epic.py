@@ -99,6 +99,22 @@ class EpicListResponse(BaseModel):
     progress_percentage: float = 0.0
 
 
+class EpicLinkedTask(BaseModel):
+    """A task linked to an epic (lightweight, for the epic detail page)."""
+
+    id: str
+    title: str
+    status: str
+    priority: str | None = None
+    story_points: int | None = None
+    sprint_id: str | None = None
+    assignee_id: str | None = None
+    # Resolved via the task's sprint/team so the frontend can build
+    # /sprints/{project_id}/{sprint_id} links. NULL when the task's team
+    # isn't linked to a project.
+    project_id: str | None = None
+
+
 class EpicDetailResponse(EpicResponse):
     """Schema for epic detail with tasks breakdown."""
 
@@ -108,6 +124,8 @@ class EpicDetailResponse(EpicResponse):
     tasks_by_team: dict[str, int] = Field(default_factory=dict)
     # Recent activity
     recent_completions: int = 0  # Tasks completed in last 7 days
+    # The linked tasks themselves (for listing on the epic detail page)
+    tasks: list[EpicLinkedTask] = Field(default_factory=list)
 
 
 # ==================== Epic Task Management ====================

@@ -667,13 +667,20 @@ async def batch_profile_sync(input: BatchProfileSyncInput) -> dict[str, Any]:
     """Batch sync all developer profiles."""
     logger.info("Starting batch profile sync")
 
-    from aexy.services.developer_analysis_service import DeveloperAnalysisService
+    from aexy.services.profile_sync import ProfileSyncService
 
     async with async_session_maker() as db:
-        service = DeveloperAnalysisService(db)
-        result = await service.batch_profile_sync()
+        service = ProfileSyncService()
+        # Heartbeat once per developer so long runs aren't killed by the
+        # activity's heartbeat_timeout and retried from scratch.
+        count = await service.sync_all_profiles(
+            db,
+            progress_callback=lambda processed, total: activity.heartbeat(
+                f"synced {processed}/{total} profiles"
+            ),
+        )
         await db.commit()
-        return result
+        return {"profiles_synced": count}
 
 
 @activity.defn

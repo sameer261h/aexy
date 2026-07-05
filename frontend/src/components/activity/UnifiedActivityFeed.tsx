@@ -58,8 +58,10 @@ const ENTITY_TYPE_FILTERS: { value: EntityActivityType; label: string }[] = [
   { value: "campaign", label: "Campaigns" },
   { value: "form", label: "Forms" },
   { value: "leave_request", label: "Leave" },
+  { value: "leave_policy", label: "Leave Policies" },
   { value: "review", label: "Reviews" },
   { value: "role", label: "Roles" },
+  { value: "hiring_requirement", label: "Hiring Requirements" },
 ];
 
 // ── Helpers ──

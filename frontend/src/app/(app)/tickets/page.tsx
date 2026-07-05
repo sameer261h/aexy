@@ -118,10 +118,14 @@ export default function TicketsPage() {
   const { stats } = useTicketStats(workspaceId);
   const { forms } = useTicketForms(workspaceId);
 
-  // Fetch my assigned sprint tasks
+  // Fetch my assigned sprint tasks. The endpoint now also returns bugs and
+  // stories (item_type: "task" | "bug" | "story") — those live on /my-work,
+  // and their statuses don't fit this tab's buckets, so keep tasks only.
+  // Older cached responses lack item_type; treat them as tasks.
   const { data: myTasks = [], isLoading: isLoadingTasks } = useQuery({
     queryKey: ["myAssignedTasks"],
     queryFn: () => developerApi.getMyAssignedTasks(),
+    select: (items) => items.filter((item) => (item.item_type ?? "task") === "task"),
   });
 
   const filteredTickets = tickets.filter((ticket) => {

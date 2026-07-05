@@ -15,6 +15,23 @@ from aexy.llm.base import (
     TaskSignals,
 )
 from aexy.llm.gateway import LLMGateway
+from aexy.services.llm_rate_limiter import RateLimitResult
+
+
+def _make_noop_rate_limiter() -> AsyncMock:
+    """Rate limiter stub that always allows and records nothing.
+
+    The real LLMRateLimiter talks to Redis (unavailable in unit tests);
+    injecting this stub lets the gateway exercise its real logic without a
+    live Redis connection.
+    """
+    limiter = AsyncMock()
+    limiter.check_rate_limit.return_value = RateLimitResult(
+        allowed=True, wait_seconds=0
+    )
+    limiter.record_request.return_value = None
+    limiter.get_status.return_value = {}
+    return limiter
 
 
 class MockLLMProvider(LLMProvider):
@@ -104,12 +121,20 @@ class TestLLMGateway:
     @pytest.fixture
     def gateway(self, mock_provider):
         """Create a gateway without cache."""
-        return LLMGateway(provider=mock_provider, cache=None)
+        return LLMGateway(
+            provider=mock_provider,
+            cache=None,
+            rate_limiter=_make_noop_rate_limiter(),
+        )
 
     @pytest.fixture
     def gateway_with_cache(self, mock_provider, mock_cache):
         """Create a gateway with cache."""
-        return LLMGateway(provider=mock_provider, cache=mock_cache)
+        return LLMGateway(
+            provider=mock_provider,
+            cache=mock_cache,
+            rate_limiter=_make_noop_rate_limiter(),
+        )
 
     @pytest.mark.asyncio
     async def test_analyze_without_cache(self, gateway, mock_provider):

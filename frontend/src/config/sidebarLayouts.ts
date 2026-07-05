@@ -100,6 +100,7 @@ const trackingItems: SidebarItemConfig[] = [
 ];
 
 const planningItems: SidebarItemConfig[] = [
+    { href: "/my-work", label: "My Work", icon: CheckSquare },
     { href: "/sprints", label: "Board", icon: KanbanSquare },
     { href: "/sprints?tab=epics", label: "Epics", icon: Milestone },
 ];

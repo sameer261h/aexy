@@ -12,6 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.models.integrations import JiraIntegration
 from aexy.models.sprint import Sprint, SprintTask
+from aexy.services.remote_team_matching import (
+    match_remote_items_to_teams,
+    normalize_remote_pairs,
+)
 from aexy.schemas.integrations import (
     ConnectionTestResponse,
     RemoteProject,
@@ -74,13 +78,19 @@ class JiraIntegrationService:
         # Generate webhook secret
         webhook_secret = secrets.token_urlsafe(32)
 
+        # Auto-discover a default project mapping from the connection test so the
+        # integration can sync immediately (admins refine via the PATCH endpoint).
+        default_project_mappings = await self._default_project_mappings(
+            workspace_id, test_result.get("projects", [])
+        )
+
         integration = JiraIntegration(
             id=str(uuid4()),
             workspace_id=workspace_id,
             site_url=site_url,
             user_email=user_email,
             api_token=api_token,  # TODO: Encrypt at rest
-            project_mappings={},
+            project_mappings=default_project_mappings,
             status_mappings={},
             field_mappings={},
             webhook_secret=webhook_secret,
@@ -93,6 +103,21 @@ class JiraIntegrationService:
         await self.db.flush()
         await self.db.refresh(integration)
         return integration
+
+    async def _default_project_mappings(
+        self, workspace_id: str, projects: list
+    ) -> dict:
+        """Auto-build project mappings for a freshly-connected integration.
+
+        Matches remote Jira projects to workspace teams by name (case-insensitive,
+        also matching the "Name (KEY)" form or the project key itself). Teams with
+        no name match produce no mapping — mappings are never guessed, so an
+        unmatched connect starts with {} and admins configure mappings via the
+        PATCH endpoint.
+        """
+        pairs = normalize_remote_pairs(projects, "key")
+        matches = await match_remote_items_to_teams(self.db, workspace_id, pairs)
+        return {team_id: {"project_key": key} for team_id, key in matches.items()}
 
     async def update_integration(
         self,

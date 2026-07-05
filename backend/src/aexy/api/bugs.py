@@ -1,6 +1,8 @@
 """Bug/Defect API endpoints."""
 
 from datetime import datetime, timezone
+from typing import get_args
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -11,6 +13,8 @@ from aexy.api.developers import get_current_developer
 from aexy.models.developer import Developer
 from aexy.models.bug import Bug, BugActivity
 from aexy.schemas.bug import (
+    TERMINAL_BUG_STATUSES,
+    BugStatus,
     BugCreate,
     BugUpdate,
     BugResponse,
@@ -189,6 +193,9 @@ async def list_bugs(
     if is_regression is not None:
         query = query.where(Bug.is_regression == is_regression)
     if not include_closed:
+        # Intentionally narrower than TERMINAL_BUG_STATUSES (schemas/bug.py):
+        # verified/duplicate/cannot_reproduce bugs stay in the default list so
+        # they remain reviewable; only closed/wont_fix are hidden.
         query = query.where(Bug.status.notin_(["closed", "wont_fix"]))
     if search:
         query = query.where(
@@ -309,7 +316,9 @@ async def get_bug_stats(
     )
     by_status = {row[0]: row[1] for row in status_result.all()}
 
-    open_statuses = ["new", "confirmed", "in_progress", "fixed"]
+    # A bug is open until it reaches a terminal status ('fixed' stays open —
+    # it is awaiting verification).
+    open_statuses = [s for s in get_args(BugStatus) if s not in TERMINAL_BUG_STATUSES]
     open_bugs = sum(by_status.get(s, 0) for s in open_statuses)
     closed_bugs = by_status.get("closed", 0) + by_status.get("wont_fix", 0)
 

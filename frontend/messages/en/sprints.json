@@ -209,6 +209,15 @@
     "move": {
       "statusLabel": "Status on destination board",
       "statusHint": "Status columns differ per project — pick where this task lands."
+    },
+
+    "githubLinks": {
+      "link": "Link",
+      "linkPullRequestPlaceholder": "Link a pull request…",
+      "repositoryPlaceholder": "Repository…",
+      "ownerRepoPlaceholder": "owner/repo",
+      "issueRepositoryAriaLabel": "GitHub issue repository",
+      "issueNumberAriaLabel": "GitHub issue number"
     }
   }
 }

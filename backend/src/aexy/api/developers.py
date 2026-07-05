@@ -1,5 +1,6 @@
 """Developer profile endpoints."""
 
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -352,9 +353,11 @@ async def get_google_connection_status(
 
 
 class MyTaskResponse(BaseModel):
-    """Response for a task assigned to the current user."""
+    """Response for a work item assigned to the current user."""
     id: str
+    item_type: str = "task"  # "task" | "bug" | "story"
     sprint_id: str | None
+    project_id: str | None = None
     sprint_name: str | None
     title: str
     description: str | None
@@ -373,18 +376,52 @@ async def get_my_assigned_tasks(
     developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ) -> list[MyTaskResponse]:
-    """Get all sprint tasks assigned to the current developer."""
+    """Get all work items (tasks, bugs, stories) assigned to the current developer.
+
+    Aggregates across the three work-item types into one "my work" list.
+    Stories use `owner_id` as the assignee (a story's owner is who's responsible).
+    """
+    from aexy.models.bug import Bug
+    from aexy.models.story import UserStory
+    from aexy.schemas.bug import TERMINAL_BUG_STATUSES
+
+    # Cap each work-item type so one prolific assignee can't make this
+    # endpoint return an unbounded payload.
+    MAX_ITEMS_PER_TYPE = 200
+
     task_service = SprintTaskService(db)
     tasks = await task_service.get_tasks_by_assignee(
         assignee_id=developer_id,
         status=status_filter,
         include_done=include_done,
+        limit=MAX_ITEMS_PER_TYPE,
     )
 
-    return [
+    # Resolve each task's project (team -> first project) so the frontend can
+    # build /sprints/{project_id}/{sprint_id} board links.
+    from aexy.models.project import ProjectTeam
+
+    def _task_team_id(task) -> str | None:
+        team_id = task.sprint.team_id if task.sprint else task.team_id
+        return str(team_id) if team_id else None
+
+    team_ids = {tid for task in tasks if (tid := _task_team_id(task))}
+    project_by_team: dict[str, str] = {}
+    if team_ids:
+        rows = await db.execute(
+            select(ProjectTeam.team_id, ProjectTeam.project_id)
+            .where(ProjectTeam.team_id.in_(team_ids))
+            .order_by(ProjectTeam.created_at)
+        )
+        for team_id, project_id in rows.all():
+            project_by_team.setdefault(str(team_id), str(project_id))
+
+    results: list[MyTaskResponse] = [
         MyTaskResponse(
             id=str(task.id),
+            item_type="task",
             sprint_id=str(task.sprint_id) if task.sprint_id else None,
+            project_id=project_by_team.get(_task_team_id(task) or ""),
             sprint_name=task.sprint.name if task.sprint else None,
             title=task.title,
             description=task.description,
@@ -397,6 +434,43 @@ async def get_my_assigned_tasks(
         )
         for task in tasks
     ]
+
+    def _iso(dt) -> str:
+        return dt.isoformat() if dt else ""
+
+    # (model, assignee column, terminal statuses excluded from the default
+    # non-done view, item_type)
+    STORY_DONE = frozenset({"accepted", "rejected"})
+    specs = [
+        (Bug, Bug.assignee_id, TERMINAL_BUG_STATUSES, "bug"),
+        (UserStory, UserStory.owner_id, STORY_DONE, "story"),
+    ]
+    for model, assignee_col, done_statuses, item_type in specs:
+        stmt = select(model).where(assignee_col == developer_id)
+        if status_filter:
+            stmt = stmt.where(model.status == status_filter)
+        elif not include_done:
+            stmt = stmt.where(model.status.notin_(done_statuses))
+        stmt = stmt.order_by(model.created_at.desc()).limit(MAX_ITEMS_PER_TYPE)
+        for item in (await db.execute(stmt)).scalars().all():
+            results.append(
+                MyTaskResponse(
+                    id=str(item.id),
+                    item_type=item_type,
+                    sprint_id=None,
+                    sprint_name=None,
+                    title=item.title,
+                    description=item.description,
+                    status=item.status,
+                    priority=item.priority,
+                    story_points=item.story_points if item_type == "story" else None,
+                    labels=[],
+                    created_at=_iso(item.created_at),
+                    updated_at=_iso(item.updated_at),
+                )
+            )
+
+    return results
 
 
 @router.patch("/me", response_model=DeveloperResponse)
@@ -425,6 +499,16 @@ async def get_developer(
     _: str = Depends(get_current_developer_id),  # Require auth
 ) -> DeveloperResponse:
     """Get a developer's profile by ID."""
+    # The id column is a Postgres UUID; a malformed value would raise an
+    # asyncpg DataError (500). Validate up front and treat it as not-found.
+    try:
+        uuid.UUID(str(developer_id))
+    except (ValueError, TypeError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Developer not found",
+        ) from e
+
     service = DeveloperService(db)
     try:
         developer = await service.get_by_id(developer_id)

@@ -11,6 +11,7 @@ EntityType = Literal[
     "ticket", "crm_record", "document", "assessment", "compliance",
     "project", "sprint", "workflow", "agent", "template", "campaign",
     "form", "leave_request", "review", "role",
+    "hiring_requirement", "leave_policy",
 ]
 
 # Activity types

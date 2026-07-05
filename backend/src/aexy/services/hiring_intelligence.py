@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.llm.base import AnalysisType
 from aexy.llm.gateway import LLMGateway
+from aexy.llm.json_utils import extract_json_object
 from aexy.llm.prompts import (
     INTERVIEW_RUBRIC_PROMPT,
     INTERVIEW_RUBRIC_SYSTEM_PROMPT,
@@ -453,22 +454,20 @@ class HiringIntelligenceService:
 
             result = await self.llm_gateway.analyze(request, use_cache=False)
 
-            if result.raw_response:
-                try:
-                    data = json.loads(result.raw_response)
-                    return GeneratedJDResult(
-                        role_title=data.get("role_title", role_title),
-                        level=data.get("level", level),
-                        summary=data.get("summary", ""),
-                        must_have_skills=data.get("must_have_skills", []),
-                        nice_to_have_skills=data.get("nice_to_have_skills", []),
-                        responsibilities=data.get("responsibilities", []),
-                        qualifications=data.get("qualifications", []),
-                        cultural_indicators=data.get("cultural_indicators", []),
-                        full_text=data.get("full_text", ""),
-                    )
-                except json.JSONDecodeError:
-                    pass
+            data = extract_json_object(result.raw_response)
+            if data:
+                return GeneratedJDResult(
+                    role_title=data.get("role_title", role_title),
+                    level=data.get("level", level),
+                    summary=data.get("summary", ""),
+                    must_have_skills=data.get("must_have_skills", []),
+                    nice_to_have_skills=data.get("nice_to_have_skills", []),
+                    responsibilities=data.get("responsibilities", []),
+                    qualifications=data.get("qualifications", []),
+                    cultural_indicators=data.get("cultural_indicators", []),
+                    full_text=data.get("full_text", ""),
+                )
+            logger.warning("JD generation returned no parseable JSON; using default JD")
 
         except Exception as e:
             logger.error(f"JD generation failed: {e}")
@@ -636,38 +635,36 @@ We are seeking a talented {level} {role_title} to join our engineering team. In 
 
             result = await self.llm_gateway.analyze(request, use_cache=False)
 
-            if result.raw_response:
-                try:
-                    data = json.loads(result.raw_response)
-                    return InterviewRubricResult(
-                        role_title=data.get("role_title", jd.role_title),
-                        technical_questions=[
-                            InterviewQuestion(
-                                question=q.get("question", ""),
-                                skill_assessed=q.get("skill_assessed", ""),
-                                difficulty=q.get("difficulty", "medium"),
-                                evaluation_criteria=q.get("evaluation_criteria", []),
-                                red_flags=q.get("red_flags", []),
-                                bonus_indicators=q.get("bonus_indicators", []),
-                            )
-                            for q in data.get("technical_questions", [])
-                        ],
-                        behavioral_questions=[
-                            InterviewQuestion(
-                                question=q.get("question", ""),
-                                skill_assessed=q.get("skill_assessed", ""),
-                                difficulty=q.get("difficulty", "medium"),
-                                evaluation_criteria=q.get("evaluation_criteria", []),
-                                red_flags=q.get("red_flags", []),
-                                bonus_indicators=q.get("bonus_indicators", []),
-                            )
-                            for q in data.get("behavioral_questions", [])
-                        ],
-                        system_design_prompt=data.get("system_design_prompt"),
-                        culture_fit_criteria=data.get("culture_fit_criteria", []),
-                    )
-                except json.JSONDecodeError:
-                    pass
+            data = extract_json_object(result.raw_response)
+            if data:
+                return InterviewRubricResult(
+                    role_title=data.get("role_title", jd.role_title),
+                    technical_questions=[
+                        InterviewQuestion(
+                            question=q.get("question", ""),
+                            skill_assessed=q.get("skill_assessed", ""),
+                            difficulty=q.get("difficulty", "medium"),
+                            evaluation_criteria=q.get("evaluation_criteria", []),
+                            red_flags=q.get("red_flags", []),
+                            bonus_indicators=q.get("bonus_indicators", []),
+                        )
+                        for q in data.get("technical_questions", [])
+                    ],
+                    behavioral_questions=[
+                        InterviewQuestion(
+                            question=q.get("question", ""),
+                            skill_assessed=q.get("skill_assessed", ""),
+                            difficulty=q.get("difficulty", "medium"),
+                            evaluation_criteria=q.get("evaluation_criteria", []),
+                            red_flags=q.get("red_flags", []),
+                            bonus_indicators=q.get("bonus_indicators", []),
+                        )
+                        for q in data.get("behavioral_questions", [])
+                    ],
+                    system_design_prompt=data.get("system_design_prompt"),
+                    culture_fit_criteria=data.get("culture_fit_criteria", []),
+                )
+            logger.warning("Rubric generation returned no parseable JSON; using default rubric")
 
         except Exception as e:
             logger.error(f"Rubric generation failed: {e}")
@@ -1014,25 +1011,25 @@ We are seeking a talented {level} {role_title} to join our engineering team. In 
         if team_developers:
             gap_analysis = self.analyze_team_gaps(team_developers)
 
-        # Generate JD
+        # Build the JD/rubric with the fast, deterministic default generators.
+        # Creation must not block on (or be rolled back by) a slow or failing
+        # LLM call — that previously left the requirement uncommitted, so it
+        # vanished on reload. Callers enrich these on demand via the dedicated
+        # POST /requirements/{id}/jd and /rubric endpoints, which use the LLM.
         level = "Senior"  # Default
-        jd = await self.generate_job_description(
-            gap_analysis or TeamGapAnalysisResult(
-                team_id=team_id,
-                organization_id=organization_id,
-                total_developers=0,
-                skill_gaps=[],
-                bus_factor_risks=[],
-                critical_missing_skills=[],
-                analysis_date=datetime.utcnow(),
-            ),
-            role_title=role_title,
-            level=level,
-            priority=priority,
+        base_gap = gap_analysis or TeamGapAnalysisResult(
+            team_id=team_id,
+            organization_id=organization_id,
+            total_developers=0,
+            skill_gaps=[],
+            bus_factor_risks=[],
+            critical_missing_skills=[],
+            analysis_date=datetime.utcnow(),
         )
+        jd = self._generate_default_jd(base_gap, role_title, level)
 
         # Generate interview rubric
-        rubric = await self.generate_interview_rubric(jd, gap_analysis)
+        rubric = self._generate_default_rubric(jd)
         rubric_dict = {
             "role_title": rubric.role_title,
             "technical_questions": [

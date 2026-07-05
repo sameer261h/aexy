@@ -199,6 +199,9 @@ ACTIVITY_CONFIG: dict[str, dict[str, Any]] = {
     "check_expiring_certifications": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
     "check_expired_certifications": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
     "check_bulk_compliance_rates": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+
+    # Tables / audit-log maintenance (scheduled)
+    "cleanup_expired_audit_logs": {"retry": STANDARD_RETRY, "timeout": timedelta(hours=1)},
 }
 
 DEFAULT_CONFIG = {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=5)}

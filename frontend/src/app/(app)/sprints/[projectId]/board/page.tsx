@@ -63,6 +63,7 @@ import { useTaskStatuses } from "@/hooks/useTaskConfig";
 import { useTasksLayout } from "@/hooks/useTasksLayout";
 import { TaskTableView } from "@/components/planning/TaskTableView";
 import { useEpics } from "@/hooks/useEpics";
+import { TaskGitHubLinksSection } from "@/components/sprints/TaskGitHubLinksSection";
 import { useProject } from "@/hooks/useProjects";
 import { SprintTask, TaskStatus, TaskPriority, SprintListItem, EpicListItem, sprintApi, projectTasksApi, TaskTemplate, taskTemplatesApi } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
@@ -2133,6 +2134,16 @@ function EditTaskModal({ task, onClose, onUpdate, onDelete, isUpdating, sprints,
                 <span className="text-xs text-muted-foreground">Contributes to Sprint Goal</span>
               </label>
             </div>
+
+            {/* GitHub link picker — the linked list renders in the "GitHub
+                activity" section, which owns the shared query key. */}
+            {task.sprint_id && (
+              <TaskGitHubLinksSection
+                sprintId={task.sprint_id}
+                teamId={task.team_id}
+                taskId={task.id}
+              />
+            )}
 
             {/* Move to project */}
             {task.workspace_id && task.team_id && (

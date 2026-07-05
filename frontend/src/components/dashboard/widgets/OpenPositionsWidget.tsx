@@ -1,19 +1,22 @@
 "use client";
 
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import {
   Briefcase,
   ChevronRight,
-  Users,
 } from "lucide-react";
 import { useWorkspace } from "@/hooks/useWorkspace";
-import { useAssessments } from "@/hooks/useAssessments";
+import { hiringApi } from "@/lib/api";
 
 export function OpenPositionsWidget() {
   const { currentWorkspace } = useWorkspace();
-  const { assessments, isLoading } = useAssessments(
-    currentWorkspace?.id || null
-  );
+  const workspaceId = currentWorkspace?.id || null;
+  const { data: requirements = [], isLoading } = useQuery({
+    queryKey: ["hiring", "requirements", workspaceId],
+    queryFn: () => hiringApi.listRequirements(workspaceId as string),
+    enabled: !!workspaceId,
+  });
 
   if (isLoading) {
     return (
@@ -28,7 +31,10 @@ export function OpenPositionsWidget() {
     );
   }
 
-  const activeAssessments = assessments.filter((a) => a.status === "active");
+  // "Open" positions are those still being hired for — exclude filled/cancelled.
+  const openRequirements = requirements.filter(
+    (r) => r.status === "active" || r.status === "draft"
+  );
 
   return (
     <div className="bg-background/50 border border-border rounded-xl overflow-hidden">
@@ -58,29 +64,28 @@ export function OpenPositionsWidget() {
               Select a workspace to view open positions.
             </p>
           </div>
-        ) : activeAssessments.length > 0 ? (
+        ) : openRequirements.length > 0 ? (
           <div className="space-y-2">
-            {activeAssessments.slice(0, 5).map((assessment) => (
+            {openRequirements.slice(0, 5).map((requirement) => (
               <Link
-                key={assessment.id}
-                href={`/hiring/${assessment.id}`}
+                key={requirement.id}
+                href={`/hiring/${requirement.id}`}
                 className="flex items-center justify-between p-2 bg-muted/30 rounded-lg hover:bg-muted/50 transition"
               >
-                <div className="flex items-center gap-2">
-                  <Briefcase className="h-4 w-4 text-emerald-400" />
+                <div className="flex items-center gap-2 min-w-0">
+                  <Briefcase className="h-4 w-4 text-emerald-400 shrink-0" />
                   <span className="text-sm text-foreground truncate">
-                    {assessment.title}
+                    {requirement.role_title}
                   </span>
                 </div>
-                <div className="flex items-center gap-1 text-xs text-muted-foreground whitespace-nowrap ml-2">
-                  <Users className="h-3 w-3" />
-                  {assessment.total_candidates}
-                </div>
+                <span className="text-xs text-muted-foreground capitalize whitespace-nowrap ml-2">
+                  {requirement.priority}
+                </span>
               </Link>
             ))}
-            {activeAssessments.length > 5 && (
+            {openRequirements.length > 5 && (
               <div className="text-center text-muted-foreground text-xs pt-1">
-                +{activeAssessments.length - 5} more positions
+                +{openRequirements.length - 5} more positions
               </div>
             )}
           </div>

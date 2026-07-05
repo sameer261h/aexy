@@ -5,6 +5,206 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.40] - 2026-07-05
+
+### Workspace module toggles are now enforced on the API
+
+Disabling a module for a workspace (App Access settings) only hid it
+from the sidebar — the underlying API kept serving it, so a member
+could still read and write a "disabled" module by calling it
+directly. The toggle is now enforced server-side via a shared
+`require_app_access` dependency (plus `ensure_app_enabled` for
+endpoints that resolve their workspace from the request body or a
+referenced entity).
+
+Enforcement covers every router of a gated app, not just its primary
+one: disabling **Sprints** now also blocks epics, stories, bugs,
+releases, sprint analytics, planning poker and retrospectives;
+**Docs** covers documents, templates, collaboration and document
+spaces; **Tickets** covers ticket forms and escalation. Tracking is
+enforced where the workspace is resolved server-side (standups,
+blockers, time, dashboards) rather than via a query param that most
+of its routes never receive. An unknown app id now fails at startup
+instead of silently disabling enforcement, and the workspace's
+`app_settings` are read through a short-lived in-process cache with
+cross-process invalidation (Redis pub/sub) so a toggle takes effect
+immediately across workers.
+
+The frontend guard was aligned to the same rule: it now blocks a
+route only on the workspace-level toggle (not on a member's role
+bundle), so members are no longer redirected off modules the API
+would happily serve.
+
+### "My Work" page
+
+New `/my-work` page listing everything assigned to the current user
+across sprint tasks, bugs and stories in one view, with a "show
+completed" toggle. Terminal bug statuses (`verified`, `closed`,
+`wont_fix`, `duplicate`, `cannot_reproduce`) are excluded from the
+default view via a shared constant, and finished bugs no longer show
+as open work. Each query is capped so a long-tenured user can't pull
+their entire history in one response.
+
+### Integration connect no longer blocks or mis-maps
+
+Connecting Jira or Linear ran a full issue sync inline in the connect
+request, so a large project could time the request out (and a retry
+then hit "integration already exists"), and a mid-sync failure left
+the request's DB session poisoned. The initial sync now runs in the
+background on its own session, so connect returns immediately. The
+"map the primary team to the first remote project when nothing
+matches by name" fallback was removed — unmatched teams get no
+mapping rather than silently importing an unrelated project's issues.
+
+### Bug fixes
+
+- **`PATCH /developers/me` returned 500.** Updating your own profile
+  expired the eagerly-loaded connection relationships and then
+  lazy-loaded them during serialization; the update now re-fetches
+  with the relationships loaded.
+- **Analytics endpoints returned 500 on every call.** The skill
+  heatmap, productivity trends and collaboration network endpoints
+  read request fields that didn't exist on their schemas; the
+  productivity/collaboration queries also mis-built their
+  `date_trunc`/`cast` expressions. All now work.
+- **Slack webhooks 500'd on bad input.** `/slack/events` with
+  malformed JSON now returns 400, and `/slack/commands` with a
+  missing signature timestamp returns 401, instead of crashing.
+- **`GET /developers/{id}` with a malformed id** now returns 404
+  instead of 500.
+- **Developer efficiency metrics** could raise when mixing
+  timezone-aware and naive timestamps; datetimes are normalized to
+  UTC before comparison.
+- **Task GitHub links** were fetched and rendered twice in the task
+  modal under two query keys, so linking/unlinking left one list
+  stale; the section is now a single source of truth.
+- **Blocker analytics** counted recently-resolved blockers as active
+  after the active-blockers endpoint began returning both; the
+  analytics page and dashboard count only unresolved blockers again.
+- **Epic linked-task rows** linked to a broken URL; they now point at
+  the correct project/sprint board.
+
+### Testing
+
+The backend test suite can now run against real Postgres (set
+`TEST_DATABASE_URL`), catching pgvector/JSONB/UUID/`date_trunc` and
+foreign-key behavior SQLite silently ignores; the full unit and
+integration suites pass on both SQLite and Postgres.
+
+## [0.8.39] - 2026-05-28
+
+### Pick destination status when moving a task across projects
+
+Cross-project move (0.8.34) silently re-resolved the new task's
+status to the destination's first "open" status. For sibling boards
+that's fine; for cross-board moves (Product → Tech) the user
+usually has a specific column in mind and the default was wrong.
+
+`MoveToProjectModal` now fetches the destination project's status
+set via the existing `useTaskStatuses` hook once a target is
+picked, and renders a "Status on destination board" dropdown. The
+default selection follows: same slug on the target → same name
+(case-insensitive) → first active status by position. The picked
+slug rides through as `target_status_slug` on both the single and
+bulk move requests; the backend (`SprintTaskService.move_to_project`)
+validates it against `TaskConfigService.get_statuses_for_project`
+before any write, raising `invalid_target_status` (400) on
+mismatch. Bulk move applies one status to every cloned task.
+
+`_clone_task_to_project` now accepts an `override_status_slug` and
+short-circuits the open-status resolver when supplied. Subtasks
+under `cascade` still resolve their own open status — the picker is
+parent-only, which matches the existing "subtasks inherit the
+destination's defaults" semantics.
+
+### Archive view on the project board and workspace All-Tasks tab
+
+`SprintTask.is_archived` and the unarchive endpoint have existed
+since the early sprint module, but no UI ever surfaced archived
+rows. Once a task was archived (manually or as part of a cross-
+project move), it disappeared.
+
+Both `/sprints/[projectId]/board` and the workspace All-Tasks tab
+get an `Active | Archived` segmented toggle (URL-synced via
+`?view=archived` so reloads and link-shares round-trip). In
+archived view:
+
+- The kanban is replaced by `TaskTableView` — archived rows don't
+  belong in status columns, and the table is the right surface for
+  a flat list. The Board/Table layout toggle, Sprints/Status
+  view-mode toggle, Add Task, Columns shortcut, Import button, and
+  priority/labels/epics filters are all hidden (search, assignee,
+  project, sprint stay). On the board page this is driven by a new
+  `minimal` flag on the existing `FilterBar` component.
+- Each row has an Unarchive icon-button; the bulk-action toolbar on
+  the workspace tab gains an "Restore selected" entry that fires
+  parallel unarchives.
+- The workspace endpoint already accepted `include_archived`; both
+  endpoints now also accept `archived_only`. `list_project_tasks`
+  was hard-coded to `is_archived = false` — that's been generalized
+  to the same flag pair. `archived_only` is strict regardless of
+  `include_archived`.
+
+New `useUnarchiveTask` hook wraps `projectTasksApi.unarchive` and
+reuses `invalidateTaskCaches` so the active view re-fetches
+correctly when a row is restored.
+
+### Workload analytics no longer 500s
+
+`POST /analytics/workload` was crashing with
+`AttributeError: 'WorkloadRequest' object has no attribute 'days'`
+because the handler read `request.days` but the schema didn't
+declare the field. The frontend has been sending `days: 30` since
+that endpoint shipped. Added `days: int = 30` to the schema.
+
+## [0.8.38] - 2026-05-23
+
+### Visible move-link on cross-project moves
+
+Cross-project moves (shipped in 0.8.34) already created a
+`task_dependencies` row linking the new task back to the source —
+but nothing in the UI rendered that linkage. Anyone opening either
+side of the move saw a context-free task.
+
+`SprintTaskService.move_to_project` now prepends a one-line
+"Moved from <KEY> — <title>" breadcrumb to the new task's
+description and a matching "Moved to" line on the source. The
+breadcrumb is written into both `description` (plain text) and
+`description_json` (a ProseMirror paragraph with a `link` mark
+pointing at `/sprints/<team>/board?task=<id>`) so every surface
+that renders descriptions shows it without any extra UI plumbing.
+Cascade subtasks each get their own pair of breadcrumbs pointing
+at the corresponding clone — the parent's pointer alone wouldn't
+reach the children.
+
+The existing `task_dependencies` row is still recorded as the
+structured source of truth for any future banner work.
+
+### Docs sidebar: Recent apps + section-grouped app list
+
+The flat "Apps" section in the docs sidebar (0.8.35) is replaced
+with a sidebar that mirrors the main app sidebar's grouping —
+Engineering / People / Business / AI / Compliance — plus a
+"Recent" strip at the top tracking the user's last-visited apps.
+
+Implementation:
+
+- `recentAppsStore` (Zustand + localStorage, cap 8) records each
+  app visit. Mounted once in `app/(app)/layout.tsx` via
+  `useRecentApps()` so visits from any surface count.
+- `NotionSidebar` reads the main sidebar's `GROUPED_LAYOUT`,
+  applies the same persona filter (`useSidebarPersona`) and
+  app-access filter (`useAppAccess`) the main sidebar uses, and
+  renders each section collapsed by default to keep the docs
+  surface focused.
+- The Knowledge section is hidden in the docs sidebar (the docs
+  sidebar IS the knowledge view; re-listing it would be
+  tautological). Docs and Drive are filtered out of the Recent
+  strip for the same reason.
+- New `SidebarAppGroup` component renders apps with sub-items
+  (Tracking → Standups/Blockers/Time, etc.) as expandable rows
+  inside the section, matching the main sidebar's depth.
+
 ## [0.8.37] - 2026-05-23
 
 ### Doc editor no longer unmounts on every save

@@ -5,6 +5,92 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.40] - 2026-07-05
+
+### Workspace module toggles are now enforced on the API
+
+Disabling a module for a workspace (App Access settings) only hid it
+from the sidebar — the underlying API kept serving it, so a member
+could still read and write a "disabled" module by calling it
+directly. The toggle is now enforced server-side via a shared
+`require_app_access` dependency (plus `ensure_app_enabled` for
+endpoints that resolve their workspace from the request body or a
+referenced entity).
+
+Enforcement covers every router of a gated app, not just its primary
+one: disabling **Sprints** now also blocks epics, stories, bugs,
+releases, sprint analytics, planning poker and retrospectives;
+**Docs** covers documents, templates, collaboration and document
+spaces; **Tickets** covers ticket forms and escalation. Tracking is
+enforced where the workspace is resolved server-side (standups,
+blockers, time, dashboards) rather than via a query param that most
+of its routes never receive. An unknown app id now fails at startup
+instead of silently disabling enforcement, and the workspace's
+`app_settings` are read through a short-lived in-process cache with
+cross-process invalidation (Redis pub/sub) so a toggle takes effect
+immediately across workers.
+
+The frontend guard was aligned to the same rule: it now blocks a
+route only on the workspace-level toggle (not on a member's role
+bundle), so members are no longer redirected off modules the API
+would happily serve.
+
+### "My Work" page
+
+New `/my-work` page listing everything assigned to the current user
+across sprint tasks, bugs and stories in one view, with a "show
+completed" toggle. Terminal bug statuses (`verified`, `closed`,
+`wont_fix`, `duplicate`, `cannot_reproduce`) are excluded from the
+default view via a shared constant, and finished bugs no longer show
+as open work. Each query is capped so a long-tenured user can't pull
+their entire history in one response.
+
+### Integration connect no longer blocks or mis-maps
+
+Connecting Jira or Linear ran a full issue sync inline in the connect
+request, so a large project could time the request out (and a retry
+then hit "integration already exists"), and a mid-sync failure left
+the request's DB session poisoned. The initial sync now runs in the
+background on its own session, so connect returns immediately. The
+"map the primary team to the first remote project when nothing
+matches by name" fallback was removed — unmatched teams get no
+mapping rather than silently importing an unrelated project's issues.
+
+### Bug fixes
+
+- **`PATCH /developers/me` returned 500.** Updating your own profile
+  expired the eagerly-loaded connection relationships and then
+  lazy-loaded them during serialization; the update now re-fetches
+  with the relationships loaded.
+- **Analytics endpoints returned 500 on every call.** The skill
+  heatmap, productivity trends and collaboration network endpoints
+  read request fields that didn't exist on their schemas; the
+  productivity/collaboration queries also mis-built their
+  `date_trunc`/`cast` expressions. All now work.
+- **Slack webhooks 500'd on bad input.** `/slack/events` with
+  malformed JSON now returns 400, and `/slack/commands` with a
+  missing signature timestamp returns 401, instead of crashing.
+- **`GET /developers/{id}` with a malformed id** now returns 404
+  instead of 500.
+- **Developer efficiency metrics** could raise when mixing
+  timezone-aware and naive timestamps; datetimes are normalized to
+  UTC before comparison.
+- **Task GitHub links** were fetched and rendered twice in the task
+  modal under two query keys, so linking/unlinking left one list
+  stale; the section is now a single source of truth.
+- **Blocker analytics** counted recently-resolved blockers as active
+  after the active-blockers endpoint began returning both; the
+  analytics page and dashboard count only unresolved blockers again.
+- **Epic linked-task rows** linked to a broken URL; they now point at
+  the correct project/sprint board.
+
+### Testing
+
+The backend test suite can now run against real Postgres (set
+`TEST_DATABASE_URL`), catching pgvector/JSONB/UUID/`date_trunc` and
+foreign-key behavior SQLite silently ignores; the full unit and
+integration suites pass on both SQLite and Postgres.
+
 ## [0.8.39] - 2026-05-28
 
 ### Pick destination status when moving a task across projects

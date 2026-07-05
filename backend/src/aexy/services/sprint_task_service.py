@@ -366,6 +366,7 @@ class SprintTaskService:
         assignee_id: str,
         status: str | None = None,
         include_done: bool = False,
+        limit: int | None = None,
     ) -> list[SprintTask]:
         """Get all tasks assigned to a developer across all sprints.
 
@@ -373,6 +374,7 @@ class SprintTaskService:
             assignee_id: Developer ID.
             status: Optional status filter.
             include_done: Whether to include completed tasks (default: False).
+            limit: Optional cap on the number of tasks returned.
 
         Returns:
             List of SprintTasks assigned to the developer.
@@ -395,6 +397,8 @@ class SprintTaskService:
             stmt = stmt.where(SprintTask.status != "done")
 
         stmt = stmt.order_by(SprintTask.priority.desc(), SprintTask.created_at.desc())
+        if limit is not None:
+            stmt = stmt.limit(limit)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 

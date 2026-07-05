@@ -43,7 +43,7 @@ export function BlockerReportForm({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!description.trim() || !teamId) return;
+    if (!description.trim()) return;
 
     try {
       await onSubmit({
@@ -52,7 +52,9 @@ export function BlockerReportForm({
         category: category as "technical" | "dependency" | "resource" | "external",
         task_id: taskId,
         sprint_id: sprintId,
-        team_id: teamId,
+        // team_id is required by the schema but may be unknown for a self-service
+        // report; the backend resolves the caller's team when this is empty.
+        team_id: teamId ?? "",
       });
 
       setDescription("");

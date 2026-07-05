@@ -361,7 +361,7 @@ messages/
 - **Ghost developers** (external contributors synced from GitHub): have nullable `email`. PR/review authors deduplicate by `name == github_login AND email IS NULL`. Commit authors deduplicate by `email == author_email`.
 - **Tests use SQLite in-memory** — some PostgreSQL-specific features won't work in tests.
 - **Frontend build** ignores TypeScript errors and ESLint warnings (`next.config.js` has `ignoreBuildErrors: true`).
-- **`lib/api.ts`** is generated — don't hand-edit it.
+- **`lib/api.ts`** — large hand-maintained API client (originally generated); keep additions consistent with existing sections.
 - **Alembic** is installed as a dependency but NOT used — the project uses a custom SQL migration system. Don't create Alembic migrations.
 - **Next.js `output: 'standalone'`** — builds a self-contained output for Docker deployment. URL rewrite: `/book/:path*` → `/public/book/:path*`.
 - **Frontend image hosts** must be allowlisted in `next.config.js` (`images.remotePatterns`).

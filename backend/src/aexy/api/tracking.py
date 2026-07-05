@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aexy.api.access_guard import ensure_app_enabled
 from aexy.api.developers import get_current_developer
 from aexy.core.database import get_db
 from aexy.models.developer import Developer
@@ -23,6 +24,7 @@ from aexy.models.tracking import (
     TrackingSource,
     WorkLog,
 )
+from aexy.services.app_access_service import AppAccessService
 from aexy.services.workspace_service import WorkspaceService
 from aexy.schemas.tracking import (
     BlockerCreate,
@@ -190,6 +192,10 @@ async def _resolve_tracking_workspace(
             status_code=403,
             detail="Not a member of the referenced workspace",
         )
+
+    # Workspace resolved server-side, so the tracking module toggle is
+    # enforced here rather than via a router-level dependency.
+    await ensure_app_enabled(db, candidate_workspace, "tracking")
 
     return candidate_workspace
 
@@ -359,6 +365,7 @@ async def get_team_standups(
         str(team.workspace_id), str(current_developer.id), "viewer"
     ):
         raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    await ensure_app_enabled(db, str(team.workspace_id), "tracking")
 
     result = await db.execute(
         select(DeveloperStandup)
@@ -493,6 +500,7 @@ async def get_sprint_standup_summary(
         str(team.workspace_id), str(current_developer.id), "viewer"
     ):
         raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    await ensure_app_enabled(db, str(team.workspace_id), "tracking")
 
     # Get all summaries for this sprint
     summaries_result = await db.execute(
@@ -592,6 +600,7 @@ async def get_task_logs(
         str(task.workspace_id), str(current_developer.id), "viewer"
     ):
         raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    await ensure_app_enabled(db, str(task.workspace_id), "tracking")
 
     result = await db.execute(
         select(WorkLog)
@@ -729,6 +738,7 @@ async def get_task_time(
         str(task.workspace_id), str(current_developer.id), "viewer"
     ):
         raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    await ensure_app_enabled(db, str(task.workspace_id), "tracking")
 
     # Get entries
     result = await db.execute(
@@ -769,9 +779,16 @@ async def get_active_blockers(
     db: AsyncSession = Depends(get_db),
     current_developer: Developer = Depends(get_current_developer),
 ):
-    """Get active blockers, optionally filtered by team."""
+    """Get blockers for the board, optionally filtered by team.
+
+    Returns all open blockers (active + escalated) plus the most recently
+    resolved ones, so the board's Active / Escalated / Resolved columns can all
+    populate from a single call. Resolved blockers are capped to avoid returning
+    unbounded history.
+    """
     workspace_service = WorkspaceService(db)
-    query = select(Blocker).where(Blocker.status == BlockerStatus.ACTIVE.value)
+    # Scope conditions shared by every status query below.
+    scope: list = []
     if team_id:
         team_result = await db.execute(select(Team).where(Team.id == team_id))
         team = team_result.scalar_one_or_none()
@@ -781,24 +798,58 @@ async def get_active_blockers(
             str(team.workspace_id), str(current_developer.id), "viewer"
         ):
             raise HTTPException(status_code=403, detail="Not a member of this workspace")
-        query = query.where(Blocker.team_id == team_id)
+        await ensure_app_enabled(db, str(team.workspace_id), "tracking")
+        scope.append(Blocker.team_id == team_id)
     else:
         # Without an explicit team filter, restrict to workspaces the caller is a member of —
         # otherwise this is a global blocker enumeration across all workspaces.
+        # Workspaces that disabled the tracking module are excluded.
+        access_service = AppAccessService(db)
         workspaces = await workspace_service.list_user_workspaces(str(current_developer.id))
-        workspace_ids = [str(w.id) for w in workspaces]
+        workspace_ids = [
+            str(w.id)
+            for w in workspaces
+            if await access_service.check_workspace_app_enabled(str(w.id), "tracking")
+        ]
         if not workspace_ids:
-            return BlockerListResponse(blockers=[], total=0, active=0, escalated=0, resolved=0)
-        query = query.where(Blocker.workspace_id.in_(workspace_ids))
+            return BlockerListResponse(
+                blockers=[],
+                total=0,
+                active_count=0,
+                resolved_count=0,
+                escalated_count=0,
+                page=1,
+                page_size=0,
+            )
+        scope.append(Blocker.workspace_id.in_(workspace_ids))
 
-    query = query.order_by(Blocker.reported_at.desc())
-    result = await db.execute(query)
-    blockers = result.scalars().all()
+    RESOLVED_LIMIT = 50
 
-    # Count by status
-    active = len([b for b in blockers if b.status == BlockerStatus.ACTIVE.value])
-    resolved = 0  # We're filtering to active only
-    escalated = len([b for b in blockers if b.status == BlockerStatus.ESCALATED.value])
+    open_query = (
+        select(Blocker)
+        .where(
+            Blocker.status.in_(
+                [BlockerStatus.ACTIVE.value, BlockerStatus.ESCALATED.value]
+            ),
+            *scope,
+        )
+        .order_by(Blocker.reported_at.desc())
+    )
+    open_blockers = list((await db.execute(open_query)).scalars().all())
+
+    resolved_query = (
+        select(Blocker)
+        .where(Blocker.status == BlockerStatus.RESOLVED.value, *scope)
+        .order_by(Blocker.resolved_at.desc())
+        .limit(RESOLVED_LIMIT)
+    )
+    resolved_blockers = list((await db.execute(resolved_query)).scalars().all())
+
+    blockers = open_blockers + resolved_blockers
+
+    active = sum(1 for b in open_blockers if b.status == BlockerStatus.ACTIVE.value)
+    escalated = sum(1 for b in open_blockers if b.status == BlockerStatus.ESCALATED.value)
+    resolved = len(resolved_blockers)
 
     return BlockerListResponse(
         blockers=[blocker_to_response(b) for b in blockers],
@@ -875,6 +926,7 @@ async def resolve_blocker(
         str(blocker.workspace_id), str(current_developer.id), "member"
     ):
         raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    await ensure_app_enabled(db, str(blocker.workspace_id), "tracking")
 
     from datetime import datetime
 
@@ -909,6 +961,7 @@ async def escalate_blocker(
         str(blocker.workspace_id), str(current_developer.id), "member"
     ):
         raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    await ensure_app_enabled(db, str(blocker.workspace_id), "tracking")
 
     from datetime import datetime
 
@@ -1147,6 +1200,7 @@ async def get_team_tracking_dashboard(
         str(team.workspace_id), str(current_developer.id), "viewer"
     ):
         raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    await ensure_app_enabled(db, str(team.workspace_id), "tracking")
 
     # Get team members
     members_result = await db.execute(
@@ -1256,6 +1310,7 @@ async def get_channel_configs(
         workspace_id, str(current_developer.id), "viewer"
     ):
         raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    await ensure_app_enabled(db, workspace_id, "tracking")
 
     result = await db.execute(
         select(SlackChannelConfig).where(
@@ -1285,6 +1340,7 @@ async def create_channel_config(
         str(team.workspace_id), str(current_developer.id), "member"
     ):
         raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    await ensure_app_enabled(db, str(team.workspace_id), "tracking")
 
     new_config = SlackChannelConfig(
         integration_id=config.integration_id,
@@ -1324,6 +1380,7 @@ async def update_channel_config(
         str(config.workspace_id), str(current_developer.id), "member"
     ):
         raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    await ensure_app_enabled(db, str(config.workspace_id), "tracking")
 
     if update.channel_name is not None:
         config.channel_name = update.channel_name
@@ -1365,6 +1422,7 @@ async def delete_channel_config(
         str(config.workspace_id), str(current_developer.id), "member"
     ):
         raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    await ensure_app_enabled(db, str(config.workspace_id), "tracking")
 
     await db.delete(config)
     await db.commit()

@@ -20,9 +20,7 @@ from __future__ import annotations
 import asyncio
 import io
 import ipaddress
-import json
 import logging
-import re
 import socket
 import subprocess
 import tempfile
@@ -36,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.llm.base import AnalysisRequest, AnalysisType
 from aexy.llm.gateway import LLMGateway
+from aexy.llm.json_utils import extract_json_object
 from aexy.models.file_metadata import (
     AI_STATUS_DONE,
     AI_STATUS_FAILED,
@@ -401,7 +400,7 @@ async def _summarise_and_tag(
     try:
         result = await gateway.provider.analyze(request)
         raw = result.raw_response or result.summary or ""
-        parsed = _extract_json(raw) or {}
+        parsed = extract_json_object(raw) or {}
     except Exception as exc:
         logger.warning("LLM summary failed; falling back: %s", exc)
         parsed = {}
@@ -414,22 +413,6 @@ async def _summarise_and_tag(
         str(c).strip().lower() for c in (parsed.get("categories") or []) if c
     ][:3]
     return summary, tags, categories
-
-
-def _extract_json(text: str) -> dict | None:
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
-    return None
 
 
 # ─── Video annotation (Qwen-VL) ────────────────────────────────────────────

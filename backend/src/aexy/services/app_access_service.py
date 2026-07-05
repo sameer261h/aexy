@@ -10,6 +10,7 @@ Access Resolution Order:
 5. Admin override (admins see all enabled workspace apps)
 """
 
+import time
 from typing import TypedDict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
@@ -32,6 +33,41 @@ from aexy.models.app_definitions import (
     validate_app_access_config,
 )
 from aexy.models.permissions import ROLE_TEMPLATES
+
+
+# In-process TTL cache for workspace app_settings: the app-toggle guard runs
+# on nearly every request across ~15 routers, and the settings change rarely.
+# One entry per workspace; staleness is bounded by the TTL. Writers of
+# workspace.settings["app_settings"] should call clear_app_settings_cache().
+_APP_SETTINGS_TTL_SECONDS = 30.0
+_app_settings_cache: dict[str, tuple[float, dict]] = {}
+
+
+def clear_app_settings_cache(workspace_id: str | None = None) -> None:
+    """Drop this process's cached app_settings for one workspace (or all).
+
+    Local-only — used by the cross-process subscriber and by tests. Writers
+    should call `invalidate_app_settings_cache` so other workers are notified.
+    """
+    if workspace_id is None:
+        _app_settings_cache.clear()
+    else:
+        _app_settings_cache.pop(str(workspace_id), None)
+
+
+async def invalidate_app_settings_cache(workspace_id: str) -> None:
+    """Clear the local cache and notify other workers to do the same.
+
+    Call this from anywhere that mutates workspace.settings["app_settings"] so
+    the toggle takes effect immediately across all processes rather than after
+    the TTL lapses.
+    """
+    clear_app_settings_cache(workspace_id)
+    from aexy.services.app_settings_pubsub import (
+        publish_app_settings_invalidation,
+    )
+
+    await publish_app_settings_invalidation(str(workspace_id))
 
 
 class EffectiveAppAccess(TypedDict):
@@ -212,6 +248,36 @@ class AppAccessService:
         if not app_access:
             return False
         return app_access["enabled"]
+
+    async def check_workspace_app_enabled(
+        self,
+        workspace_id: str,
+        app_id: str,
+    ) -> bool:
+        """Whether an app is enabled at the WORKSPACE level (the admin module toggle).
+
+        This deliberately ignores per-role defaults and per-member overrides — it
+        reflects only the workspace-wide on/off switch stored in
+        ``workspace.settings["app_settings"]``. Used to enforce "disable a module
+        for the workspace" without over-restricting based on role bundles.
+
+        Defaults to True (enabled) when the app has no explicit setting.
+
+        The settings lookup is served from a short in-process TTL cache — this
+        check runs on nearly every guarded request.
+        """
+        key = str(workspace_id)
+        now = time.monotonic()
+        cached = _app_settings_cache.get(key)
+        if cached is not None and now - cached[0] < _APP_SETTINGS_TTL_SECONDS:
+            app_settings = cached[1]
+        else:
+            workspace = await self._get_workspace(workspace_id)
+            app_settings = {}
+            if workspace and workspace.settings:
+                app_settings = workspace.settings.get("app_settings", {}) or {}
+            _app_settings_cache[key] = (now, app_settings)
+        return app_settings.get(app_id, True)
 
     async def check_module_access(
         self,

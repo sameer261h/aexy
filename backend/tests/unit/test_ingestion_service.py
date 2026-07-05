@@ -6,8 +6,30 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from aexy.services.ingestion_service import IngestionService
-from aexy.models.developer import Developer
+from aexy.models.developer import Developer, GitHubConnection
 from aexy.models.activity import Commit, PullRequest, CodeReview
+
+
+async def _seed_developer_with_github(db, *, github_id, github_username, email):
+    """Create a Developer with a linked GitHubConnection.
+
+    GitHub identity now lives on GitHubConnection, and PR/CodeReview rows
+    require a non-null developer_id, so ingestion needs a developer that
+    resolves by github_id.
+    """
+    developer = Developer(email=email, name=github_username)
+    db.add(developer)
+    await db.flush()
+    db.add(
+        GitHubConnection(
+            developer_id=developer.id,
+            github_id=github_id,
+            github_username=github_username,
+            access_token="test-token",
+        )
+    )
+    await db.flush()
+    return developer
 
 
 class TestCommitIngestion:
@@ -170,6 +192,9 @@ class TestPullRequestIngestion:
     @pytest.mark.asyncio
     async def test_ingest_pr_opened(self, db_session):
         """Should ingest a new pull request."""
+        await _seed_developer_with_github(
+            db_session, github_id=123, github_username="testuser", email="testuser@example.com"
+        )
         service = IngestionService()
 
         pr_data = {
@@ -207,6 +232,9 @@ class TestPullRequestIngestion:
     @pytest.mark.asyncio
     async def test_ingest_pr_merged(self, db_session):
         """Should update PR when merged."""
+        await _seed_developer_with_github(
+            db_session, github_id=123, github_username="testuser", email="testuser@example.com"
+        )
         service = IngestionService()
 
         # First create the PR
@@ -250,6 +278,9 @@ class TestPullRequestIngestion:
     @pytest.mark.asyncio
     async def test_ingest_pr_extracts_skills(self, db_session):
         """Should extract detected skills from PR content."""
+        await _seed_developer_with_github(
+            db_session, github_id=123, github_username="testuser", email="testuser@example.com"
+        )
         service = IngestionService()
 
         pr_data = {
@@ -329,6 +360,9 @@ class TestReviewIngestion:
     @pytest.mark.asyncio
     async def test_ingest_review(self, db_session):
         """Should ingest a code review."""
+        await _seed_developer_with_github(
+            db_session, github_id=456, github_username="reviewer", email="reviewer@example.com"
+        )
         service = IngestionService()
 
         review_data = {
@@ -360,6 +394,9 @@ class TestReviewIngestion:
     @pytest.mark.asyncio
     async def test_ingest_review_with_comments(self, db_session):
         """Should capture review comment count."""
+        await _seed_developer_with_github(
+            db_session, github_id=456, github_username="reviewer", email="reviewer@example.com"
+        )
         service = IngestionService()
 
         review_data = {

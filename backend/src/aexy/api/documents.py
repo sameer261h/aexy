@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aexy.api.access_guard import ensure_app_enabled
 from aexy.api.developers import get_current_developer
 from aexy.core.database import get_db
 from aexy.models.developer import Developer
@@ -1497,6 +1498,11 @@ async def list_templates(
     db: AsyncSession = Depends(get_db),
 ):
     """List available templates."""
+    # Templates are part of the docs module: when scoped to a workspace, honor
+    # its module toggle. Unscoped calls (system templates only) stay open.
+    if workspace_id:
+        await ensure_app_enabled(db, workspace_id, "docs")
+
     service = DocumentService(db)
     templates = await service.list_templates(
         workspace_id=workspace_id,
@@ -1534,6 +1540,11 @@ async def get_template(
             detail="Template not found",
         )
 
+    # Workspace-owned templates are gated by the docs module toggle; system
+    # templates (no workspace) stay open.
+    if template.workspace_id:
+        await ensure_app_enabled(db, str(template.workspace_id), "docs")
+
     return TemplateResponse(
         id=str(template.id),
         workspace_id=str(template.workspace_id) if template.workspace_id else None,
@@ -1563,6 +1574,7 @@ async def create_template(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a custom template."""
+    await ensure_app_enabled(db, workspace_id, "docs")
     # Check workspace permission
     workspace_service = WorkspaceService(db)
     if not await workspace_service.check_permission(
@@ -1614,6 +1626,7 @@ async def duplicate_template(
     db: AsyncSession = Depends(get_db),
 ):
     """Duplicate a template for customization."""
+    await ensure_app_enabled(db, workspace_id, "docs")
     # Check workspace permission
     workspace_service = WorkspaceService(db)
     if not await workspace_service.check_permission(

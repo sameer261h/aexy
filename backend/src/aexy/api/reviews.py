@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.core.database import get_db
+from aexy.api.access_guard import ensure_app_enabled
 from aexy.api.developers import get_current_developer
 from aexy.models import Developer
 from aexy.llm.gateway import get_llm_gateway
@@ -73,6 +74,7 @@ async def _require_workspace_role(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Workspace permission required",
         )
+    await ensure_app_enabled(db, workspace_id, "reviews")
 
 
 async def _load_cycle_or_404(db: AsyncSession, cycle_id: str) -> ReviewCycle:

@@ -34,13 +34,32 @@ def _utc(*args):
     return datetime(*args, tzinfo=timezone.utc)
 
 
+def _naive(*args):
+    """Naive UTC datetime for stored PR/review timestamps.
+
+    Under SQLite, aggregate functions like func.min(submitted_at) return
+    naive datetimes, while the in-memory ORM objects (expire_on_commit=False)
+    keep whatever tzinfo they were constructed with. Storing naive values
+    keeps both sides of the cycle/first-review subtractions consistent so
+    the SQLite test path matches the tz-aware Postgres behavior.
+    """
+    return datetime(*args)
+
+
 @pytest_asyncio.fixture
 async def workspace(db_session: AsyncSession):
+    owner = Developer(
+        id=str(uuid4()),
+        email=f"owner-{uuid4().hex[:8]}@test.com",
+        name="Workspace Owner",
+    )
+    db_session.add(owner)
+    await db_session.flush()
     ws = Workspace(
         id=str(uuid4()),
         name="Test Workspace",
-        slug="test-ws",
-        owner_id=str(uuid4()),
+        slug=f"test-ws-{uuid4().hex[:8]}",
+        owner_id=owner.id,
     )
     db_session.add(ws)
     await db_session.flush()
@@ -153,7 +172,7 @@ class TestVelocityMetrics:
         # 5 commits across weekdays in Jan 2024
         for i in range(5):
             c = Commit(
-                sha=f"sha-vel-{i}-{dev.id}",
+                sha=f"vel-{i}-{uuid4().hex[:16]}",
                 developer_id=dev.id,
                 repository="repo-a",
                 message=f"commit {i}",
@@ -355,7 +374,7 @@ class TestRepositoryInsights:
                     committed_at=_utc(2024, 1, 10),
                 ),
                 Commit(
-                    sha=f"personal-{uuid4().hex}",
+                    sha=f"personal-{uuid4().hex[:16]}",
                     developer_id=dev.id,
                     repository="dev/personal-side-project",
                     message="weekend hack",
@@ -573,7 +592,7 @@ class TestSustainabilityMetrics:
         ]
         for i, (ts, repo) in enumerate(commits_data):
             c = Commit(
-                sha=f"sust-{i}-{dev.id}",
+                sha=f"sust-{i}-{uuid4().hex[:16]}",
                 developer_id=dev.id,
                 repository=repo,
                 message=f"commit {i}",
@@ -603,7 +622,7 @@ class TestSustainabilityMetrics:
         ]
         for i, dt in enumerate(dates):
             c = Commit(
-                sha=f"streak-{i}-{dev.id}",
+                sha=f"streak-{i}-{uuid4().hex[:16]}",
                 developer_id=dev.id,
                 repository="repo-a",
                 message=f"commit {i}",
@@ -625,7 +644,7 @@ class TestSustainabilityMetrics:
     async def test_focus_score_single_repo(self, db_session, dev):
         for i in range(5):
             c = Commit(
-                sha=f"focus-{i}-{dev.id}",
+                sha=f"focus-{i}-{uuid4().hex[:16]}",
                 developer_id=dev.id,
                 repository="only-repo",
                 message=f"commit {i}",
@@ -722,7 +741,7 @@ class TestTeamDistribution:
         for d in [dev, dev2]:
             for i in range(5):
                 c = Commit(
-                    sha=f"dist-{d.id}-{i}",
+                    sha=f"dist-{i}-{uuid4().hex[:16]}",
                     developer_id=d.id,
                     repository="repo-a",
                     message=f"commit {i}",
@@ -743,6 +762,14 @@ class TestTeamDistribution:
         assert len(result.member_metrics) == 2
         assert result.bottleneck_developers == []
 
+    @pytest.mark.skip(
+        reason="Obsolete under refactored model: developers.email now has a "
+        "UNIQUE constraint, so two Developer rows can no longer share the same "
+        "non-null email. The email-keyed branch of _build_developer_alias_map "
+        "this test exercised can only match a member against itself (excluded "
+        "by notin_(member_ids)); the github-login branch (see "
+        "test_ghost_dedup_via_commit_github_login) is now the live dedup path."
+    )
     @pytest.mark.asyncio
     async def test_ghost_dedup_collapses_email_match(self, db_session, workspace):
         """Active member + ghost (sharing email) should produce ONE row.
@@ -837,6 +864,7 @@ class TestTeamDistribution:
             developer_id=member.id,
             github_id=99,
             github_username="mobashir-gh",
+            access_token="test-token",
         ))
         # Ghost A commits carry the matching author_github_login.
         for i in range(5):
@@ -910,7 +938,7 @@ class TestTeamDistribution:
         # dev: 30 commits, dev2: 5, dev3: 5 → dev is bottleneck (>2x avg)
         for i in range(30):
             c = Commit(
-                sha=f"bottle-{dev.id}-{i}",
+                sha=f"bottle-a-{i}-{uuid4().hex[:16]}",
                 developer_id=dev.id,
                 repository="repo-a",
                 message=f"commit {i}",
@@ -922,7 +950,7 @@ class TestTeamDistribution:
         for d in [dev2, dev3]:
             for i in range(5):
                 c = Commit(
-                    sha=f"bottle-{d.id}-{i}",
+                    sha=f"bottle-b-{i}-{uuid4().hex[:16]}",
                     developer_id=d.id,
                     repository="repo-a",
                     message=f"commit {i}",
@@ -984,7 +1012,7 @@ class TestSnapshotPersistence:
 
         # Add some data
         c = Commit(
-            sha=f"snap-{dev.id}",
+            sha=f"snap-{uuid4().hex[:16]}",
             developer_id=dev.id,
             repository="repo-a",
             message="snapshot commit",
@@ -1029,7 +1057,7 @@ class TestSnapshotPersistence:
 
         # Add a commit and save again (same period = upsert)
         c = Commit(
-            sha=f"snap-upsert-{dev.id}",
+            sha=f"snap-upsert-{uuid4().hex[:16]}",
             developer_id=dev.id,
             repository="repo-a",
             message="new commit",
