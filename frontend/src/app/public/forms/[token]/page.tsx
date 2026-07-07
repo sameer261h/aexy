@@ -48,12 +48,30 @@ function FieldRenderer({
     "w-full px-4 py-3 bg-white border rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition";
   const errorClass = error ? "border-red-500" : "border-gray-200";
 
-  switch (field.field_type) {
+  // Forms-module forms carry field types (phone, url, radio, datetime, hidden)
+  // that aren't in the ticket-form TicketFieldType union, so switch on the raw
+  // string value rather than the narrowed type.
+  switch (field.field_type as string) {
+    case "hidden":
+      // Hidden fields never render a visible control; their value is seeded
+      // from default_value on load and submitted with the rest of the form.
+      return null;
+
     case "text":
     case "email":
+    case "phone":
+    case "url":
       return (
         <input
-          type={field.field_type}
+          type={
+            field.field_type === "email"
+              ? "email"
+              : (field.field_type as string) === "phone"
+                ? "tel"
+                : (field.field_type as string) === "url"
+                  ? "url"
+                  : "text"
+          }
           value={(value as string) || ""}
           onChange={(e) => onChange(e.target.value)}
           placeholder={field.placeholder || ""}
@@ -130,6 +148,29 @@ function FieldRenderer({
         </div>
       );
 
+    case "radio":
+      return (
+        <div className="space-y-2">
+          {field.options?.map((option) => (
+            <label
+              key={option.value}
+              className="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded-lg cursor-pointer hover:border-purple-300 transition"
+            >
+              <input
+                type="radio"
+                name={field.field_key}
+                value={option.value}
+                checked={(value as string) === option.value}
+                onChange={(e) => onChange(e.target.value)}
+                className="w-4 h-4 border-gray-300 text-purple-600 focus:ring-purple-500"
+                required={field.is_required}
+              />
+              <span className="text-gray-700">{option.label}</span>
+            </label>
+          ))}
+        </div>
+      );
+
     case "checkbox":
       return (
         <label className="flex items-center gap-3 cursor-pointer">
@@ -147,6 +188,17 @@ function FieldRenderer({
       return (
         <input
           type="date"
+          value={(value as string) || ""}
+          onChange={(e) => onChange(e.target.value)}
+          className={`${baseInputClass} ${errorClass}`}
+          required={field.is_required}
+        />
+      );
+
+    case "datetime":
+      return (
+        <input
+          type="datetime-local"
           value={(value as string) || ""}
           onChange={(e) => onChange(e.target.value)}
           className={`${baseInputClass} ${errorClass}`}
@@ -216,6 +268,21 @@ export default function PublicFormPage() {
         setError(null);
         const data = await publicFormsApi.get(token);
         setForm(data as PublicForm);
+
+        // Seed default values so prefilled fields — and hidden fields, which
+        // render no control — are still included in the submission.
+        const defaults: Record<string, unknown> = {};
+        (data as PublicForm).fields?.forEach((f) => {
+          if (f.default_value !== undefined && f.default_value !== null && f.default_value !== "") {
+            defaults[f.field_key] = f.default_value;
+          }
+        });
+        if (Object.keys(defaults).length > 0) {
+          setFormData((prev) => ({
+            ...prev,
+            field_values: { ...defaults, ...prev.field_values },
+          }));
+        }
       } catch (err) {
         setError("Form not found or is no longer available.");
       } finally {
@@ -241,6 +308,8 @@ export default function PublicFormPage() {
     // Validate each field
     form?.fields?.forEach((field) => {
       if (!field.is_visible) return;
+      // Hidden fields have no visible control to correct, so don't block on them.
+      if ((field.field_type as string) === "hidden") return;
 
       const value = formData.field_values[field.field_key];
       const strValue = value?.toString() || "";
@@ -596,7 +665,8 @@ export default function PublicFormPage() {
 
   if (!form) return null;
 
-  const visibleFields = form.fields?.filter((f) => f.is_visible) || [];
+  const visibleFields =
+    form.fields?.filter((f) => f.is_visible && (f.field_type as string) !== "hidden") || [];
   const sortedFields = [...visibleFields].sort((a, b) => a.position - b.position);
 
   // Apply theme

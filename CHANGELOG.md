@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.43] - 2026-07-07
+
+### Public forms render again, and the task @-mention field no longer freezes
+
+Three related fixes to public forms and the task description editor:
+
+- **Public forms returned 404 even when active.** Both the legacy
+  ticket-forms module and the newer Forms module publish under the
+  same `/public/forms/{token}` URL, and their two API routers each
+  registered `GET /public/forms/{token}`. The ticket-forms router is
+  mounted first, so it handled *every* request — any form built in the
+  Forms module missed the `ticket_forms` table and 404'd, regardless of
+  its Active/visibility toggle. The public endpoints (get, submit,
+  verify-email) now resolve a token against ticket-forms first and fall
+  back to the Forms module, so both systems are reachable through the
+  shared public page.
+- **The task description `@`-mention selector got stuck.** Typing `@`
+  opened the mention dropdown but then swallowed every subsequent
+  keystroke, leaving the field unusable. The Tiptap key handler was
+  reading stale state (the editor captures its options once) and
+  `return true`-ing on each character, which blocked the editor from
+  inserting text; the dropdown was also clipped by the container's
+  `overflow-hidden`. The handler now reads live values via refs, never
+  blocks typing, and the dropdown is no longer clipped.
+- **Forms-module field types rendered as plain text.** On the shared
+  public page, `phone`, `url`, and `datetime` now use the correct input
+  types, `radio` renders a proper option group, and `hidden` fields are
+  no longer shown as text boxes — their `default_value` is seeded and
+  submitted instead. Field default values are now applied on load in
+  general.
+
 ## [0.8.42] - 2026-07-05
 
 ### Marketing site is now crawlable and shareable (SEO)
