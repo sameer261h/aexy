@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, forwardRef, useImperativeHandle } from "react";
+import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -65,6 +65,21 @@ export const TaskDescriptionEditor = forwardRef<
   const [suggestionQuery, setSuggestionQuery] = useState("");
   const [editorMode, setEditorMode] = useState<EditorMode>("rich");
   const [markdownContent, setMarkdownContent] = useState("");
+
+  // Tiptap's useEditor captures `editorProps` (incl. handleKeyDown) ONCE at
+  // creation — there is no deps array — so the handler would otherwise read
+  // stale copies of this state/props. Mirror everything it needs into refs
+  // and keep them current so the keydown handler always sees live values.
+  const showUserRef = useRef(showUserSuggestions);
+  const showFileRef = useRef(showFileSuggestions);
+  const queryRef = useRef(suggestionQuery);
+  const usersRef = useRef(users);
+  const filesRef = useRef(files);
+  useEffect(() => { showUserRef.current = showUserSuggestions; }, [showUserSuggestions]);
+  useEffect(() => { showFileRef.current = showFileSuggestions; }, [showFileSuggestions]);
+  useEffect(() => { queryRef.current = suggestionQuery; }, [suggestionQuery]);
+  useEffect(() => { usersRef.current = users; }, [users]);
+  useEffect(() => { filesRef.current = files; }, [files]);
 
   // Filter users based on query
   const filteredUsers = users.filter((user) =>
@@ -137,8 +152,14 @@ export const TaskDescriptionEditor = forwardRef<
         return true;
       },
       handleKeyDown: (_view, event) => {
+        // Read live values via refs (see note above) — never the stale
+        // closure copies captured when the editor was created.
+        const showUser = showUserRef.current;
+        const showFile = showFileRef.current;
+        const query = queryRef.current;
+
         // Handle @ for user mentions
-        if (event.key === "@" && !showUserSuggestions && users.length > 0) {
+        if (event.key === "@" && !showUser && usersRef.current.length > 0) {
           setShowUserSuggestions(true);
           setShowFileSuggestions(false);
           setSuggestionQuery("");
@@ -146,7 +167,7 @@ export const TaskDescriptionEditor = forwardRef<
         }
 
         // Handle # for file mentions
-        if (event.key === "#" && !showFileSuggestions && files.length > 0) {
+        if (event.key === "#" && !showFile && filesRef.current.length > 0) {
           setShowFileSuggestions(true);
           setShowUserSuggestions(false);
           setSuggestionQuery("");
@@ -154,22 +175,26 @@ export const TaskDescriptionEditor = forwardRef<
         }
 
         // Handle escape to close suggestions
-        if (event.key === "Escape" && (showUserSuggestions || showFileSuggestions)) {
+        if (event.key === "Escape" && (showUser || showFile)) {
           setShowUserSuggestions(false);
           setShowFileSuggestions(false);
           return true;
         }
 
-        // Handle suggestion query input
-        if (showUserSuggestions || showFileSuggestions) {
+        // While a suggestion box is open, keep the query in sync but NEVER
+        // swallow the keystroke — every key must still reach ProseMirror so
+        // the field can't get stuck. The typed characters land in the doc
+        // and are what insertMention() later deletes on selection.
+        if (showUser || showFile) {
           if (event.key === "Backspace") {
-            if (suggestionQuery.length > 0) {
+            if (query.length > 0) {
               setSuggestionQuery((q) => q.slice(0, -1));
             } else {
+              // Deleting the trigger char itself closes the box.
               setShowUserSuggestions(false);
               setShowFileSuggestions(false);
             }
-            return true;
+            return false;
           }
 
           if (event.key === " " || event.key === "Enter") {
@@ -180,7 +205,7 @@ export const TaskDescriptionEditor = forwardRef<
 
           if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
             setSuggestionQuery((q) => q + event.key);
-            return true;
+            return false;
           }
         }
 
@@ -321,10 +346,10 @@ export const TaskDescriptionEditor = forwardRef<
   }));
 
   return (
-    <div className={cn("relative overflow-hidden rounded-xl border border-border bg-background/70 shadow-inner ring-1 ring-white/5", className)}>
+    <div className={cn("relative rounded-xl border border-border bg-background/70 shadow-inner ring-1 ring-white/5", className)}>
       {/* Mode toggle */}
       {!readOnly && (
-        <div className="flex justify-end border-b border-border/60 bg-muted/30 px-2 py-1.5">
+        <div className="flex justify-end rounded-t-xl border-b border-border/60 bg-muted/30 px-2 py-1.5">
           <button
             type="button"
             onClick={handleModeToggle}
