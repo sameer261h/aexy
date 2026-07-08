@@ -14,6 +14,8 @@ import {
 import { RecordHeader } from "@/components/crm/RecordHeader";
 import { RecordHighlights } from "@/components/crm/RecordHighlights";
 import { RecordSidebar } from "@/components/crm/RecordSidebar";
+import { ConvertLeadDialog } from "@/components/crm/ConvertLeadDialog";
+import { Button } from "@/components/ui/button";
 import {
   RecordTabs,
   RecordTabId,
@@ -32,6 +34,7 @@ export default function RecordDetailPage() {
   const { user, logout } = useAuth();
   const { currentWorkspace } = useWorkspace();
   const workspaceId = currentWorkspace?.id || null;
+  const [showConvert, setShowConvert] = useState(false);
 
   // Fetch data
   const { objects } = useCRMObjects(workspaceId);
@@ -44,6 +47,7 @@ export default function RecordDetailPage() {
     deleteRecord,
     isUpdating,
     isDeleting,
+    refetch: refetchRecord,
   } = useCRMRecord(workspaceId, recordId);
 
   // Fetch all records for prev/next navigation
@@ -194,6 +198,22 @@ export default function RecordDetailPage() {
             />
           </div>
 
+          {/* Lead conversion */}
+          {currentObject?.object_type === "lead" &&
+            record.values?.lead_status !== "converted" &&
+            workspaceId && (
+              <div className="px-8 pt-4">
+                <div className="flex items-center justify-between rounded-lg border border-purple-500/30 bg-purple-500/5 px-4 py-3">
+                  <span className="text-sm text-muted-foreground">
+                    Ready to move this lead forward?
+                  </span>
+                  <Button size="sm" onClick={() => setShowConvert(true)}>
+                    Convert lead
+                  </Button>
+                </div>
+              </div>
+            )}
+
           {/* Highlights */}
           <div className="px-8 py-6">
             <RecordHighlights
@@ -274,6 +294,16 @@ export default function RecordDetailPage() {
           onDeleteNote={handleDeleteNote}
         />
       </div>
+
+      {workspaceId && (
+        <ConvertLeadDialog
+          isOpen={showConvert}
+          onClose={() => setShowConvert(false)}
+          workspaceId={workspaceId}
+          recordId={recordId}
+          onConverted={() => refetchRecord?.()}
+        />
+      )}
     </div>
   );
 }

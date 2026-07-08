@@ -11,6 +11,7 @@ import {
   Users,
   DollarSign,
   LayoutGrid,
+  Target,
   Settings,
 } from "lucide-react";
 import { SearchInput } from "@/components/ui/search-input";
@@ -23,6 +24,7 @@ import { ViewSwitcher, ViewMode } from "@/components/crm/ViewSwitcher";
 import { SavedViewSwitcher } from "@/components/crm/SavedViewSwitcher";
 import { DataTable } from "@/components/crm/DataTable";
 import { KanbanBoard } from "@/components/crm/KanbanBoard";
+import { PipelineBoard } from "@/components/crm/PipelineBoard";
 import { ColumnVisibilityMenu } from "@/components/crm/ColumnSelector";
 import { FieldEditor } from "@/components/fields";
 
@@ -30,6 +32,7 @@ const objectTypeIcons: Record<CRMObjectType, React.ReactNode> = {
   company: <Building2 className="h-5 w-5" />,
   person: <Users className="h-5 w-5" />,
   deal: <DollarSign className="h-5 w-5" />,
+  lead: <Target className="h-5 w-5" />,
   custom: <LayoutGrid className="h-5 w-5" />,
 };
 
@@ -336,7 +339,9 @@ export default function RecordsPage() {
   }
 
   const icon = currentObject ? objectTypeIcons[currentObject.object_type as CRMObjectType] || objectTypeIcons.custom : null;
-  const availableViews: ViewMode[] = hasStatusAttribute ? ["table", "board"] : ["table"];
+  // Board view is always offered: PipelineBoard lets you create a pipeline
+  // (and its stage/status attribute) even when the object has none yet.
+  const availableViews: ViewMode[] = ["table", "board"];
 
   return (
     <div className="min-h-screen bg-background">
@@ -457,15 +462,28 @@ export default function RecordsPage() {
               onColumnDisplayConfigChange={setColumnDisplayConfig}
             />
           ) : (
-            <KanbanBoard
-              records={filteredRecords}
-              attributes={currentObject?.attributes || []}
-              onRecordClick={handleRecordClick}
-              onRecordUpdate={handleRecordUpdate}
-              onCreateInStage={handleCreateInStage}
-              highlightAttributes={kanbanHighlightAttributes}
-              isLoading={isLoading}
-            />
+            currentObject && workspaceId ? (
+              <PipelineBoard
+                workspaceId={workspaceId}
+                object={currentObject}
+                records={filteredRecords}
+                onRecordClick={handleRecordClick}
+                onRecordUpdate={handleRecordUpdate}
+                onCreateInStage={handleCreateInStage}
+                highlightAttributes={kanbanHighlightAttributes}
+                isLoading={isLoading}
+              />
+            ) : (
+              <KanbanBoard
+                records={filteredRecords}
+                attributes={currentObject?.attributes || []}
+                onRecordClick={handleRecordClick}
+                onRecordUpdate={handleRecordUpdate}
+                onCreateInStage={handleCreateInStage}
+                highlightAttributes={kanbanHighlightAttributes}
+                isLoading={isLoading}
+              />
+            )
           )}
 
           {currentObject && (

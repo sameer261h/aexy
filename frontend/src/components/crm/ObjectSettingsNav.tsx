@@ -10,6 +10,7 @@ import {
   Users,
   DollarSign,
   LayoutGrid,
+  Target,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CRMObject, CRMObjectType } from "@/lib/api";
@@ -32,6 +33,7 @@ const objectTypeIcons: Record<CRMObjectType, React.ReactNode> = {
   company: <Building2 className="h-5 w-5" />,
   person: <Users className="h-5 w-5" />,
   deal: <DollarSign className="h-5 w-5" />,
+  lead: <Target className="h-5 w-5" />,
   custom: <LayoutGrid className="h-5 w-5" />,
 };
 

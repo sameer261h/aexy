@@ -24,6 +24,9 @@ from aexy.models.crm import (
     CRMActivity,
     CRMObjectType,
     CRMAttributeType,
+    CRMPipeline,
+    CRMPipelineStage,
+    CRMStageHistory,
 )
 from aexy.services.data_table_service import DataTableService
 from aexy.services.activity_logger import log_activity
@@ -364,7 +367,7 @@ class CRMObjectService:
             attribute_type=CRMAttributeType.CURRENCY.value,
             config={"currencyCode": "USD"},
         )
-        await attr_service.create_attribute(
+        deal_stage_attr = await attr_service.create_attribute(
             object_id=deal.id,
             name="Stage",
             attribute_type=CRMAttributeType.STATUS.value,
@@ -420,6 +423,116 @@ class CRMObjectService:
                 {"value": "advertisement", "label": "Advertisement"},
                 {"value": "other", "label": "Other"},
             ]},
+        )
+
+        # Leads
+        lead = await self.create_object(
+            workspace_id=workspace_id,
+            name="Lead",
+            plural_name="Leads",
+            object_type=CRMObjectType.LEAD.value,
+            icon="target",
+            color="#EC4899",
+            settings={"enableActivities": True, "enableNotes": True},
+        )
+        objects.append(lead)
+
+        await attr_service.create_attribute(
+            object_id=lead.id,
+            name="Name",
+            attribute_type=CRMAttributeType.TEXT.value,
+            is_required=True,
+            is_system=True,
+        )
+        await attr_service.create_attribute(
+            object_id=lead.id, name="Email", attribute_type=CRMAttributeType.EMAIL.value,
+        )
+        await attr_service.create_attribute(
+            object_id=lead.id, name="Phone", attribute_type=CRMAttributeType.PHONE.value,
+        )
+        await attr_service.create_attribute(
+            object_id=lead.id, name="Company Name", attribute_type=CRMAttributeType.TEXT.value,
+        )
+        await attr_service.create_attribute(
+            object_id=lead.id, name="Title", attribute_type=CRMAttributeType.TEXT.value,
+        )
+        lead_status_attr = await attr_service.create_attribute(
+            object_id=lead.id,
+            name="Lead Status",
+            attribute_type=CRMAttributeType.STATUS.value,
+            config={"options": [
+                {"value": "new", "label": "New", "color": "#6B7280"},
+                {"value": "contacted", "label": "Contacted", "color": "#3B82F6"},
+                {"value": "qualified", "label": "Qualified", "color": "#10B981"},
+                {"value": "unqualified", "label": "Unqualified", "color": "#EF4444"},
+                {"value": "converted", "label": "Converted", "color": "#8B5CF6"},
+            ]},
+        )
+        await attr_service.create_attribute(
+            object_id=lead.id,
+            name="Source",
+            attribute_type=CRMAttributeType.SELECT.value,
+            config={"options": [
+                {"value": "website", "label": "Website"},
+                {"value": "referral", "label": "Referral"},
+                {"value": "cold_outreach", "label": "Cold Outreach"},
+                {"value": "social_media", "label": "Social Media"},
+                {"value": "event", "label": "Event/Conference"},
+                {"value": "partner", "label": "Partner"},
+                {"value": "advertisement", "label": "Advertisement"},
+                {"value": "other", "label": "Other"},
+            ]},
+        )
+        await attr_service.create_attribute(
+            object_id=lead.id,
+            name="Estimated Value",
+            attribute_type=CRMAttributeType.CURRENCY.value,
+            config={"currencyCode": "USD"},
+        )
+        await attr_service.create_attribute(
+            object_id=lead.id, name="Owner", attribute_type=CRMAttributeType.TEXT.value,
+        )
+        await attr_service.create_attribute(
+            object_id=lead.id,
+            name="Converted Deal",
+            attribute_type=CRMAttributeType.RECORD_REFERENCE.value,
+            config={"targetObjectId": deal.id, "allowMultiple": False},
+        )
+        await attr_service.create_attribute(
+            object_id=lead.id,
+            name="Converted Contact",
+            attribute_type=CRMAttributeType.RECORD_REFERENCE.value,
+            config={"targetObjectId": person.id, "allowMultiple": False},
+        )
+        await attr_service.create_attribute(
+            object_id=lead.id,
+            name="Converted Company",
+            attribute_type=CRMAttributeType.RECORD_REFERENCE.value,
+            config={"targetObjectId": company.id, "allowMultiple": False},
+        )
+        await attr_service.create_attribute(
+            object_id=lead.id,
+            name="Converted At",
+            attribute_type=CRMAttributeType.TIMESTAMP.value,
+        )
+
+        # Create first-class default pipelines bridged to the seeded STATUS
+        # attributes (lazy import avoids a circular dependency).
+        from aexy.services.crm_pipeline_service import PipelineService
+        pipeline_service = PipelineService(self.db)
+        await pipeline_service.create_pipeline(
+            workspace_id=workspace_id,
+            object_id=deal.id,
+            name="Sales Pipeline",
+            adopt_attribute_id=deal_stage_attr.id,
+            is_default=True,
+        )
+        await pipeline_service.create_pipeline(
+            workspace_id=workspace_id,
+            object_id=lead.id,
+            name="Lead Pipeline",
+            adopt_attribute_id=lead_status_attr.id,
+            is_default=True,
         )
 
         return objects
@@ -534,6 +647,14 @@ class CRMAttributeService:
         attr = await self.get_attribute(attribute_id)
         if not attr:
             return None
+
+        # Options of a pipeline-managed STATUS attribute are the projection of
+        # its pipeline's stages — edit them via the pipeline/stage API, not here.
+        if config is not None and (attr.config or {}).get("_managed_by_pipeline"):
+            raise ValueError(
+                "This attribute's options are managed by a pipeline; "
+                "edit stages via the pipeline API."
+            )
 
         if name is not None:
             attr.name = name
@@ -662,6 +783,23 @@ class CRMRecordService:
         except Exception:
             pass
 
+        # Route new leads to a rep (best-effort).
+        try:
+            obj = (
+                await self.db.execute(
+                    select(CRMObject.object_type).where(CRMObject.id == object_id)
+                )
+            ).scalar_one_or_none()
+            if obj == CRMObjectType.LEAD.value:
+                from aexy.services.lead_routing_service import LeadRoutingService
+                await LeadRoutingService(self.db).route_lead(
+                    workspace_id=workspace_id,
+                    record_id=record.id,
+                    record_values=values,
+                )
+        except Exception:
+            pass
+
         return record
 
     async def get_record(self, record_id: str) -> CRMRecord | None:
@@ -731,9 +869,16 @@ class CRMRecordService:
                     "new": str(ch.get("new")) if ch.get("new") is not None else None,
                 }
 
-            # Detect stage changes for a more specific activity_type
-            stage_fields = {"stage", "status", "pipeline_stage", "deal_stage"}
-            has_stage_change = bool(stage_fields & set(entity_changes.keys()))
+            # Detect stage changes. Prefer the object's pipeline-managed status
+            # slugs; fall back to legacy field names when no pipeline exists yet.
+            pipeline_slugs = await self._pipeline_status_slugs(record.object_id)
+            changed_fields = set(entity_changes.keys())
+            if pipeline_slugs:
+                stage_changed_fields = set(pipeline_slugs.keys()) & changed_fields
+            else:
+                legacy = {"stage", "status", "pipeline_stage", "deal_stage"}
+                stage_changed_fields = legacy & changed_fields
+            has_stage_change = bool(stage_changed_fields)
             activity_type = "status_changed" if has_stage_change else "updated"
 
             await log_activity(
@@ -762,7 +907,154 @@ class CRMRecordService:
             except Exception:
                 pass
 
+            # Record queryable stage history + fire the stage-change automation
+            # trigger/webhook for each changed managed status field.
+            for field in stage_changed_fields:
+                old_stage = old_values.get(field)
+                new_stage = record.values.get(field)
+                if old_stage == new_stage:
+                    continue
+                pipeline_id = pipeline_slugs.get(field) if pipeline_slugs else None
+                await self._record_stage_history(
+                    record=record,
+                    pipeline_id=pipeline_id,
+                    old_stage_key=old_stage,
+                    new_stage_key=new_stage,
+                    changed_by_id=updated_by_id,
+                )
+                await self._log_activity(
+                    workspace_id=record.workspace_id,
+                    record_id=record.id,
+                    activity_type="stage.changed",
+                    actor_id=updated_by_id,
+                    metadata={
+                        "field": field,
+                        "old_stage": old_stage,
+                        "new_stage": new_stage,
+                        "pipeline_id": pipeline_id,
+                    },
+                )
+                try:
+                    from aexy.services.crm_events import CRMEventService
+                    event_service = CRMEventService(self.db)
+                    await event_service.emit_stage_changed(
+                        workspace_id=record.workspace_id,
+                        object_id=record.object_id,
+                        record_id=record.id,
+                        old_stage=old_stage if isinstance(old_stage, str) else None,
+                        new_stage=new_stage if isinstance(new_stage, str) else "",
+                        record_values=record.values,
+                        changed_by_id=updated_by_id,
+                    )
+                except Exception:
+                    pass
+
+            # Route the lead when it becomes qualified.
+            await self._maybe_route_lead(record, changed_fields=changed_fields)
+
         return record
+
+    async def _pipeline_status_slugs(self, object_id: str) -> dict[str, str]:
+        """Map managed STATUS attribute slug -> pipeline_id for an object's pipelines."""
+        rows = (
+            await self.db.execute(
+                select(CRMAttribute.slug, CRMPipeline.id)
+                .join(CRMPipeline, CRMPipeline.status_attribute_id == CRMAttribute.id)
+                .where(
+                    CRMPipeline.object_id == object_id,
+                    CRMPipeline.is_active == True,  # noqa: E712
+                )
+            )
+        ).all()
+        return {slug: pid for slug, pid in rows}
+
+    async def _record_stage_history(
+        self,
+        record: CRMRecord,
+        pipeline_id: str | None,
+        old_stage_key: Any,
+        new_stage_key: Any,
+        changed_by_id: str | None,
+    ) -> None:
+        """Insert a CRMStageHistory row, computing time spent in the prior stage."""
+        from_key = old_stage_key if isinstance(old_stage_key, str) else None
+        to_key = new_stage_key if isinstance(new_stage_key, str) else None
+        if to_key is None:
+            return
+
+        from_stage_id = to_stage_id = None
+        if pipeline_id:
+            stages = (
+                await self.db.execute(
+                    select(CRMPipelineStage).where(
+                        CRMPipelineStage.pipeline_id == pipeline_id,
+                        CRMPipelineStage.value_key.in_(
+                            [k for k in (from_key, to_key) if k]
+                        ),
+                    )
+                )
+            ).scalars().all()
+            by_key = {s.value_key: s.id for s in stages}
+            from_stage_id = by_key.get(from_key)
+            to_stage_id = by_key.get(to_key)
+
+        # Duration since the previous history row (time in the prior stage).
+        duration = None
+        prior = (
+            await self.db.execute(
+                select(CRMStageHistory)
+                .where(CRMStageHistory.record_id == record.id)
+                .order_by(CRMStageHistory.entered_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if prior and prior.entered_at:
+            delta = datetime.now(timezone.utc) - prior.entered_at
+            duration = int(delta.total_seconds())
+
+        snapshot = {}
+        for key in ("value", "amount", "deal_value", "estimated_value"):
+            if key in record.values:
+                snapshot[key] = record.values[key]
+
+        self.db.add(
+            CRMStageHistory(
+                id=str(uuid4()),
+                workspace_id=record.workspace_id,
+                record_id=record.id,
+                pipeline_id=pipeline_id,
+                from_stage_key=from_key,
+                to_stage_key=to_key,
+                from_stage_id=from_stage_id,
+                to_stage_id=to_stage_id,
+                changed_by_id=changed_by_id,
+                duration_in_previous_seconds=duration,
+                record_value_snapshot=snapshot,
+            )
+        )
+        await self.db.flush()
+
+    async def _maybe_route_lead(self, record: CRMRecord, changed_fields: set[str]) -> None:
+        """Route a lead to a rep when its lead status transitions to qualified."""
+        lead_status_fields = {"lead_status", "status"}
+        if not (lead_status_fields & changed_fields):
+            return
+        status_val = None
+        for f in ("lead_status", "status"):
+            if f in record.values:
+                status_val = record.values.get(f)
+                break
+        if status_val != "qualified":
+            return
+        try:
+            from aexy.services.lead_routing_service import LeadRoutingService
+            await LeadRoutingService(self.db).route_lead(
+                workspace_id=record.workspace_id,
+                record_id=record.id,
+                record_values=record.values,
+            )
+        except Exception:
+            pass
 
     async def delete_record(
         self,
