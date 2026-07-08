@@ -568,6 +568,26 @@ SCHEDULES: list[dict] = [
         "interval": timedelta(hours=3),
         "queue": TaskQueue.ANALYSIS,
     },
+
+    # === Reporting / analytics ===
+    # Poll for scheduled reports whose next_run_at is due, render + deliver them.
+    {
+        "id": "deliver-scheduled-reports",
+        "activity": "deliver_scheduled_reports",
+        "input_module": "aexy.temporal.activities.reports",
+        "input_class": "DeliverScheduledReportsInput",
+        "interval": timedelta(minutes=15),
+        "queue": TaskQueue.OPERATIONS,
+    },
+    # Daily cleanup of expired export jobs and their files.
+    {
+        "id": "cleanup-expired-exports",
+        "activity": "cleanup_expired_exports",
+        "input_module": "aexy.temporal.activities.reports",
+        "input_class": "CleanupExpiredExportsInput",
+        "interval": timedelta(hours=24),
+        "queue": TaskQueue.OPERATIONS,
+    },
 ]
 
 

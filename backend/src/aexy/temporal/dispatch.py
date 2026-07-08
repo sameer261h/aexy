@@ -207,6 +207,11 @@ ACTIVITY_CONFIG: dict[str, dict[str, Any]] = {
     "enrich_attribute_tracker_events": {"retry": LLM_RETRY, "timeout": timedelta(minutes=15), "heartbeat": timedelta(minutes=2)},
     "generate_tracker_journal": {"retry": LLM_RETRY, "timeout": timedelta(minutes=15), "heartbeat": timedelta(minutes=2)},
     "detect_tracker_insights": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10), "heartbeat": timedelta(minutes=2)},
+
+    # Reporting / analytics exports
+    "process_export_job": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=10)},
+    "deliver_scheduled_reports": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=15)},
+    "cleanup_expired_exports": {"retry": STANDARD_RETRY, "timeout": timedelta(hours=1)},
 }
 
 DEFAULT_CONFIG = {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=5)}

@@ -650,24 +650,60 @@ class ReportBuilderService:
             }
 
         elif metric == MetricType.SKILL_GROWTH:
-            # Would integrate with skill fingerprint history
-            return {
-                "message": "Skill growth data requires historical fingerprint comparison",
-                "skills": [],
-            }
+            # Growth requires comparing skill fingerprints over time, which is
+            # not yet captured historically. Surface current coverage instead
+            # so the widget shows real data rather than an empty stub.
+            if not developer_ids:
+                return {"error": "Developer IDs required for skill data"}
+            heatmap = await self.analytics.generate_skill_heatmap(
+                developer_ids=developer_ids,
+                db=db,
+            )
+            data = heatmap.model_dump() if hasattr(heatmap, "model_dump") else heatmap
+            data["note"] = "Showing current skill coverage; historical growth trend coming soon."
+            return data
 
         elif metric == MetricType.CODE_QUALITY:
-            # Would integrate with code quality metrics
-            return {
-                "message": "Code quality data requires integration with linters/analyzers",
-                "metrics": {},
-            }
+            if not developer_ids:
+                return {"error": "Developer IDs required for code quality metrics"}
+            return await self.analytics.get_code_quality_metrics(
+                developer_ids=developer_ids,
+                db=db,
+                days=config.get("days", 30),
+            )
 
         elif metric in [MetricType.TEAM_HEALTH, MetricType.BUS_FACTOR, MetricType.ATTRITION_RISK]:
-            # These require PredictiveAnalyticsService
+            # Read the most recent cached predictive insight. We deliberately do
+            # NOT trigger fresh LLM analysis here — report rendering must stay
+            # cheap and fast. Insights are populated by PredictiveAnalyticsService
+            # on its own cadence.
+            from aexy.services.predictive_analytics import PredictiveAnalyticsService
+
+            predictive = PredictiveAnalyticsService()
+            dev_id = developer_ids[0] if (developer_ids and metric == MetricType.ATTRITION_RISK) else None
+            team_id = config.get("team_id")
+            insight = await predictive.get_cached_insight(
+                developer_id=dev_id,
+                team_id=team_id,
+                insight_type=metric.value,
+                db=db,
+            )
+            if insight is None:
+                return {
+                    "available": False,
+                    "message": (
+                        f"No cached {metric.value} insight yet. "
+                        "It will populate after the next predictive analysis run."
+                    ),
+                }
             return {
-                "message": f"{metric.value} requires predictive analytics service",
-                "requires": "PredictiveAnalyticsService",
+                "available": True,
+                "risk_score": insight.risk_score,
+                "confidence": insight.confidence,
+                "risk_level": insight.risk_level,
+                "factors": insight.factors,
+                "recommendations": insight.recommendations,
+                "generated_at": insight.generated_at.isoformat() if insight.generated_at else None,
             }
 
         else:

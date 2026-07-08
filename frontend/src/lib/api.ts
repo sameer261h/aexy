@@ -1507,7 +1507,8 @@ export interface WidgetConfig {
   metric: string;
   title: string;
   config?: Record<string, unknown>;
-  position: { x: number; y: number; w: number; h: number };
+  // Backend + templates use {x, y, width, height} (grid units).
+  position: { x: number; y: number; width: number; height: number };
 }
 
 export interface ReportFilters {
@@ -1641,7 +1642,12 @@ export const reportsApi = {
     day_of_week?: number;
     day_of_month?: number;
   }): Promise<ScheduledReport> => {
-    const response = await api.post(`/reports/${reportId}/schedules`, data);
+    // The endpoint reads report_id from the path, but ScheduledReportCreate
+    // also requires it in the body — include it to avoid a 422.
+    const response = await api.post(`/reports/${reportId}/schedules`, {
+      report_id: reportId,
+      ...data,
+    });
     return response.data;
   },
 

@@ -255,8 +255,17 @@ def get_all_activities() -> list:
         purge_behavioral_events,
     )
     from aexy.temporal.activities.tables import cleanup_expired_audit_logs
+    from aexy.temporal.activities.reports import (
+        cleanup_expired_exports,
+        deliver_scheduled_reports,
+        process_export_job,
+    )
 
     return [
+        # Reporting / analytics exports
+        process_export_job,
+        deliver_scheduled_reports,
+        cleanup_expired_exports,
         # Tables / audit-log maintenance
         cleanup_expired_audit_logs,
         # Analysis
