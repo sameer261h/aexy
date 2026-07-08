@@ -9472,7 +9472,7 @@ export const linearApi = {
 // CRM Types
 // ============================================================================
 
-export type CRMObjectType = "company" | "person" | "deal" | "custom";
+export type CRMObjectType = "company" | "person" | "deal" | "lead" | "custom";
 
 export type CRMAttributeType =
   | "text"
@@ -9619,6 +9619,68 @@ export interface CRMListEntry {
   record?: CRMRecord;
   order: number;
   added_at: string;
+}
+
+// ==================== Pipelines ====================
+
+export type CRMStageType = "open" | "won" | "lost";
+
+export interface CRMPipelineStage {
+  id: string;
+  pipeline_id: string;
+  name: string;
+  value_key: string;
+  stage_type: CRMStageType;
+  position: number;
+  color: string | null;
+  probability: number;
+  rotting_days: number | null;
+  is_active: boolean;
+}
+
+export interface CRMPipeline {
+  id: string;
+  workspace_id: string;
+  object_id: string;
+  status_attribute_id: string | null;
+  name: string;
+  slug: string;
+  description: string | null;
+  is_default: boolean;
+  position: number;
+  is_active: boolean;
+  settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  stages: CRMPipelineStage[];
+}
+
+export interface CRMStageSummary {
+  pipeline_id: string;
+  stages: {
+    stage_key: string;
+    name: string;
+    stage_type: CRMStageType;
+    probability: number;
+    count: number;
+    total_value: number;
+    weighted_value: number;
+  }[];
+}
+
+export interface CRMPipelineForecast {
+  pipeline_id: string;
+  open_value: number;
+  weighted_forecast: number;
+  won_value: number;
+  open_count: number;
+}
+
+export interface CRMLeadConvertResult {
+  lead_id: string;
+  company_id: string | null;
+  contact_id: string | null;
+  deal_id: string | null;
 }
 
 export type CRMAutomationTriggerType =
@@ -10104,6 +10166,170 @@ export const crmApi = {
 
     removeEntry: async (workspaceId: string, listId: string, recordId: string): Promise<void> => {
       await api.delete(`/workspaces/${workspaceId}/crm/lists/${listId}/entries/${recordId}`);
+    },
+  },
+
+  // Pipelines & stages
+  pipelines: {
+    list: async (workspaceId: string, objectId?: string): Promise<CRMPipeline[]> => {
+      const response = await api.get(`/workspaces/${workspaceId}/crm/pipelines`, {
+        params: objectId ? { object_id: objectId } : undefined,
+      });
+      return response.data;
+    },
+
+    get: async (workspaceId: string, pipelineId: string): Promise<CRMPipeline> => {
+      const response = await api.get(`/workspaces/${workspaceId}/crm/pipelines/${pipelineId}`);
+      return response.data;
+    },
+
+    create: async (
+      workspaceId: string,
+      data: {
+        object_id: string;
+        name: string;
+        description?: string;
+        is_default?: boolean;
+        adopt_attribute_id?: string;
+        status_attribute_name?: string;
+        stages?: { name: string; color?: string; stage_type?: CRMStageType; probability?: number }[];
+      }
+    ): Promise<CRMPipeline> => {
+      const response = await api.post(`/workspaces/${workspaceId}/crm/pipelines`, data);
+      return response.data;
+    },
+
+    update: async (
+      workspaceId: string,
+      pipelineId: string,
+      data: Partial<{ name: string; description: string; settings: Record<string, unknown>; is_active: boolean }>
+    ): Promise<CRMPipeline> => {
+      const response = await api.patch(`/workspaces/${workspaceId}/crm/pipelines/${pipelineId}`, data);
+      return response.data;
+    },
+
+    delete: async (workspaceId: string, pipelineId: string): Promise<void> => {
+      await api.delete(`/workspaces/${workspaceId}/crm/pipelines/${pipelineId}`);
+    },
+
+    setDefault: async (workspaceId: string, pipelineId: string): Promise<CRMPipeline> => {
+      const response = await api.post(`/workspaces/${workspaceId}/crm/pipelines/${pipelineId}/set-default`);
+      return response.data;
+    },
+
+    createStage: async (
+      workspaceId: string,
+      pipelineId: string,
+      data: { name: string; color?: string; stage_type?: CRMStageType; probability?: number; rotting_days?: number }
+    ): Promise<CRMPipelineStage> => {
+      const response = await api.post(`/workspaces/${workspaceId}/crm/pipelines/${pipelineId}/stages`, data);
+      return response.data;
+    },
+
+    updateStage: async (
+      workspaceId: string,
+      pipelineId: string,
+      stageId: string,
+      data: Partial<{ name: string; color: string; stage_type: CRMStageType; probability: number; rotting_days: number }>
+    ): Promise<CRMPipelineStage> => {
+      const response = await api.patch(
+        `/workspaces/${workspaceId}/crm/pipelines/${pipelineId}/stages/${stageId}`,
+        data
+      );
+      return response.data;
+    },
+
+    deleteStage: async (
+      workspaceId: string,
+      pipelineId: string,
+      stageId: string,
+      reassignTo?: string | null
+    ): Promise<void> => {
+      await api.delete(`/workspaces/${workspaceId}/crm/pipelines/${pipelineId}/stages/${stageId}`, {
+        params: reassignTo != null ? { reassign_to: reassignTo } : undefined,
+      });
+    },
+
+    reorderStages: async (
+      workspaceId: string,
+      pipelineId: string,
+      stageIds: string[]
+    ): Promise<CRMPipelineStage[]> => {
+      const response = await api.post(
+        `/workspaces/${workspaceId}/crm/pipelines/${pipelineId}/stages/reorder`,
+        { stage_ids: stageIds }
+      );
+      return response.data;
+    },
+
+    moveRecord: async (
+      workspaceId: string,
+      pipelineId: string,
+      recordId: string,
+      toStageKey: string
+    ): Promise<void> => {
+      await api.post(
+        `/workspaces/${workspaceId}/crm/pipelines/${pipelineId}/records/${recordId}/move`,
+        { to_stage_key: toStageKey }
+      );
+    },
+
+    bulkMove: async (
+      workspaceId: string,
+      pipelineId: string,
+      recordIds: string[],
+      toStageKey: string
+    ): Promise<{ moved: number }> => {
+      const response = await api.post(
+        `/workspaces/${workspaceId}/crm/pipelines/${pipelineId}/bulk-move`,
+        { record_ids: recordIds, to_stage_key: toStageKey }
+      );
+      return response.data;
+    },
+
+    summary: async (workspaceId: string, pipelineId: string): Promise<CRMStageSummary> => {
+      const response = await api.get(
+        `/workspaces/${workspaceId}/crm/pipelines/${pipelineId}/analytics/summary`
+      );
+      return response.data;
+    },
+
+    forecast: async (workspaceId: string, pipelineId: string): Promise<CRMPipelineForecast> => {
+      const response = await api.get(
+        `/workspaces/${workspaceId}/crm/pipelines/${pipelineId}/analytics/forecast`
+      );
+      return response.data;
+    },
+
+    conversion: async (workspaceId: string, pipelineId: string, window = 90) => {
+      const response = await api.get(
+        `/workspaces/${workspaceId}/crm/pipelines/${pipelineId}/analytics/conversion`,
+        { params: { window } }
+      );
+      return response.data;
+    },
+
+    velocity: async (workspaceId: string, pipelineId: string) => {
+      const response = await api.get(
+        `/workspaces/${workspaceId}/crm/pipelines/${pipelineId}/analytics/velocity`
+      );
+      return response.data;
+    },
+
+    convertLead: async (
+      workspaceId: string,
+      recordId: string,
+      data: {
+        create_company?: boolean;
+        create_contact?: boolean;
+        create_deal?: boolean;
+        deal_pipeline_id?: string;
+        deal_stage_key?: string;
+        archive_after_convert?: boolean;
+      }
+    ): Promise<CRMLeadConvertResult> => {
+      const response = await api.post(`/workspaces/${workspaceId}/crm/leads/${recordId}/convert`, data);
+      return response.data;
     },
   },
 };

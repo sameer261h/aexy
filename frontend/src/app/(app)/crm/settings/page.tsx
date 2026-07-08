@@ -15,6 +15,7 @@ import {
   Users,
   DollarSign,
   LayoutGrid,
+  Target,
   Palette,
   Database,
   Link2,
@@ -57,6 +58,7 @@ const objectTypeIcons: Record<CRMObjectType, React.ReactNode> = {
   company: <Building2 className="h-5 w-5" />,
   person: <Users className="h-5 w-5" />,
   deal: <DollarSign className="h-5 w-5" />,
+  lead: <Target className="h-5 w-5" />,
   custom: <LayoutGrid className="h-5 w-5" />,
 };
 

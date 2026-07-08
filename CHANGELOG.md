@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.44] - 2026-07-08
+
+### CRM leads, pipelines, and stage management
+
+The CRM gains first-class sales pipelines, a dedicated Lead object with
+conversion, and pipeline analytics — the pieces needed to run a real
+sales workflow instead of hand-managing a status field.
+
+- **First-class pipelines and stages.** New `CRMPipeline` /
+  `CRMPipelineStage` tables let a workspace define multiple named
+  pipelines per object, each with ordered stages carrying a color, win
+  probability, and open/won/lost type. Stages remain the source of
+  truth but are *projected* into the object's managed `status`
+  attribute, so the existing Kanban board renders them unchanged — the
+  board's "Add stage" button is now real (it previously showed a "coming
+  soon" alert). Stages can be added, renamed, recolored, reordered, and
+  deleted (with record reassignment) from a new stage manager, and every
+  object now offers a board view so a pipeline can be created on the
+  spot. Existing workspaces are backfilled: the seeded Deal "Stage"
+  attribute is adopted into a default "Sales Pipeline" with no record
+  data rewritten.
+- **Dedicated Lead object + conversion.** New workspaces seed a Lead
+  object (lead status, source, estimated value, owner) with its own
+  default pipeline, plus a one-click **Convert** action that creates the
+  linked Company, Contact, and Deal, back-links them onto the lead, and
+  marks it converted. Leads are routed to a rep automatically on
+  creation and when they reach *qualified*, wiring the existing lead
+  routing/SLA engine into the CRM record lifecycle.
+- **Stage history, automation, and analytics.** Moving a record between
+  stages now records queryable stage history, emits the `stage.changed`
+  automation trigger and webhook, and feeds a new **Pipeline Analytics**
+  page: weighted forecast, open/won value, value-by-stage, conversion
+  funnel, and average time-in-stage.
+
 ## [0.8.43] - 2026-07-07
 
 ### Public forms render again, and the task @-mention field no longer freezes

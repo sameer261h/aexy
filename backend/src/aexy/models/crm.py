@@ -28,8 +28,16 @@ class CRMObjectType(str, Enum):
     COMPANY = "company"
     PERSON = "person"
     DEAL = "deal"
+    LEAD = "lead"
     PROJECT = "project"
     CUSTOM = "custom"
+
+
+class CRMStageType(str, Enum):
+    """Semantic type of a pipeline stage."""
+    OPEN = "open"
+    WON = "won"
+    LOST = "lost"
 
 
 class CRMAttributeType(str, Enum):
@@ -98,6 +106,7 @@ class CRMActivityType(str, Enum):
     SEQUENCE_ENROLLED = "sequence.enrolled"
     SEQUENCE_COMPLETED = "sequence.completed"
     ENRICHMENT_COMPLETED = "enrichment.completed"
+    LEAD_CONVERTED = "lead.converted"
 
 
 class CRMAutomationTriggerType(str, Enum):
@@ -1699,4 +1708,199 @@ class CustomFieldType(Base):
 
     __table_args__ = (
         UniqueConstraint("workspace_id", "slug", name="uq_custom_field_type_slug"),
+    )
+
+
+# =============================================================================
+# PIPELINE MODELS
+# =============================================================================
+
+class CRMPipeline(Base):
+    """A named sales/lead pipeline for an object.
+
+    First-class source of truth for stages. Stages are projected into the
+    managed STATUS attribute (``status_attribute_id``) so the existing Kanban
+    board (which reads ``config.options``) keeps working unchanged.
+    """
+
+    __tablename__ = "crm_pipelines"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    object_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("crm_objects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # The managed STATUS attribute this pipeline is bridged to (rendered by Kanban).
+    status_attribute_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("crm_attributes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # {rotting_enabled: bool, forecast_method: str}
+    settings: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+    created_by_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("developers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False,
+    )
+
+    # Relationships
+    workspace: Mapped["Workspace"] = relationship("Workspace", lazy="selectin")
+    object: Mapped["CRMObject"] = relationship("CRMObject", lazy="selectin")
+    status_attribute: Mapped["CRMAttribute"] = relationship("CRMAttribute", lazy="selectin")
+    stages: Mapped[list["CRMPipelineStage"]] = relationship(
+        "CRMPipelineStage",
+        back_populates="pipeline",
+        cascade="all, delete-orphan",
+        order_by="CRMPipelineStage.position",
+        lazy="selectin",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "slug", name="uq_crm_pipeline_slug"),
+        Index("idx_crm_pipeline_object", "object_id", "is_active"),
+    )
+
+
+class CRMPipelineStage(Base):
+    """An ordered stage within a pipeline."""
+
+    __tablename__ = "crm_pipeline_stages"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    pipeline_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("crm_pipelines.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # The slug stored in record.values[status_slug]; join key to config.options[].value.
+    # Immutable after creation.
+    value_key: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    stage_type: Mapped[str] = mapped_column(
+        String(50), default=CRMStageType.OPEN.value, nullable=False,
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    color: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    probability: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rotting_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False,
+    )
+
+    # Relationships
+    pipeline: Mapped["CRMPipeline"] = relationship("CRMPipeline", back_populates="stages")
+
+    __table_args__ = (
+        UniqueConstraint("pipeline_id", "value_key", name="uq_crm_stage_value_key"),
+        Index("idx_crm_stage_pipeline_pos", "pipeline_id", "position"),
+    )
+
+
+class CRMStageHistory(Base):
+    """Queryable log of stage transitions for a record (analytics backbone)."""
+
+    __tablename__ = "crm_stage_history"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    record_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("crm_records.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    pipeline_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("crm_pipelines.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    from_stage_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    to_stage_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    from_stage_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("crm_pipeline_stages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    to_stage_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("crm_pipeline_stages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    changed_by_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("developers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Time spent in the previous stage before this transition.
+    duration_in_previous_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Point-in-time snapshot of relevant record values (e.g. {value: 50000}).
+    record_value_snapshot: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+
+    entered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True,
+    )
+
+    __table_args__ = (
+        Index("idx_crm_stage_history_record", "record_id", "entered_at"),
+        Index("idx_crm_stage_history_ws_pipeline", "workspace_id", "pipeline_id", "entered_at"),
     )

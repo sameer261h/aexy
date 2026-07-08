@@ -31,6 +31,7 @@ interface KanbanBoardProps {
   onRecordClick?: (record: CRMRecord) => void;
   onRecordUpdate?: (recordId: string, values: Record<string, unknown>) => Promise<void>;
   onCreateInStage?: (stage: string) => void;
+  onAddStage?: () => void;
   highlightAttributes?: string[];
   isLoading?: boolean;
   className?: string;
@@ -43,6 +44,7 @@ export function KanbanBoard({
   onRecordClick,
   onRecordUpdate,
   onCreateInStage,
+  onAddStage,
   highlightAttributes = [],
   isLoading = false,
   className,
@@ -215,19 +217,18 @@ export function KanbanBoard({
           />
         )}
 
-        {/* Add stage button (placeholder) */}
-        <div className="flex-shrink-0 w-[300px] flex items-start">
-          <button
-            className="flex items-center gap-2 px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors"
-            onClick={() => {
-              // Could open a modal to add new status options
-              alert("Add stage configuration coming soon");
-            }}
-          >
-            <Plus className="h-4 w-4" />
-            Add stage
-          </button>
-        </div>
+        {/* Add stage button */}
+        {onAddStage && (
+          <div className="flex-shrink-0 w-[300px] flex items-start">
+            <button
+              className="flex items-center gap-2 px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors"
+              onClick={onAddStage}
+            >
+              <Plus className="h-4 w-4" />
+              Add stage
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Drag overlay */}
