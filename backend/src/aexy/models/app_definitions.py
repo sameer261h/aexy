@@ -419,6 +419,26 @@ APP_CATALOG: dict[str, AppConfig] = {
             },
         },
     },
+    "reports": {
+        "name": "Reports",
+        "description": "Custom analytics reports, scheduling, and exports",
+        "icon": "FileText",
+        "category": AppCategory.ENGINEERING,
+        "base_route": "/reports",
+        "required_permission": None,  # Accessible to all authenticated users
+        "modules": {
+            "custom_reports": {
+                "name": "Custom Reports",
+                "description": "Build, schedule, and view custom reports",
+                "route": "",
+            },
+            "exports": {
+                "name": "Exports",
+                "description": "Generate and download report exports",
+                "route": "/exports",
+            },
+        },
+    },
     "tables": {
         "name": "Tables",
         "description": "Standalone data tables and databases",

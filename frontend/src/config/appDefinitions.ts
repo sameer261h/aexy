@@ -318,6 +318,19 @@ export const APP_CATALOG: Record<string, AppDefinition> = {
       { id: "developer_drilldown", name: "Developer Drill-down", description: "Individual developer metrics deep-dive", route: "/developers" },
     ],
   },
+  reports: {
+    id: "reports",
+    name: "Reports",
+    description: "Custom analytics reports, scheduling, and exports",
+    icon: FileText,
+    category: "engineering",
+    baseRoute: "/reports",
+    requiredPermission: null,
+    modules: [
+      { id: "custom_reports", name: "Custom Reports", description: "Build, schedule, and view custom reports", route: "" },
+      { id: "exports", name: "Exports", description: "Generate and download report exports", route: "/exports" },
+    ],
+  },
   tables: {
     id: "tables",
     name: "Tables",

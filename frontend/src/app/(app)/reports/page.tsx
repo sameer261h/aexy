@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import Link from "next/link";
+import { toast } from "sonner";
 import {
-  FileText,
   Plus,
   Trash2,
   Copy,
@@ -13,6 +13,7 @@ import {
   Clock,
   LayoutTemplate,
   Eye,
+  Pencil,
   X,
   Loader2,
 } from "lucide-react";
@@ -26,6 +27,8 @@ import {
 import { EmptyState } from "@/components/EmptyState";
 import { BarChart3 } from "lucide-react";
 import { DataTable, DataTableColumn } from "@/components/ui/data-table";
+import { ScheduleReportModal } from "./ScheduleReportModal";
+import { ReportDataView } from "./ReportDataView";
 
 /** Row type for the scheduled reports table, enriched with the resolved report name. */
 type ScheduledReportRow = ScheduledReport & { reportName: string };
@@ -38,8 +41,11 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [selectedReport, setSelectedReport] = useState<CustomReport | null>(null);
+  const [schedulingReport, setSchedulingReport] = useState<CustomReport | null>(null);
   const [creatingFromTemplate, setCreatingFromTemplate] = useState<string | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
+  const [cloning, setCloning] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -54,6 +60,7 @@ export default function ReportsPage() {
       setSchedules(schedulesData);
     } catch (error) {
       console.error("Failed to fetch data:", error);
+      toast.error("Failed to load reports. Please refresh to try again.");
     } finally {
       setLoading(false);
     }
@@ -71,28 +78,40 @@ export default function ReportsPage() {
       const newReport = await reportsApi.createFromTemplate(templateId);
       setReports((prev) => [newReport, ...prev]);
       setShowTemplateModal(false);
+      toast.success(`Created "${newReport.name}"`);
     } catch (error) {
       console.error("Failed to create report:", error);
+      toast.error("Failed to create report from template.");
     } finally {
       setCreatingFromTemplate(null);
     }
   };
 
   const handleDeleteReport = async (reportId: string) => {
+    setDeleting(reportId);
     try {
       await reportsApi.deleteReport(reportId);
       setReports((prev) => prev.filter((r) => r.id !== reportId));
+      toast.success("Report deleted");
     } catch (error) {
       console.error("Failed to delete report:", error);
+      toast.error("Failed to delete report.");
+    } finally {
+      setDeleting(null);
     }
   };
 
   const handleCloneReport = async (reportId: string, name: string) => {
+    setCloning(reportId);
     try {
       const cloned = await reportsApi.cloneReport(reportId, `Copy of ${name}`);
       setReports((prev) => [cloned, ...prev]);
+      toast.success(`Cloned to "${cloned.name}"`);
     } catch (error) {
       console.error("Failed to clone report:", error);
+      toast.error("Failed to clone report.");
+    } finally {
+      setCloning(null);
     }
   };
 
@@ -104,11 +123,19 @@ export default function ReportsPage() {
         format: "pdf",
         config: { report_id: reportId },
       });
+      toast.success("Export started — track it on the Exports page.");
     } catch (error) {
       console.error("Failed to export report:", error);
+      toast.error("Failed to start export.");
     } finally {
       setExporting(null);
     }
+  };
+
+  const handleScheduleCreated = (schedule: ScheduledReport) => {
+    setSchedules((prev) => [schedule, ...prev]);
+    setSchedulingReport(null);
+    toast.success("Report scheduled");
   };
 
   const getCategoryColor = (category: string) => {
@@ -170,6 +197,7 @@ export default function ReportsPage() {
         header: "Next Run",
         sortable: true,
         sortValue: (row) => new Date(row.next_run_at).getTime(),
+        // next_run_at is UTC from the API; toLocaleString renders in the user's tz.
         cell: (row) => new Date(row.next_run_at).toLocaleString(),
       },
       {
@@ -298,10 +326,24 @@ export default function ReportsPage() {
                     <Eye className="h-4 w-4" />
                     View
                   </button>
+                  <Link
+                    href={`/reports/${report.id}`}
+                    className="p-2 bg-accent hover:bg-muted text-foreground rounded-lg transition"
+                    title="Edit report"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Link>
+                  <button
+                    onClick={() => setSchedulingReport(report)}
+                    className="p-2 bg-accent hover:bg-muted text-foreground rounded-lg transition"
+                    title="Schedule report"
+                  >
+                    <Calendar className="h-4 w-4" />
+                  </button>
                   <button
                     onClick={() => handleExportReport(report.id)}
                     disabled={exporting === report.id}
-                    className="p-2 bg-accent hover:bg-muted text-foreground rounded-lg transition"
+                    className="p-2 bg-accent hover:bg-muted text-foreground rounded-lg transition disabled:opacity-50"
                     title="Export as PDF"
                   >
                     {exporting === report.id ? (
@@ -312,17 +354,27 @@ export default function ReportsPage() {
                   </button>
                   <button
                     onClick={() => handleCloneReport(report.id, report.name)}
-                    className="p-2 bg-accent hover:bg-muted text-foreground rounded-lg transition"
+                    disabled={cloning === report.id}
+                    className="p-2 bg-accent hover:bg-muted text-foreground rounded-lg transition disabled:opacity-50"
                     title="Clone report"
                   >
-                    <Copy className="h-4 w-4" />
+                    {cloning === report.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Copy className="h-4 w-4" />
+                    )}
                   </button>
                   <button
                     onClick={() => handleDeleteReport(report.id)}
-                    className="p-2 bg-accent hover:bg-muted text-muted-foreground hover:text-red-400 rounded-lg transition"
+                    disabled={deleting === report.id}
+                    className="p-2 bg-accent hover:bg-muted text-muted-foreground hover:text-red-400 rounded-lg transition disabled:opacity-50"
                     title="Delete report"
                   >
-                    <Trash2 className="h-4 w-4" />
+                    {deleting === report.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
                   </button>
                 </div>
               </div>
@@ -427,21 +479,28 @@ export default function ReportsPage() {
         </div>
       )}
 
-      {/* Report View Modal */}
+      {/* Report View Modal — now renders live widget data */}
       {selectedReport && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-card rounded-xl max-w-4xl w-full max-h-[90vh] overflow-hidden border border-border">
+          <div className="bg-card rounded-xl max-w-4xl w-full max-h-[90vh] overflow-hidden border border-border flex flex-col">
             <div className="flex items-center justify-between p-4 border-b border-border">
               <h2 className="text-lg font-semibold text-foreground">{selectedReport.name}</h2>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => handleExportReport(selectedReport.id)}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-accent hover:bg-muted text-foreground text-sm rounded-lg transition"
+                  disabled={exporting === selectedReport.id}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-accent hover:bg-muted text-foreground text-sm rounded-lg transition disabled:opacity-50"
                 >
                   <Download className="h-4 w-4" />
                   Export
                 </button>
-                <button className="flex items-center gap-1 px-3 py-1.5 bg-accent hover:bg-muted text-foreground text-sm rounded-lg transition">
+                <button
+                  onClick={() => {
+                    setSchedulingReport(selectedReport);
+                    setSelectedReport(null);
+                  }}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-accent hover:bg-muted text-foreground text-sm rounded-lg transition"
+                >
                   <Calendar className="h-4 w-4" />
                   Schedule
                 </button>
@@ -453,41 +512,23 @@ export default function ReportsPage() {
                 </button>
               </div>
             </div>
-            <div className="p-6 overflow-y-auto max-h-[70vh]">
+            <div className="p-6 overflow-y-auto">
               {selectedReport.description && (
                 <p className="text-muted-foreground mb-6">{selectedReport.description}</p>
               )}
-              <h3 className="text-foreground font-medium mb-4">Widgets</h3>
-              <div className="grid md:grid-cols-2 gap-4">
-                {selectedReport.widgets.map((widget, idx) => (
-                  <div key={widget.id || idx} className="bg-accent rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <h4 className="text-foreground font-medium">{widget.title}</h4>
-                      <span className="text-xs text-muted-foreground uppercase">
-                        {widget.type.replace("_", " ")}
-                      </span>
-                    </div>
-                    <p className="text-muted-foreground text-sm">
-                      Metric: {widget.metric.replace("_", " ")}
-                    </p>
-                    <p className="text-muted-foreground text-xs mt-1">
-                      Position: ({widget.position.x}, {widget.position.y}) · Size:{" "}
-                      {widget.position.w}x{widget.position.h}
-                    </p>
-                  </div>
-                ))}
-              </div>
-              {selectedReport.filters && Object.keys(selectedReport.filters).length > 0 && (
-                <div className="mt-6">
-                  <h3 className="text-foreground font-medium mb-3">Filters</h3>
-                  <div className="bg-accent rounded-lg p-4 text-sm text-foreground">
-                    <pre>{JSON.stringify(selectedReport.filters, null, 2)}</pre>
-                  </div>
-                </div>
-              )}
+              <ReportDataView report={selectedReport} />
             </div>
           </div>
         </div>
+      )}
+
+      {/* Schedule Modal */}
+      {schedulingReport && (
+        <ScheduleReportModal
+          report={schedulingReport}
+          onClose={() => setSchedulingReport(null)}
+          onCreated={handleScheduleCreated}
+        />
       )}
     </div>
   );

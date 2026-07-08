@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.45] - 2026-07-08
+
+### Reports: working exports, scheduled delivery, and a live report UI
+
+Custom reporting moves from a read-only shell to a working feature. The
+missing background layer meant export jobs were created but never
+processed (stuck "pending" forever) and scheduled reports were saved but
+never sent; both are now wired end to end, and the reports UI can build,
+view, schedule, and edit reports.
+
+- **Exports actually complete.** A new `process_export_job` Temporal
+  activity is dispatched when an export is created, moving jobs from
+  pending → processing → completed and writing the file. All formats
+  work — CSV, JSON, XLSX, and PDF (adds the `reportlab` dependency, so
+  PDF export is now available).
+- **Scheduled reports are delivered.** A `deliver_scheduled_reports`
+  schedule polls due schedules every 15 minutes, renders each report to
+  its configured format, delivers via email and/or Slack, and computes
+  the next run. A daily `cleanup_expired_exports` job removes expired
+  export files and records.
+- **Live report UI.** The report view fetches and renders widget data
+  (charts via Recharts, graceful per-widget notes) instead of showing
+  static metadata; the previously inert Schedule button opens a working
+  scheduling modal; and a new `/reports/[id]` editor edits report
+  metadata and widgets. Report actions now surface success/error toasts
+  and loading states.
+- **Fuller widget data.** Code-quality, team-health, attrition-risk, and
+  skill widgets return real data (or cached predictive insights) instead
+  of stub placeholders.
+- **Plumbing.** Reporting tables gained a migration
+  (`migrate_analytics_reports.sql`); Reports is registered in the app
+  catalog (accessible to all authenticated users); the widget position
+  type was aligned to the backend (`{x, y, width, height}`); and the
+  schedule-create client now sends `report_id` in the body to match the
+  API contract.
+
 ## [0.8.44] - 2026-07-08
 
 ### CRM leads, pipelines, and stage management

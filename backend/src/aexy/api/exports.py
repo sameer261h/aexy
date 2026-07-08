@@ -44,12 +44,25 @@ async def create_export(
             requester_id=current_user_id,
             db=db,
         )
-        return ExportJobResponse.model_validate(job)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+
+    # Kick off async processing so the job actually moves past "pending".
+    response = ExportJobResponse.model_validate(job)
+    from aexy.temporal.activities.reports import ProcessExportInput
+    from aexy.temporal.dispatch import dispatch
+    from aexy.temporal.task_queues import TaskQueue
+
+    await dispatch(
+        "process_export_job",
+        ProcessExportInput(job_id=job.id),
+        task_queue=TaskQueue.OPERATIONS,
+        workflow_id=f"export-job-{job.id}",
+    )
+    return response
 
 
 @router.get("/{job_id}", response_model=ExportJobResponse)
