@@ -7804,7 +7804,17 @@ export const slackSyncApi = {
 // ==================== Ticketing Types ====================
 
 export type TicketFormAuthMode = "anonymous" | "email_verification";
-export type TicketFormTemplateType = "bug_report" | "feature_request" | "support";
+export type TicketFormTemplateType =
+  | "bug_report"
+  | "feature_request"
+  | "support"
+  | "general_inquiry"
+  | "incident_report"
+  | "feedback"
+  | "sales_demo"
+  | "change_request"
+  | "complaint"
+  | "security_report";
 export type TicketStatus = "new" | "acknowledged" | "in_progress" | "waiting_on_submitter" | "resolved" | "closed";
 export type TicketPriority = "low" | "medium" | "high" | "urgent";
 export type TicketSeverity = "critical" | "high" | "medium" | "low";
@@ -8073,6 +8083,9 @@ export interface FormTemplate {
   name: string;
   description: string;
   field_count: number;
+  icon: string;
+  color: string;
+  category?: string | null;
 }
 
 // ==================== Ticketing API ====================

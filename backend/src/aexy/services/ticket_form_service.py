@@ -33,37 +33,80 @@ def slugify(text: str) -> str:
     return text.strip('_')
 
 
-# Pre-built form templates
+# Pre-built form templates.
+#
+# Conventions (keep every template consistent — see test_ticket_templates.py):
+#   * NO contact fields. Submitter name + email are collected by the public
+#     form's built-in contact section (the form-level ``require_email`` flag,
+#     default True). Templates must never define an ``email``/``name`` field —
+#     that produced a duplicate email input on the public form.
+#   * Field order: headline (``title``) first → free-text specifics → select(s)
+#     → the attachment field LAST.
+#   * A single file convention: ``field_key="attachments"``, ``field_type="file"``,
+#     optional, ``max_file_size_mb=10``. Restrict ``allowed_file_types`` only when
+#     the intent is images (e.g. bug screenshots).
+#   * ``external_mappings`` applied the same way on the common fields:
+#     ``title``→github/jira/linear, ``description``→body/description,
+#     category/severity→labels/priority.
+#   * Each template carries display metadata (``icon`` = lucide icon name,
+#     ``color`` = tailwind classes, ``category``) so the frontend picker is
+#     data-driven and needn't hardcode per-template styling.
+
+# Reusable field builders keep the common fields identical across templates.
+def _title_field(name: str = "Title", placeholder: str = "Brief summary") -> dict:
+    return {
+        "name": name,
+        "field_key": "title",
+        "field_type": "text",
+        "placeholder": placeholder,
+        "is_required": True,
+        "validation_rules": {"min_length": 5, "max_length": 200},
+        "external_mappings": {"github": "title", "jira": "summary", "linear": "title"},
+    }
+
+
+def _description_field(placeholder: str = "Provide as much detail as you can") -> dict:
+    return {
+        "name": "Description",
+        "field_key": "description",
+        "field_type": "textarea",
+        "placeholder": placeholder,
+        "is_required": True,
+        "validation_rules": {"min_length": 20},
+        "external_mappings": {"github": "body", "jira": "description", "linear": "description"},
+    }
+
+
+def _attachments_field(help_text: str = "Attach any relevant files", images_only: bool = False) -> dict:
+    validation: dict = {"max_file_size_mb": 10}
+    if images_only:
+        validation["allowed_file_types"] = ["image/png", "image/jpeg", "image/gif"]
+    return {
+        "name": "Attachments",
+        "field_key": "attachments",
+        "field_type": "file",
+        "is_required": False,
+        "validation_rules": validation,
+        "help_text": help_text,
+    }
+
+
 FORM_TEMPLATES = {
     "bug_report": {
         "name": "Bug Report",
         "description": "Report a bug or issue",
+        "icon": "Bug",
+        "color": "bg-red-100 dark:bg-red-900/30 border-red-800/50",
+        "category": "engineering",
         "fields": [
-            {
-                "name": "Title",
-                "field_key": "title",
-                "field_type": "text",
-                "placeholder": "Brief description of the bug",
-                "is_required": True,
-                "validation_rules": {"min_length": 5, "max_length": 200},
-                "external_mappings": {"github": "title", "jira": "summary", "linear": "title"},
-            },
-            {
-                "name": "Description",
-                "field_key": "description",
-                "field_type": "textarea",
-                "placeholder": "Detailed description of the issue",
-                "is_required": True,
-                "validation_rules": {"min_length": 20},
-                "external_mappings": {"github": "body", "jira": "description", "linear": "description"},
-            },
+            _title_field("Title", "Brief description of the bug"),
+            _description_field("Detailed description of the issue"),
             {
                 "name": "Steps to Reproduce",
                 "field_key": "steps_to_reproduce",
                 "field_type": "textarea",
                 "placeholder": "1. Go to...\n2. Click on...\n3. See error",
                 "is_required": False,
-                "external_mappings": {"github": "body", "jira": "description", "linear": "description"},
             },
             {
                 "name": "Expected Behavior",
@@ -92,46 +135,18 @@ FORM_TEMPLATES = {
                 ],
                 "external_mappings": {"jira": "priority"},
             },
-            {
-                "name": "Email",
-                "field_key": "email",
-                "field_type": "email",
-                "placeholder": "your@email.com",
-                "is_required": True,
-                "help_text": "We'll use this to follow up with you",
-            },
-            {
-                "name": "Screenshots",
-                "field_key": "screenshots",
-                "field_type": "file",
-                "is_required": False,
-                "validation_rules": {"allowed_file_types": ["image/png", "image/jpeg", "image/gif"], "max_file_size_mb": 10},
-                "help_text": "Attach any relevant screenshots",
-            },
+            _attachments_field("Attach screenshots or recordings", images_only=True),
         ],
     },
     "feature_request": {
         "name": "Feature Request",
         "description": "Suggest a new feature or improvement",
+        "icon": "Lightbulb",
+        "color": "bg-yellow-100 dark:bg-yellow-900/30 border-yellow-800/50",
+        "category": "product",
         "fields": [
-            {
-                "name": "Feature Title",
-                "field_key": "title",
-                "field_type": "text",
-                "placeholder": "Brief title for your feature request",
-                "is_required": True,
-                "validation_rules": {"min_length": 5, "max_length": 200},
-                "external_mappings": {"github": "title", "jira": "summary", "linear": "title"},
-            },
-            {
-                "name": "Description",
-                "field_key": "description",
-                "field_type": "textarea",
-                "placeholder": "Describe the feature you'd like to see",
-                "is_required": True,
-                "validation_rules": {"min_length": 20},
-                "external_mappings": {"github": "body", "jira": "description", "linear": "description"},
-            },
+            _title_field("Feature Title", "Brief title for your feature request"),
+            _description_field("Describe the feature you'd like to see"),
             {
                 "name": "Problem it solves",
                 "field_key": "problem",
@@ -158,29 +173,16 @@ FORM_TEMPLATES = {
                     {"value": "critical", "label": "Critical - Need it urgently"},
                 ],
             },
-            {
-                "name": "Email",
-                "field_key": "email",
-                "field_type": "email",
-                "placeholder": "your@email.com",
-                "is_required": True,
-                "help_text": "We'll notify you when this is implemented",
-            },
         ],
     },
     "support": {
         "name": "Support Request",
         "description": "Get help with an issue",
+        "icon": "HelpCircle",
+        "color": "bg-blue-100 dark:bg-blue-900/30 border-blue-800/50",
+        "category": "customer",
         "fields": [
-            {
-                "name": "Subject",
-                "field_key": "title",
-                "field_type": "text",
-                "placeholder": "What do you need help with?",
-                "is_required": True,
-                "validation_rules": {"min_length": 5, "max_length": 200},
-                "external_mappings": {"github": "title", "jira": "summary", "linear": "title"},
-            },
+            _title_field("Subject", "What do you need help with?"),
             {
                 "name": "Category",
                 "field_key": "category",
@@ -195,31 +197,220 @@ FORM_TEMPLATES = {
                 ],
                 "external_mappings": {"github": "labels", "jira": "labels"},
             },
+            _description_field("Please describe your issue or question in detail"),
+            _attachments_field("Attach any relevant files or screenshots"),
+        ],
+    },
+    "general_inquiry": {
+        "name": "General Inquiry",
+        "description": "A simple contact form for general questions",
+        "icon": "Mail",
+        "color": "bg-slate-100 dark:bg-slate-800/40 border-slate-700/50",
+        "category": "customer",
+        "fields": [
+            _title_field("Subject", "What is your inquiry about?"),
+            _description_field("How can we help?"),
+        ],
+    },
+    "incident_report": {
+        "name": "Incident Report",
+        "description": "Report an operational incident or outage",
+        "icon": "AlertTriangle",
+        "color": "bg-orange-100 dark:bg-orange-900/30 border-orange-800/50",
+        "category": "ops",
+        "fields": [
+            _title_field("Incident Summary", "Short summary of the incident"),
+            _description_field("What is happening?"),
             {
-                "name": "Description",
-                "field_key": "description",
+                "name": "Severity",
+                "field_key": "severity",
+                "field_type": "select",
+                "is_required": True,
+                "options": [
+                    {"value": "sev1", "label": "SEV1 - Critical, full outage"},
+                    {"value": "sev2", "label": "SEV2 - Major, degraded service"},
+                    {"value": "sev3", "label": "SEV3 - Minor, limited impact"},
+                    {"value": "sev4", "label": "SEV4 - Low, cosmetic"},
+                ],
+                "external_mappings": {"jira": "priority"},
+            },
+            {
+                "name": "Affected Systems",
+                "field_key": "affected_systems",
+                "field_type": "text",
+                "placeholder": "Which service(s) or components are affected?",
+                "is_required": False,
+            },
+            {
+                "name": "Impact",
+                "field_key": "impact",
                 "field_type": "textarea",
-                "placeholder": "Please describe your issue or question in detail",
+                "placeholder": "Who/what is impacted and how?",
+                "is_required": False,
+            },
+            {
+                "name": "Detected At",
+                "field_key": "detected_at",
+                "field_type": "datetime",
+                "is_required": False,
+                "help_text": "When was the incident first observed?",
+            },
+            _attachments_field("Attach logs, dashboards, or screenshots"),
+        ],
+    },
+    "feedback": {
+        "name": "Feedback",
+        "description": "Share product feedback",
+        "icon": "Star",
+        "color": "bg-purple-100 dark:bg-purple-900/30 border-purple-800/50",
+        "category": "product",
+        "fields": [
+            _title_field("Summary", "One line about your feedback"),
+            {
+                "name": "How likely are you to recommend us?",
+                "field_key": "nps_score",
+                "field_type": "select",
+                "is_required": True,
+                "options": [
+                    {"value": "detractor", "label": "0-6 - Not likely"},
+                    {"value": "passive", "label": "7-8 - Neutral"},
+                    {"value": "promoter", "label": "9-10 - Very likely"},
+                ],
+            },
+            {
+                "name": "What's working well?",
+                "field_key": "what_works",
+                "field_type": "textarea",
+                "placeholder": "What do you like?",
+                "is_required": False,
+            },
+            {
+                "name": "What could be improved?",
+                "field_key": "what_improves",
+                "field_type": "textarea",
+                "placeholder": "What would make this better?",
+                "is_required": False,
+            },
+        ],
+    },
+    "sales_demo": {
+        "name": "Sales / Demo Request",
+        "description": "Request a demo or talk to sales",
+        "icon": "Briefcase",
+        "color": "bg-green-100 dark:bg-green-900/30 border-green-800/50",
+        "category": "sales",
+        "fields": [
+            _title_field("Company", "Your company name"),
+            {
+                "name": "Team Size",
+                "field_key": "team_size",
+                "field_type": "select",
+                "is_required": False,
+                "options": [
+                    {"value": "1_10", "label": "1-10"},
+                    {"value": "11_50", "label": "11-50"},
+                    {"value": "51_200", "label": "51-200"},
+                    {"value": "200_plus", "label": "200+"},
+                ],
+            },
+            _description_field("Tell us about your use case"),
+            {
+                "name": "Desired Timeline",
+                "field_key": "timeline",
+                "field_type": "text",
+                "placeholder": "When are you looking to get started?",
+                "is_required": False,
+            },
+        ],
+    },
+    "change_request": {
+        "name": "Change Request",
+        "description": "Request a change to a system or process",
+        "icon": "RefreshCw",
+        "color": "bg-cyan-100 dark:bg-cyan-900/30 border-cyan-800/50",
+        "category": "ops",
+        "fields": [
+            _title_field("Change Summary", "What change are you requesting?"),
+            _description_field("Describe the change in detail"),
+            {
+                "name": "Motivation",
+                "field_key": "motivation",
+                "field_type": "textarea",
+                "placeholder": "Why is this change needed?",
+                "is_required": False,
+            },
+            {
+                "name": "Risk & Impact",
+                "field_key": "risk_impact",
+                "field_type": "textarea",
+                "placeholder": "What is the risk and who is affected?",
+                "is_required": False,
+            },
+            {
+                "name": "Rollout Notes",
+                "field_key": "rollout_notes",
+                "field_type": "textarea",
+                "placeholder": "Deployment / rollback considerations",
+                "is_required": False,
+            },
+        ],
+    },
+    "complaint": {
+        "name": "Complaint",
+        "description": "File a complaint",
+        "icon": "MessageSquare",
+        "color": "bg-rose-100 dark:bg-rose-900/30 border-rose-800/50",
+        "category": "customer",
+        "fields": [
+            _title_field("Subject", "What is your complaint about?"),
+            _description_field("Please describe what happened"),
+            {
+                "name": "Desired Resolution",
+                "field_key": "desired_resolution",
+                "field_type": "textarea",
+                "placeholder": "What outcome are you looking for?",
+                "is_required": False,
+            },
+            _attachments_field("Attach any supporting evidence"),
+        ],
+    },
+    "security_report": {
+        "name": "Security Report",
+        "description": "Report a security vulnerability or abuse",
+        "icon": "ShieldAlert",
+        "color": "bg-amber-100 dark:bg-amber-900/30 border-amber-800/50",
+        "category": "engineering",
+        "fields": [
+            _title_field("Summary", "Brief summary of the issue"),
+            {
+                "name": "Affected Area",
+                "field_key": "affected_area",
+                "field_type": "text",
+                "placeholder": "Which system, endpoint, or asset?",
+                "is_required": False,
+            },
+            {
+                "name": "Severity",
+                "field_key": "severity",
+                "field_type": "select",
+                "is_required": True,
+                "options": [
+                    {"value": "low", "label": "Low"},
+                    {"value": "medium", "label": "Medium"},
+                    {"value": "high", "label": "High"},
+                    {"value": "critical", "label": "Critical"},
+                ],
+                "external_mappings": {"jira": "priority"},
+            },
+            {
+                "name": "Steps to Reproduce",
+                "field_key": "steps_to_reproduce",
+                "field_type": "textarea",
+                "placeholder": "How can we reproduce the issue?",
                 "is_required": True,
                 "validation_rules": {"min_length": 20},
-                "external_mappings": {"github": "body", "jira": "description", "linear": "description"},
             },
-            {
-                "name": "Email",
-                "field_key": "email",
-                "field_type": "email",
-                "placeholder": "your@email.com",
-                "is_required": True,
-                "help_text": "We'll respond to this email",
-            },
-            {
-                "name": "Attachments",
-                "field_key": "attachments",
-                "field_type": "file",
-                "is_required": False,
-                "validation_rules": {"max_file_size_mb": 10},
-                "help_text": "Attach any relevant files or screenshots",
-            },
+            _attachments_field("Attach a proof-of-concept or screenshots"),
         ],
     },
 }
@@ -623,12 +814,15 @@ class TicketFormService:
     # ==================== Template Methods ====================
 
     def get_available_templates(self) -> dict:
-        """Get available form templates."""
+        """Get available form templates (with display metadata for the picker)."""
         return {
             key: {
                 "name": template["name"],
                 "description": template["description"],
                 "field_count": len(template["fields"]),
+                "icon": template.get("icon", "FileText"),
+                "color": template.get("color", "bg-muted border-border"),
+                "category": template.get("category"),
             }
             for key, template in FORM_TEMPLATES.items()
         }

@@ -30,6 +30,13 @@ class TicketFormTemplateType(str, Enum):
     BUG_REPORT = "bug_report"
     FEATURE_REQUEST = "feature_request"
     SUPPORT = "support"
+    GENERAL_INQUIRY = "general_inquiry"
+    INCIDENT_REPORT = "incident_report"
+    FEEDBACK = "feedback"
+    SALES_DEMO = "sales_demo"
+    CHANGE_REQUEST = "change_request"
+    COMPLAINT = "complaint"
+    SECURITY_REPORT = "security_report"
 
 
 class TicketStatus(str, Enum):
@@ -68,6 +75,8 @@ class TicketFieldType(str, Enum):
     CHECKBOX = "checkbox"
     FILE = "file"
     DATE = "date"
+    DATETIME = "datetime"
+    NUMBER = "number"
 
 
 def generate_public_token() -> str:

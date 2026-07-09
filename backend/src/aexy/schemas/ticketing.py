@@ -7,11 +7,22 @@ from pydantic import BaseModel, ConfigDict, Field, EmailStr
 
 # Type literals
 TicketFormAuthMode = Literal["anonymous", "email_verification"]
-TicketFormTemplateType = Literal["bug_report", "feature_request", "support"]
+TicketFormTemplateType = Literal[
+    "bug_report",
+    "feature_request",
+    "support",
+    "general_inquiry",
+    "incident_report",
+    "feedback",
+    "sales_demo",
+    "change_request",
+    "complaint",
+    "security_report",
+]
 TicketStatus = Literal["new", "acknowledged", "in_progress", "waiting_on_submitter", "resolved", "closed"]
 TicketPriority = Literal["low", "medium", "high", "urgent"]
 TicketSeverity = Literal["critical", "high", "medium", "low"]
-TicketFieldType = Literal["text", "textarea", "email", "select", "multiselect", "checkbox", "file", "date"]
+TicketFieldType = Literal["text", "textarea", "email", "select", "multiselect", "checkbox", "file", "date", "datetime", "number"]
 EscalationLevel = Literal["level_1", "level_2", "level_3", "level_4"]
 NotificationChannel = Literal["email", "slack", "in_app"]
 

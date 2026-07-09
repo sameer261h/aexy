@@ -20,25 +20,44 @@ import {
   Loader2,
   Eye,
   Edit3,
+  Mail,
+  AlertTriangle,
+  Star,
+  Briefcase,
+  RefreshCw,
+  MessageSquare,
+  ShieldAlert,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { FormInput } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useTicketForms, useTicketFormTemplates } from "@/hooks/useTicketing";
-import { TicketFormTemplateType } from "@/lib/api";
+import { TicketFormTemplateType, FormTemplate } from "@/lib/api";
 
-const TEMPLATE_ICONS: Record<string, React.ReactNode> = {
-  bug_report: <Bug className="h-5 w-5 text-red-400" />,
-  feature_request: <Lightbulb className="h-5 w-5 text-yellow-400" />,
-  support: <HelpCircle className="h-5 w-5 text-blue-400" />,
+// Maps the icon *name* returned by the templates API to a lucide component.
+// The picker is data-driven off the API, so any new backend template renders
+// automatically; unknown icon names fall back to FileText.
+const TEMPLATE_ICON_MAP: Record<string, LucideIcon> = {
+  Bug,
+  Lightbulb,
+  HelpCircle,
+  Mail,
+  AlertTriangle,
+  Star,
+  Briefcase,
+  RefreshCw,
+  MessageSquare,
+  ShieldAlert,
+  FileText,
 };
 
-const TEMPLATE_COLORS: Record<string, string> = {
-  bug_report: "bg-red-100 dark:bg-red-900/30 border-red-800/50",
-  feature_request: "bg-yellow-100 dark:bg-yellow-900/30 border-yellow-800/50",
-  support: "bg-blue-100 dark:bg-blue-900/30 border-blue-800/50",
-};
+const DEFAULT_TEMPLATE_COLOR = "bg-muted border-border";
+
+function templateIcon(iconName?: string): LucideIcon {
+  return (iconName && TEMPLATE_ICON_MAP[iconName]) || FileText;
+}
 
 interface FormRowProps {
   form: {
@@ -55,9 +74,11 @@ interface FormRowProps {
   onDelete: (formId: string) => void;
   isDuplicating: boolean;
   isDeleting: boolean;
+  templateMeta?: FormTemplate;
 }
 
-function FormRow({ form, onDuplicate, onDelete, isDuplicating, isDeleting }: FormRowProps) {
+function FormRow({ form, onDuplicate, onDelete, isDuplicating, isDeleting, templateMeta }: FormRowProps) {
+  const RowIcon = templateIcon(templateMeta?.icon);
   const router = useRouter();
   const [showMenu, setShowMenu] = useState(false);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
@@ -86,8 +107,8 @@ function FormRow({ form, onDuplicate, onDelete, isDuplicating, isDeleting }: For
   return (
     <>
       <div className="flex items-center gap-4 p-4 bg-card rounded-xl border border-border hover:border-border transition group">
-        <div className={`p-3 rounded-lg ${form.template_type ? TEMPLATE_COLORS[form.template_type] : "bg-muted"}`}>
-          {form.template_type ? TEMPLATE_ICONS[form.template_type] : <FileText className="h-5 w-5 text-muted-foreground" />}
+        <div className={`p-3 rounded-lg ${templateMeta?.color || "bg-muted"}`}>
+          <RowIcon className="h-5 w-5 text-muted-foreground" />
         </div>
 
         <div className="flex-1 min-w-0">
@@ -356,6 +377,7 @@ export default function TicketFormsPage() {
                 onDelete={handleDelete}
                 isDuplicating={isDuplicating}
                 isDeleting={isDeleting}
+                templateMeta={form.template_type ? templates[form.template_type] : undefined}
               />
             ))}
           </div>
@@ -396,30 +418,33 @@ export default function TicketFormsPage() {
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm text-muted-foreground mb-2">Select Template</label>
-                  <div className="space-y-2">
-                    {(["bug_report", "feature_request", "support"] as TicketFormTemplateType[]).map((type) => (
-                      <button
-                        key={type}
-                        onClick={() => setSelectedTemplate(type)}
-                        className={`w-full p-4 rounded-lg border transition flex items-center gap-4 ${
-                          selectedTemplate === type
-                            ? "border-purple-500 bg-purple-50 dark:bg-purple-900/20"
-                            : "border-border bg-muted/50 hover:border-border"
-                        }`}
-                      >
-                        <div className={`p-2 rounded-lg ${TEMPLATE_COLORS[type]}`}>
-                          {TEMPLATE_ICONS[type]}
-                        </div>
-                        <div className="text-left">
-                          <p className="text-foreground font-medium">
-                            {templates[type]?.name || type.replace(/_/g, " ")}
-                          </p>
-                          <p className="text-muted-foreground text-sm">
-                            {templates[type]?.description || `Template for ${type.replace(/_/g, " ")}`}
-                          </p>
-                        </div>
-                      </button>
-                    ))}
+                  <div className="space-y-2 max-h-[22rem] overflow-y-auto pr-1">
+                    {Object.entries(templates).map(([type, meta]) => {
+                      const Icon = templateIcon(meta.icon);
+                      return (
+                        <button
+                          key={type}
+                          onClick={() => setSelectedTemplate(type as TicketFormTemplateType)}
+                          className={`w-full p-4 rounded-lg border transition flex items-center gap-4 ${
+                            selectedTemplate === type
+                              ? "border-purple-500 bg-purple-50 dark:bg-purple-900/20"
+                              : "border-border bg-muted/50 hover:border-border"
+                          }`}
+                        >
+                          <div className={`p-2 rounded-lg ${meta.color || DEFAULT_TEMPLATE_COLOR}`}>
+                            <Icon className="h-5 w-5" />
+                          </div>
+                          <div className="text-left">
+                            <p className="text-foreground font-medium">
+                              {meta.name || type.replace(/_/g, " ")}
+                            </p>
+                            <p className="text-muted-foreground text-sm">
+                              {meta.description || `Template for ${type.replace(/_/g, " ")}`}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
                 <div>

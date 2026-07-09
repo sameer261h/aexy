@@ -705,10 +705,13 @@ async def create_task_from_ticket(
 
     description = "\n".join(description_parts)
 
-    # Create the task directly
+    # Create the task directly. team_id must be set from the request's
+    # project_id: a project-level (no-sprint) task with a null team_id is
+    # orphaned — it belongs to no board and can't be opened via deep links.
     task = SprintTask(
         id=str(uuid4()),
         sprint_id=request_data.sprint_id,  # Can be None for project-level tasks
+        team_id=request_data.project_id,
         workspace_id=workspace_id,
         source_type="ticket",
         source_id=str(ticket.id),
