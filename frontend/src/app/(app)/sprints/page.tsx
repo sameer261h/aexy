@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -33,7 +33,13 @@ import { useProjects } from "@/hooks/useProjects";
 import { useSprints, useActiveSprint } from "@/hooks/useSprints";
 import { useQuery } from "@tanstack/react-query";
 import { redirect } from "next/navigation";
-import { Project, SprintListItem, SprintTask, projectTasksApi } from "@/lib/api";
+import {
+  Project,
+  SprintListItem,
+  SprintTask,
+  projectTasksApi,
+  workspaceTasksApi,
+} from "@/lib/api";
 import { EpicsTab } from "./components/EpicsTab";
 import { ModuleAutomationsPanel } from "@/components/ModuleAutomationsPanel";
 import { WorkspaceTasksTab } from "@/components/planning/WorkspaceTasksTab";
@@ -390,6 +396,38 @@ function SprintsPageContent() {
     useProjects(currentWorkspaceId);
   const [showCreateProject, setShowCreateProject] = useState(false);
 
+  // Deep link: /sprints?task=<id>. Activity feeds and chat widgets emit this
+  // project-less form (they only know the task id), so resolve which project
+  // the task belongs to and forward to that project's board, where the
+  // `?task=` param opens the task detail.
+  const taskIdParam = searchParams.get("task");
+  const {
+    data: resolvedTeamId,
+    isLoading: resolvingTask,
+  } = useQuery<string | null>({
+    queryKey: ["resolveTaskProject", currentWorkspaceId, taskIdParam],
+    enabled: !!taskIdParam && !!currentWorkspaceId,
+    queryFn: async () => {
+      const tasks = await workspaceTasksApi.list(currentWorkspaceId!, {
+        include_archived: true,
+      });
+      return tasks.find((t) => t.id === taskIdParam)?.team_id ?? null;
+    },
+  });
+
+  useEffect(() => {
+    if (taskIdParam && resolvedTeamId) {
+      router.replace(`/sprints/${resolvedTeamId}/board?task=${taskIdParam}`);
+    }
+  }, [taskIdParam, resolvedTeamId, router]);
+
+  // While resolving (or right before the redirect fires) show a spinner
+  // instead of flashing the Planning overview.
+  const openingTask = !!taskIdParam && (resolvingTask || !!resolvedTeamId);
+  // Resolved but no match: task was deleted, isn't accessible, or has no
+  // project. Surface a notice rather than silently showing the overview.
+  const taskNotFound = !!taskIdParam && !openingTask;
+
   const handleCreateProject = async (data: CreateProjectInput) => {
     const project = await createProject(data);
     // Navigate directly to the new project's sprint board
@@ -437,6 +475,39 @@ function SprintsPageContent() {
 
   if (!isAuthenticated) {
     redirect("/");
+  }
+
+  // Deep link in flight: forwarding to the task's project board.
+  if (openingTask) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4">
+        <div className="animate-spin h-8 w-8 border-2 border-primary-500 border-t-transparent rounded-full" />
+        <p className="text-sm text-muted-foreground">Opening task…</p>
+      </div>
+    );
+  }
+
+  if (taskNotFound) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4 px-4 text-center">
+        <div className="w-16 h-16 bg-muted rounded-2xl flex items-center justify-center">
+          <ListTodo className="h-8 w-8 text-muted-foreground" />
+        </div>
+        <div>
+          <h2 className="text-lg font-semibold text-foreground">Task not found</h2>
+          <p className="text-sm text-muted-foreground mt-1 max-w-sm">
+            This task may have been deleted, or you don&apos;t have access to it.
+          </p>
+        </div>
+        <Link
+          href="/sprints"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-muted hover:bg-accent text-foreground border border-border rounded-xl transition text-sm"
+        >
+          <ArrowRight className="h-4 w-4" />
+          Back to Planning
+        </Link>
+      </div>
+    );
   }
 
   return (

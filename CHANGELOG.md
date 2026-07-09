@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.47] - 2026-07-09
+
+### Fix: task deep links open the task regardless of its state
+
+The `/sprints?task=<id>` links emitted by activity feeds and chat
+widgets only carry a task id (no project), so they landed on the
+Planning overview and did nothing. They now open the task.
+
+- **Project-less deep links resolve.** `/sprints?task=<id>` looks up
+  which project the task belongs to (via the workspace-wide task list,
+  including archived) and forwards to that project's board, showing an
+  "Opening task…" state while it resolves and a "Task not found" notice
+  if the id can't be resolved (deleted or no access).
+- **Open regardless of state.** The board's `?task=` handler no longer
+  requires the task to be in the loaded board set: if it isn't there
+  (archived, hidden by an active filter, or otherwise outside the set),
+  the board fetches it directly by id and opens it. A guard ensures a
+  genuinely-missing task is attempted only once.
+
 ## [0.8.46] - 2026-07-09
 
 ### Publicly shareable ticket links with gated attachments

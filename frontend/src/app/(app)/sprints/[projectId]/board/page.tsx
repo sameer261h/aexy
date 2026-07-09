@@ -2481,12 +2481,16 @@ export default function ProjectBoardPage({
 
   const [selectedTask, setSelectedTask] = useState<SprintTask | null>(null);
   const dismissedTaskIdFromUrlRef = useRef<string | null>(null);
+  // Tracks the last task id we've already fetched directly (see below), so a
+  // missing/404 task doesn't loop the effect.
+  const fetchedUrlTaskIdRef = useRef<string | null>(null);
 
   // Auto-open task from URL query parameter (e.g. notification deep links)
   const taskIdFromUrl = searchParams.get("task");
   useEffect(() => {
     if (!taskIdFromUrl) {
       dismissedTaskIdFromUrlRef.current = null;
+      fetchedUrlTaskIdRef.current = null;
       return;
     }
 
@@ -2494,11 +2498,28 @@ export default function ProjectBoardPage({
       return;
     }
 
-    if (filteredTasks.length > 0) {
-      const task = filteredTasks.find((t) => t.id === taskIdFromUrl);
-      if (task) setSelectedTask(task);
+    // Prefer the copy already on the board — it stays in sync with drag/drop
+    // and inline edits.
+    const task = filteredTasks.find((t) => t.id === taskIdFromUrl);
+    if (task) {
+      setSelectedTask(task);
+      return;
     }
-  }, [taskIdFromUrl, filteredTasks, selectedTask]);
+
+    // Not on the board: the task is archived, hidden by an active filter, or
+    // lives outside the loaded set. Once loading settles, fetch it directly by
+    // id so the deep link opens regardless of the task's state. Guard with a
+    // ref so a genuinely-missing task is attempted only once.
+    if (!isLoading && fetchedUrlTaskIdRef.current !== taskIdFromUrl && projectId) {
+      fetchedUrlTaskIdRef.current = taskIdFromUrl;
+      projectTasksApi
+        .get(projectId, taskIdFromUrl)
+        .then((fetched) => setSelectedTask(fetched))
+        .catch(() => {
+          /* deleted or no access — leave the board as-is */
+        });
+    }
+  }, [taskIdFromUrl, filteredTasks, selectedTask, isLoading, projectId]);
 
   const handleCloseTaskModal = useCallback(() => {
     setSelectedTask(null);
