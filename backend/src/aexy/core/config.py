@@ -797,6 +797,11 @@ class Settings(BaseSettings):
         description="Maximum file size for compliance document uploads in MB",
         validation_alias="COMPLIANCE_MAX_FILE_SIZE_MB",
     )
+    ticket_max_attachment_mb: int = Field(
+        default=100,
+        description="Maximum size per ticket attachment upload in MB",
+        validation_alias="TICKET_MAX_ATTACHMENT_MB",
+    )
 
     # Deprecated R2 fields (kept for backward compatibility)
     r2_access_key_id: str = Field(

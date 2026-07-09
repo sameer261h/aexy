@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.46] - 2026-07-09
+
+### Publicly shareable ticket links with gated attachments
+
+Tickets can now be shared with people outside the workspace through a
+tokenised link that opens the ticket directly — no login required to
+read, with an optional path to reply for members who are signed in.
+
+- **Share links.** A new `TicketShareLink` model backs a per-ticket
+  link (`/public/tickets/{token}`) that can be enabled, copied,
+  regenerated, and revoked from a Share dialog on the ticket page.
+  Links support an optional password (bcrypt-hashed), an expiry, and a
+  max-use count; a public router (mounted without the `tickets` app
+  gate) serves the read-only view and enforces all four rules.
+- **Filtered public view.** Anonymous visitors see the ticket fields,
+  status, submitter name, and public replies only — internal notes,
+  assignee/team, and submitter PII beyond the name are stripped. A
+  visitor who is already authenticated as a member of the ticket's
+  workspace additionally gets a reply box (`can_reply`).
+- **Configurable default.** Ticket forms gained a
+  `default_share_enabled` toggle ("Create a public share link for new
+  tickets"); when set, `create_ticket` mints a share link
+  automatically.
+- **Attachments, privately stored and token-gated.** Attachments are
+  uploaded to private storage keys (never public URLs) and served
+  through a proxy that re-validates the share token on every fetch, so
+  revoking/expiring/password-protecting a link also cuts off its
+  files. Internal-note attachments are never exposed publicly, and
+  downloads don't consume the link's use-count.
+- **Memory-safe large files.** Uploads stream to S3 via
+  `upload_fileobj` (automatic multipart) and downloads stream back in
+  256 KB chunks with HTTP Range / 206 support, so large files no longer
+  buffer wholly in memory. A configurable cap
+  (`TICKET_MAX_ATTACHMENT_MB`, default 100) returns 413 when exceeded,
+  mirrored by a client-side guard.
+- **Plumbing.** New migration
+  (`migrate_2026_07_09_ticket_share_links.sql`) creates the table and
+  adds the form column; storage service gains
+  `upload_fileobj`/`get_object_stream`; 18 unit tests cover token
+  validation, expiry/password/exhaustion, internal-note filtering,
+  streaming + Range, and the gated proxy.
+
 ## [0.8.45] - 2026-07-08
 
 ### Reports: working exports, scheduled delivery, and a live report UI

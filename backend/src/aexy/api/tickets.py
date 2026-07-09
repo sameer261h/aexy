@@ -1,9 +1,12 @@
 """Tickets API endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aexy.core.config import settings
 from aexy.core.database import get_db
+from aexy.services.storage_service import get_storage_service
 from aexy.api.developers import get_current_developer
 from aexy.models.developer import Developer
 from aexy.schemas.ticketing import (
@@ -14,6 +17,9 @@ from aexy.schemas.ticketing import (
     TicketListResponse,
     TicketCommentCreate,
     TicketCommentResponse,
+    TicketShareCreate,
+    TicketShareUpdate,
+    TicketShareResponse,
     TicketStatus,
     TicketPriority,
 )
@@ -27,6 +33,70 @@ router = APIRouter(
 )
 
 
+def safe_attachment(meta: dict) -> dict:
+    """Public-safe attachment metadata (drops the private storage key)."""
+    return {
+        "id": meta.get("id"),
+        "filename": meta.get("filename"),
+        "size": meta.get("size"),
+        "type": meta.get("type"),
+    }
+
+
+def _parse_range(header: str | None) -> tuple[int, int | None] | None:
+    """Parse a single-range ``Range: bytes=start-end`` header. None if absent
+    or unsupported (suffix ranges/multi-range fall back to a full response)."""
+    if not header or not header.startswith("bytes="):
+        return None
+    spec = header[len("bytes="):].split(",")[0].strip()
+    start_s, sep, end_s = spec.partition("-")
+    if not sep or start_s == "":
+        return None
+    try:
+        start = int(start_s)
+        end = int(end_s) if end_s else None
+    except ValueError:
+        return None
+    if start < 0 or (end is not None and end < start):
+        return None
+    return (start, end)
+
+
+def stream_attachment(meta: dict, range_header: str | None = None) -> StreamingResponse:
+    """Stream an attachment from storage without buffering it in memory.
+
+    Honors HTTP Range requests (206) so large media can be seeked/resumed.
+    """
+    key = TicketService.attachment_key(meta)
+    byte_range = _parse_range(range_header)
+    result = get_storage_service().get_object_stream(key, byte_range=byte_range) if key else None
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Attachment file not found",
+        )
+
+    filename = (meta.get("filename") or "attachment").replace('"', "")
+    headers = {
+        "Content-Disposition": f'inline; filename="{filename}"',
+        "Accept-Ranges": "bytes",
+    }
+    if result["content_length"] is not None:
+        headers["Content-Length"] = str(result["content_length"])
+
+    status_code = status.HTTP_200_OK
+    if byte_range is not None and result.get("content_range"):
+        headers["Content-Range"] = result["content_range"]
+        status_code = status.HTTP_206_PARTIAL_CONTENT
+
+    return StreamingResponse(
+        result["iter"],
+        media_type=result["content_type"],
+        headers=headers,
+        status_code=status_code,
+    )
+
+
 def ticket_to_response(ticket) -> TicketResponseSchema:
     """Convert Ticket model to response schema."""
     return TicketResponseSchema(
@@ -38,7 +108,7 @@ def ticket_to_response(ticket) -> TicketResponseSchema:
         submitter_name=ticket.submitter_name,
         email_verified=ticket.email_verified,
         field_values=ticket.field_values or {},
-        attachments=ticket.attachments or [],
+        attachments=[safe_attachment(a) for a in (ticket.attachments or [])],
         status=ticket.status,
         priority=ticket.priority,
         severity=ticket.severity,
@@ -88,11 +158,28 @@ def comment_to_response(response) -> TicketCommentResponse:
         author_email=response.author_email,
         is_internal=response.is_internal,
         content=response.content,
-        attachments=response.attachments or [],
+        attachments=[safe_attachment(a) for a in (response.attachments or [])],
         old_status=response.old_status,
         new_status=response.new_status,
         created_at=response.created_at,
         author_name=response.author.name if response.author else None,
+    )
+
+
+def share_to_response(link) -> TicketShareResponse:
+    """Convert a TicketShareLink model to its response schema (with full URL)."""
+    base = settings.frontend_url.rstrip("/")
+    return TicketShareResponse(
+        id=str(link.id),
+        ticket_id=str(link.ticket_id),
+        token=link.token,
+        url=f"{base}/public/tickets/{link.token}",
+        is_active=link.is_active,
+        has_password=bool(link.password_hash),
+        expires_at=link.expires_at,
+        max_uses=link.max_uses,
+        use_count=link.use_count,
+        created_at=link.created_at,
     )
 
 
@@ -294,6 +381,187 @@ async def delete_ticket(
         )
 
     await ticket_service.delete_ticket(ticket_id)
+
+
+# ==================== Public Share Link Endpoints ====================
+
+async def _get_owned_ticket(workspace_id, ticket_id, ticket_service):
+    """Fetch a ticket and confirm it belongs to the workspace (or 404)."""
+    ticket = await ticket_service.get_ticket(ticket_id)
+    if not ticket or str(ticket.workspace_id) != workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ticket not found",
+        )
+    return ticket
+
+
+@router.get("/{ticket_id}/share", response_model=TicketShareResponse | None)
+async def get_ticket_share(
+    workspace_id: str,
+    ticket_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get the current share link for a ticket, or null if not shared."""
+    await check_workspace_permission(workspace_id, current_user, db)
+    ticket_service = TicketService(db)
+    await _get_owned_ticket(workspace_id, ticket_id, ticket_service)
+
+    link = await ticket_service.get_share_link(ticket_id)
+    return share_to_response(link) if link else None
+
+
+@router.post("/{ticket_id}/share", response_model=TicketShareResponse, status_code=status.HTTP_201_CREATED)
+async def create_ticket_share(
+    workspace_id: str,
+    ticket_id: str,
+    share_data: TicketShareCreate,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create or enable a public share link for a ticket."""
+    await check_workspace_permission(workspace_id, current_user, db)
+    ticket_service = TicketService(db)
+    ticket = await _get_owned_ticket(workspace_id, ticket_id, ticket_service)
+
+    link = await ticket_service.create_or_enable_share_link(
+        ticket,
+        created_by_id=str(current_user.id),
+        expires_at=share_data.expires_at,
+        password=share_data.password,
+        max_uses=share_data.max_uses,
+    )
+    return share_to_response(link)
+
+
+@router.patch("/{ticket_id}/share", response_model=TicketShareResponse)
+async def update_ticket_share(
+    workspace_id: str,
+    ticket_id: str,
+    share_data: TicketShareUpdate,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update a ticket's share link (toggle, expiry, password, regenerate)."""
+    await check_workspace_permission(workspace_id, current_user, db)
+    ticket_service = TicketService(db)
+    await _get_owned_ticket(workspace_id, ticket_id, ticket_service)
+
+    link = await ticket_service.update_share_link(
+        ticket_id,
+        is_active=share_data.is_active,
+        expires_at=share_data.expires_at,
+        password=share_data.password,
+        max_uses=share_data.max_uses,
+        regenerate=share_data.regenerate,
+    )
+    if link is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Share link not found",
+        )
+    return share_to_response(link)
+
+
+@router.delete("/{ticket_id}/share", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_ticket_share(
+    workspace_id: str,
+    ticket_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Revoke (delete) a ticket's public share link."""
+    await check_workspace_permission(workspace_id, current_user, db)
+    ticket_service = TicketService(db)
+    await _get_owned_ticket(workspace_id, ticket_id, ticket_service)
+    await ticket_service.revoke_share_link(ticket_id)
+
+
+# ==================== Attachment Endpoints ====================
+
+@router.post("/{ticket_id}/attachments", status_code=status.HTTP_201_CREATED)
+async def upload_ticket_attachments(
+    workspace_id: str,
+    ticket_id: str,
+    files: list[UploadFile] = File(...),
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload one or more files as ticket-level attachments.
+
+    Files are streamed to storage from their spooled temp files, so large
+    uploads don't load into memory. Rejects files over the configured cap.
+    """
+    await check_workspace_permission(workspace_id, current_user, db)
+    ticket_service = TicketService(db)
+    ticket = await _get_owned_ticket(workspace_id, ticket_id, ticket_service)
+
+    def _size(f: UploadFile) -> int:
+        if f.size is not None:
+            return f.size
+        f.file.seek(0, 2)
+        size = f.file.tell()
+        f.file.seek(0)
+        return size
+
+    payload = [
+        (f.filename or "attachment", f.content_type, f.file, _size(f)) for f in files
+    ]
+    try:
+        created = await ticket_service.add_ticket_attachments(ticket, payload)
+    except ValueError as exc:
+        code = str(exc)
+        if code == "too_large":
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File exceeds the {settings.ticket_max_attachment_mb} MB limit",
+            )
+        detail = (
+            "File storage is not configured on this deployment"
+            if code == "storage_unconfigured"
+            else "Failed to upload attachment"
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail)
+
+    return [safe_attachment(m) for m in created]
+
+
+@router.get("/{ticket_id}/attachments/{attachment_id}")
+async def download_ticket_attachment(
+    workspace_id: str,
+    ticket_id: str,
+    attachment_id: str,
+    range_header: str | None = Header(default=None, alias="Range"),
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stream a ticket attachment (workspace members; includes internal notes)."""
+    await check_workspace_permission(workspace_id, current_user, db)
+    ticket_service = TicketService(db)
+    ticket = await _get_owned_ticket(workspace_id, ticket_id, ticket_service)
+
+    meta = ticket_service.find_ticket_attachment(ticket, attachment_id, include_internal=True)
+    if meta is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+    return stream_attachment(meta, range_header)
+
+
+@router.delete("/{ticket_id}/attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_ticket_attachment(
+    workspace_id: str,
+    ticket_id: str,
+    attachment_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a ticket-level attachment."""
+    await check_workspace_permission(workspace_id, current_user, db)
+    ticket_service = TicketService(db)
+    ticket = await _get_owned_ticket(workspace_id, ticket_id, ticket_service)
+
+    if not await ticket_service.remove_ticket_attachment(ticket, attachment_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
 
 
 # ==================== Response/Comment Endpoints ====================

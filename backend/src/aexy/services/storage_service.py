@@ -179,6 +179,94 @@ class StorageService:
             logger.error(f"Failed to upload object {key}: {e}")
             return False
 
+    def get_object(self, key: str) -> tuple[bytes, str] | None:
+        """Download an object's bytes and content-type. None if missing/unset.
+
+        Loads the whole object into memory — prefer `get_object_stream` for
+        anything that could be large.
+        """
+        if not self.is_configured():
+            return None
+
+        try:
+            resp = self._client.get_object(Bucket=self.bucket, Key=key)
+            body = resp["Body"].read()
+            content_type = resp.get("ContentType") or "application/octet-stream"
+            return body, content_type
+        except ClientError as e:
+            logger.error(f"Failed to read object {key}: {e}")
+            return None
+
+    def get_object_stream(
+        self,
+        key: str,
+        byte_range: tuple[int, int | None] | None = None,
+        chunk_size: int = 256 * 1024,
+    ) -> dict[str, Any] | None:
+        """Open an object for streaming without buffering it in memory.
+
+        Returns a dict with `iter` (a generator of byte chunks), `content_type`,
+        `content_length`, and `content_range` (set only for range requests), or
+        None if the object is missing / storage unconfigured. `byte_range` is an
+        (start, end-inclusive-or-None) tuple for HTTP Range support.
+        """
+        if not self.is_configured():
+            return None
+
+        params: dict[str, Any] = {"Bucket": self.bucket, "Key": key}
+        if byte_range is not None:
+            start, end = byte_range
+            params["Range"] = f"bytes={start}-{'' if end is None else end}"
+
+        try:
+            resp = self._client.get_object(**params)
+        except ClientError as e:
+            logger.error(f"Failed to open object {key}: {e}")
+            return None
+
+        body = resp["Body"]  # botocore StreamingBody
+
+        def _iter():
+            try:
+                for chunk in body.iter_chunks(chunk_size=chunk_size):
+                    yield chunk
+            finally:
+                body.close()
+
+        return {
+            "iter": _iter(),
+            "content_type": resp.get("ContentType") or "application/octet-stream",
+            "content_length": resp.get("ContentLength"),
+            "content_range": resp.get("ContentRange"),
+        }
+
+    def upload_fileobj(self, key: str, fileobj: Any, content_type: str) -> bool:
+        """Stream a file-like object to storage (multipart for large files).
+
+        Reads from `fileobj` in chunks rather than loading it into memory, so it
+        scales to large uploads. `fileobj` should be seekable (e.g. an
+        UploadFile's SpooledTemporaryFile).
+        """
+        if not self.is_configured():
+            return False
+
+        try:
+            try:
+                fileobj.seek(0)
+            except (OSError, AttributeError):
+                pass
+            self._client.upload_fileobj(
+                Fileobj=fileobj,
+                Bucket=self.bucket,
+                Key=key,
+                ExtraArgs={"ContentType": content_type},
+            )
+            logger.info(f"Uploaded object (streamed): {key}")
+            return True
+        except ClientError as e:
+            logger.error(f"Failed to stream-upload object {key}: {e}")
+            return False
+
     async def delete_object(self, key: str) -> bool:
         """Delete an object from storage."""
         if not self.is_configured():
