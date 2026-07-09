@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.48] - 2026-07-09
+
+### Fix: tasks created from a ticket were orphaned
+
+The "Create task from ticket" flow accepted a required `project_id` but never
+assigned it to the task, leaving `team_id` NULL. Such a task belonged to no
+project — it showed on no board, sat in no sprint, and couldn't be opened via
+`/sprints?task=<id>` deep links.
+
+- `create_task_from_ticket` now sets `team_id` from the request's
+  `project_id`, so ticket-created tasks land in the right project and are
+  visible/openable.
+- Added a best-effort backfill migration
+  (`migrate_2026_07_09_backfill_ticket_task_team.sql`) that recovers already-
+  orphaned tasks from their linked ticket's `team_id` (where the ticket was
+  assigned a team).
+
+### Ticket form templates: fix duplicate email, normalize, and expand the catalog
+
+The public ticket form already collects the submitter's name and email in a
+built-in contact section, but every pre-built template *also* defined its own
+email field — so users saw two email inputs. The templates had drifted from
+each other in other ways too, and the picker couldn't show anything beyond the
+original three.
+
+- **No more duplicate email.** The redundant `email` field is removed from all
+  templates; submitter contact is handled solely by the form's built-in
+  section (`require_email`, default on). A new invariant test
+  (`test_ticket_templates.py`) prevents a contact field from creeping back in.
+- **Consistent template structure.** All templates now share reusable field
+  builders: title-first ordering, a single `attachments` file convention
+  (always last, 10 MB), and uniform `external_mappings`.
+- **Bigger catalog.** Expanded from 3 to 10 templates — added General Inquiry,
+  Incident Report, Feedback/NPS, Sales/Demo Request, Change Request, Complaint,
+  and Security Report. Each carries `icon`/`color`/`category` metadata.
+- **Data-driven picker.** The ticket-forms settings picker now renders whatever
+  templates the API returns (icon-name → lucide with a fallback), so new
+  templates appear automatically instead of being hardcoded.
+- **Field-type alignment.** Added `datetime` and `number` to the backend
+  `TicketFieldType` enum/schema to match the types the field editor already
+  offered (previously a 422 on save). Extended `TicketFormTemplateType` in the
+  model enum and schema Literal for the new template keys.
+
+Existing forms created from a template are left as-is; the fixes apply to newly
+created forms.
+
 ## [0.8.47] - 2026-07-09
 
 ### Fix: task deep links open the task regardless of its state
