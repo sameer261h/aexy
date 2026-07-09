@@ -1553,6 +1553,67 @@ async def get_record_by_id(
     )
 
 
+@router.patch("/records/bulk")
+async def bulk_update_records(
+    workspace_id: str,
+    data: CRMRecordBulkUpdate,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bulk update records by ID."""
+    await check_workspace_permission(workspace_id, current_user, db)
+
+    service = CRMRecordService(db)
+    for record_id in data.record_ids:
+        record = await service.get_record(record_id)
+        if not record or str(record.workspace_id) != workspace_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Record not found",
+            )
+
+    updated = await service.bulk_update_records(
+        record_ids=data.record_ids,
+        values=data.values,
+        updated_by_id=str(current_user.id),
+    )
+
+    await db.commit()
+
+    return {"updated": updated}
+
+
+@router.delete("/records/bulk")
+async def bulk_delete_records(
+    workspace_id: str,
+    data: CRMRecordBulkDelete,
+    permanent: bool | None = None,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bulk delete records by ID (archive by default)."""
+    await check_workspace_permission(workspace_id, current_user, db)
+
+    service = CRMRecordService(db)
+    for record_id in data.record_ids:
+        record = await service.get_record(record_id)
+        if not record or str(record.workspace_id) != workspace_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Record not found",
+            )
+
+    deleted = await service.bulk_delete_records(
+        record_ids=data.record_ids,
+        permanent=data.permanent if permanent is None else permanent,
+        deleted_by_id=str(current_user.id),
+    )
+
+    await db.commit()
+
+    return {"deleted": deleted}
+
+
 @router.patch("/records/{record_id}", response_model=CRMRecordResponse)
 async def update_record_by_id(
     workspace_id: str,
