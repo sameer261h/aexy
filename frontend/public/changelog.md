@@ -5,6 +5,233 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.49] - 2026-07-10
+
+### Fix: ticket→task description, source backlink, and notification polling
+
+- **Description carries over.** Creating a task from a ticket now populates
+  the task's `description_json` (TipTap doc), not just the plain-text
+  `description`. The task detail editor renders `description_json`, so the
+  carried-over ticket body (with a clean `From:` / `Ticket: TKT-N` header) is
+  now visible instead of an empty body.
+- **Source-ticket backlink.** The task detail header shows a "Source ticket"
+  link when the task was created from a ticket (`source_type === "ticket"`),
+  opening `/tickets/{id}`. The frontend `TaskSourceType` union was aligned with
+  the backend (added `ticket`/`automation`).
+- **Notification polling hardened.** The poll cursor now seeds to "now" (a user
+  with zero notifications previously never polled) and always advances past the
+  fetched window, fixing repeated re-fetching/duplication of the same
+  notifications every 30s. (Note: the `ERR_CONNECTION_CLOSED` seen against the
+  hosted API is a server-availability issue, not a client bug.)
+
+## [0.8.48] - 2026-07-09
+
+### Fix: tasks created from a ticket were orphaned
+
+The "Create task from ticket" flow accepted a required `project_id` but never
+assigned it to the task, leaving `team_id` NULL. Such a task belonged to no
+project — it showed on no board, sat in no sprint, and couldn't be opened via
+`/sprints?task=<id>` deep links.
+
+- `create_task_from_ticket` now sets `team_id` from the request's
+  `project_id`, so ticket-created tasks land in the right project and are
+  visible/openable.
+- Added a best-effort backfill migration
+  (`migrate_2026_07_09_backfill_ticket_task_team.sql`) that recovers already-
+  orphaned tasks from their linked ticket's `team_id` (where the ticket was
+  assigned a team).
+
+### Ticket form templates: fix duplicate email, normalize, and expand the catalog
+
+The public ticket form already collects the submitter's name and email in a
+built-in contact section, but every pre-built template *also* defined its own
+email field — so users saw two email inputs. The templates had drifted from
+each other in other ways too, and the picker couldn't show anything beyond the
+original three.
+
+- **No more duplicate email.** The redundant `email` field is removed from all
+  templates; submitter contact is handled solely by the form's built-in
+  section (`require_email`, default on). A new invariant test
+  (`test_ticket_templates.py`) prevents a contact field from creeping back in.
+- **Consistent template structure.** All templates now share reusable field
+  builders: title-first ordering, a single `attachments` file convention
+  (always last, 10 MB), and uniform `external_mappings`.
+- **Bigger catalog.** Expanded from 3 to 10 templates — added General Inquiry,
+  Incident Report, Feedback/NPS, Sales/Demo Request, Change Request, Complaint,
+  and Security Report. Each carries `icon`/`color`/`category` metadata.
+- **Data-driven picker.** The ticket-forms settings picker now renders whatever
+  templates the API returns (icon-name → lucide with a fallback), so new
+  templates appear automatically instead of being hardcoded.
+- **Field-type alignment.** Added `datetime` and `number` to the backend
+  `TicketFieldType` enum/schema to match the types the field editor already
+  offered (previously a 422 on save). Extended `TicketFormTemplateType` in the
+  model enum and schema Literal for the new template keys.
+
+Existing forms created from a template are left as-is; the fixes apply to newly
+created forms.
+
+## [0.8.47] - 2026-07-09
+
+### Fix: task deep links open the task regardless of its state
+
+The `/sprints?task=<id>` links emitted by activity feeds and chat
+widgets only carry a task id (no project), so they landed on the
+Planning overview and did nothing. They now open the task.
+
+- **Project-less deep links resolve.** `/sprints?task=<id>` looks up
+  which project the task belongs to (via the workspace-wide task list,
+  including archived) and forwards to that project's board, showing an
+  "Opening task…" state while it resolves and a "Task not found" notice
+  if the id can't be resolved (deleted or no access).
+- **Open regardless of state.** The board's `?task=` handler no longer
+  requires the task to be in the loaded board set: if it isn't there
+  (archived, hidden by an active filter, or otherwise outside the set),
+  the board fetches it directly by id and opens it. A guard ensures a
+  genuinely-missing task is attempted only once.
+
+## [0.8.46] - 2026-07-09
+
+### Publicly shareable ticket links with gated attachments
+
+Tickets can now be shared with people outside the workspace through a
+tokenised link that opens the ticket directly — no login required to
+read, with an optional path to reply for members who are signed in.
+
+- **Share links.** A new `TicketShareLink` model backs a per-ticket
+  link (`/public/tickets/{token}`) that can be enabled, copied,
+  regenerated, and revoked from a Share dialog on the ticket page.
+  Links support an optional password (bcrypt-hashed), an expiry, and a
+  max-use count; a public router (mounted without the `tickets` app
+  gate) serves the read-only view and enforces all four rules.
+- **Filtered public view.** Anonymous visitors see the ticket fields,
+  status, submitter name, and public replies only — internal notes,
+  assignee/team, and submitter PII beyond the name are stripped. A
+  visitor who is already authenticated as a member of the ticket's
+  workspace additionally gets a reply box (`can_reply`).
+- **Configurable default.** Ticket forms gained a
+  `default_share_enabled` toggle ("Create a public share link for new
+  tickets"); when set, `create_ticket` mints a share link
+  automatically.
+- **Attachments, privately stored and token-gated.** Attachments are
+  uploaded to private storage keys (never public URLs) and served
+  through a proxy that re-validates the share token on every fetch, so
+  revoking/expiring/password-protecting a link also cuts off its
+  files. Internal-note attachments are never exposed publicly, and
+  downloads don't consume the link's use-count.
+- **Memory-safe large files.** Uploads stream to S3 via
+  `upload_fileobj` (automatic multipart) and downloads stream back in
+  256 KB chunks with HTTP Range / 206 support, so large files no longer
+  buffer wholly in memory. A configurable cap
+  (`TICKET_MAX_ATTACHMENT_MB`, default 100) returns 413 when exceeded,
+  mirrored by a client-side guard.
+- **Plumbing.** New migration
+  (`migrate_2026_07_09_ticket_share_links.sql`) creates the table and
+  adds the form column; storage service gains
+  `upload_fileobj`/`get_object_stream`; 18 unit tests cover token
+  validation, expiry/password/exhaustion, internal-note filtering,
+  streaming + Range, and the gated proxy.
+
+## [0.8.45] - 2026-07-08
+
+### Reports: working exports, scheduled delivery, and a live report UI
+
+Custom reporting moves from a read-only shell to a working feature. The
+missing background layer meant export jobs were created but never
+processed (stuck "pending" forever) and scheduled reports were saved but
+never sent; both are now wired end to end, and the reports UI can build,
+view, schedule, and edit reports.
+
+- **Exports actually complete.** A new `process_export_job` Temporal
+  activity is dispatched when an export is created, moving jobs from
+  pending → processing → completed and writing the file. All formats
+  work — CSV, JSON, XLSX, and PDF (adds the `reportlab` dependency, so
+  PDF export is now available).
+- **Scheduled reports are delivered.** A `deliver_scheduled_reports`
+  schedule polls due schedules every 15 minutes, renders each report to
+  its configured format, delivers via email and/or Slack, and computes
+  the next run. A daily `cleanup_expired_exports` job removes expired
+  export files and records.
+- **Live report UI.** The report view fetches and renders widget data
+  (charts via Recharts, graceful per-widget notes) instead of showing
+  static metadata; the previously inert Schedule button opens a working
+  scheduling modal; and a new `/reports/[id]` editor edits report
+  metadata and widgets. Report actions now surface success/error toasts
+  and loading states.
+- **Fuller widget data.** Code-quality, team-health, attrition-risk, and
+  skill widgets return real data (or cached predictive insights) instead
+  of stub placeholders.
+- **Plumbing.** Reporting tables gained a migration
+  (`migrate_analytics_reports.sql`); Reports is registered in the app
+  catalog (accessible to all authenticated users); the widget position
+  type was aligned to the backend (`{x, y, width, height}`); and the
+  schedule-create client now sends `report_id` in the body to match the
+  API contract.
+
+## [0.8.44] - 2026-07-08
+
+### CRM leads, pipelines, and stage management
+
+The CRM gains first-class sales pipelines, a dedicated Lead object with
+conversion, and pipeline analytics — the pieces needed to run a real
+sales workflow instead of hand-managing a status field.
+
+- **First-class pipelines and stages.** New `CRMPipeline` /
+  `CRMPipelineStage` tables let a workspace define multiple named
+  pipelines per object, each with ordered stages carrying a color, win
+  probability, and open/won/lost type. Stages remain the source of
+  truth but are *projected* into the object's managed `status`
+  attribute, so the existing Kanban board renders them unchanged — the
+  board's "Add stage" button is now real (it previously showed a "coming
+  soon" alert). Stages can be added, renamed, recolored, reordered, and
+  deleted (with record reassignment) from a new stage manager, and every
+  object now offers a board view so a pipeline can be created on the
+  spot. Existing workspaces are backfilled: the seeded Deal "Stage"
+  attribute is adopted into a default "Sales Pipeline" with no record
+  data rewritten.
+- **Dedicated Lead object + conversion.** New workspaces seed a Lead
+  object (lead status, source, estimated value, owner) with its own
+  default pipeline, plus a one-click **Convert** action that creates the
+  linked Company, Contact, and Deal, back-links them onto the lead, and
+  marks it converted. Leads are routed to a rep automatically on
+  creation and when they reach *qualified*, wiring the existing lead
+  routing/SLA engine into the CRM record lifecycle.
+- **Stage history, automation, and analytics.** Moving a record between
+  stages now records queryable stage history, emits the `stage.changed`
+  automation trigger and webhook, and feeds a new **Pipeline Analytics**
+  page: weighted forecast, open/won value, value-by-stage, conversion
+  funnel, and average time-in-stage.
+
+## [0.8.43] - 2026-07-07
+
+### Public forms render again, and the task @-mention field no longer freezes
+
+Three related fixes to public forms and the task description editor:
+
+- **Public forms returned 404 even when active.** Both the legacy
+  ticket-forms module and the newer Forms module publish under the
+  same `/public/forms/{token}` URL, and their two API routers each
+  registered `GET /public/forms/{token}`. The ticket-forms router is
+  mounted first, so it handled *every* request — any form built in the
+  Forms module missed the `ticket_forms` table and 404'd, regardless of
+  its Active/visibility toggle. The public endpoints (get, submit,
+  verify-email) now resolve a token against ticket-forms first and fall
+  back to the Forms module, so both systems are reachable through the
+  shared public page.
+- **The task description `@`-mention selector got stuck.** Typing `@`
+  opened the mention dropdown but then swallowed every subsequent
+  keystroke, leaving the field unusable. The Tiptap key handler was
+  reading stale state (the editor captures its options once) and
+  `return true`-ing on each character, which blocked the editor from
+  inserting text; the dropdown was also clipped by the container's
+  `overflow-hidden`. The handler now reads live values via refs, never
+  blocks typing, and the dropdown is no longer clipped.
+- **Forms-module field types rendered as plain text.** On the shared
+  public page, `phone`, `url`, and `datetime` now use the correct input
+  types, `radio` renders a proper option group, and `hidden` fields are
+  no longer shown as text boxes — their `default_value` is seeded and
+  submitted instead. Field default values are now applied on load in
+  general.
+
 ## [0.8.42] - 2026-07-05
 
 ### Marketing site is now crawlable and shareable (SEO)

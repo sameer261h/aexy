@@ -37,6 +37,8 @@ import {
   AlertTriangle,
   ArchiveRestore,
   Copy,
+  Ticket,
+  ExternalLink,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import {
@@ -1295,6 +1297,7 @@ interface EditTaskModalProps {
 
 function EditTaskModal({ task, onClose, onUpdate, onDelete, isUpdating, sprints, epics, users }: EditTaskModalProps) {
   const queryClient = useQueryClient();
+  const router = useRouter();
   const CACHE_KEY = `task_draft_${task.id}`;
 
   // Try to restore cached state
@@ -1656,6 +1659,21 @@ function EditTaskModal({ task, onClose, onUpdate, onDelete, isUpdating, sprints,
                 </span>
                 <span>•</span>
                 <span>Created {new Date(task.created_at).toLocaleDateString()}</span>
+                {task.source_type === "ticket" && task.source_id && (
+                  <>
+                    <span>•</span>
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/tickets/${task.source_id}`)}
+                      className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/60 px-2.5 py-1 text-primary-400 transition hover:bg-accent hover:text-primary-300"
+                      title="Open the ticket this task was created from"
+                    >
+                      <Ticket className="h-3.5 w-3.5" />
+                      Source ticket
+                      <ExternalLink className="h-3 w-3" />
+                    </button>
+                  </>
+                )}
                 {hasChanges && (
                   <>
                     <span>•</span>

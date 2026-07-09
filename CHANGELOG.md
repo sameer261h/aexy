@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.49] - 2026-07-10
+
+### Fix: ticket→task description, source backlink, and notification polling
+
+- **Description carries over.** Creating a task from a ticket now populates
+  the task's `description_json` (TipTap doc), not just the plain-text
+  `description`. The task detail editor renders `description_json`, so the
+  carried-over ticket body (with a clean `From:` / `Ticket: TKT-N` header) is
+  now visible instead of an empty body.
+- **Source-ticket backlink.** The task detail header shows a "Source ticket"
+  link when the task was created from a ticket (`source_type === "ticket"`),
+  opening `/tickets/{id}`. The frontend `TaskSourceType` union was aligned with
+  the backend (added `ticket`/`automation`).
+- **Notification polling hardened.** The poll cursor now seeds to "now" (a user
+  with zero notifications previously never polled) and always advances past the
+  fetched window, fixing repeated re-fetching/duplication of the same
+  notifications every 30s. (Note: the `ERR_CONNECTION_CLOSED` seen against the
+  hosted API is a server-availability issue, not a client bug.)
+
 ## [0.8.48] - 2026-07-09
 
 ### Fix: tasks created from a ticket were orphaned
