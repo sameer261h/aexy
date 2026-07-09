@@ -640,6 +640,24 @@ class CreateTaskFromTicketRequest(BaseModel):
     priority: str = "medium"
 
 
+def _plain_text_to_tiptap_doc(lines: list[str]) -> dict:
+    """Build a minimal TipTap document from plain-text lines.
+
+    The task detail editor renders ``description_json`` (TipTap), so tasks
+    created from a ticket need a doc — one paragraph per line, empty lines
+    become empty paragraphs.
+    """
+    content: list[dict] = []
+    for line in lines:
+        if line:
+            content.append({"type": "paragraph", "content": [{"type": "text", "text": line}]})
+        else:
+            content.append({"type": "paragraph"})
+    if not content:
+        content.append({"type": "paragraph"})
+    return {"type": "doc", "content": content}
+
+
 class TaskFromTicketResponse(BaseModel):
     """Response after creating task from ticket."""
     task_id: str
@@ -692,18 +710,22 @@ async def create_task_from_ticket(
             or f"Ticket #{ticket.ticket_number}"
         )
 
-    # Build description from ticket data
+    # Build description from ticket data. Produce clean plain-text lines and a
+    # matching TipTap ``description_json`` doc — the task editor renders
+    # ``description_json``, so a task created with only the plain ``description``
+    # would show an empty body.
     field_values = ticket.field_values or {}
-    description_parts = []
+    description_lines: list[str] = []
     if ticket.submitter_email:
-        description_parts.append(f"**From:** {ticket.submitter_name or ticket.submitter_email}")
-    description_parts.append(f"**Ticket:** TKT-{ticket.ticket_number}")
-    if field_values.get("description"):
-        description_parts.append(f"\n{field_values.get('description')}")
-    elif field_values.get("details"):
-        description_parts.append(f"\n{field_values.get('details')}")
+        description_lines.append(f"From: {ticket.submitter_name or ticket.submitter_email}")
+    description_lines.append(f"Ticket: TKT-{ticket.ticket_number}")
+    body = field_values.get("description") or field_values.get("details")
+    if body:
+        description_lines.append("")
+        description_lines.extend(str(body).split("\n"))
 
-    description = "\n".join(description_parts)
+    description = "\n".join(description_lines)
+    description_json = _plain_text_to_tiptap_doc(description_lines)
 
     # Create the task directly. team_id must be set from the request's
     # project_id: a project-level (no-sprint) task with a null team_id is
@@ -717,6 +739,7 @@ async def create_task_from_ticket(
         source_id=str(ticket.id),
         title=task_title,
         description=description,
+        description_json=description_json,
         priority=request_data.priority,
         labels=[],
         status="backlog",

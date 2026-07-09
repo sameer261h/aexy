@@ -2450,7 +2450,7 @@ export type SprintStatus = "planning" | "active" | "review" | "retrospective" | 
 // enumerate the legal set for a given scope.
 export type TaskStatus = string;
 export type TaskPriority = "critical" | "high" | "medium" | "low";
-export type TaskSourceType = "github_issue" | "jira" | "linear" | "manual";
+export type TaskSourceType = "github_issue" | "jira" | "linear" | "manual" | "ticket" | "automation";
 
 export interface Sprint {
   id: string;

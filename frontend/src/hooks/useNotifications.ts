@@ -65,17 +65,21 @@ export function useNotifications(developerId: string | null | undefined) {
 
   // Poll for new notifications
   const pollNotifications = useCallback(async () => {
-    if (!developerId || !lastPollTime.current) return;
+    if (!developerId) return;
+    // Fall back to "now" so polling works even before the first notification
+    // exists (otherwise a user with zero notifications would never poll).
+    const since = lastPollTime.current ?? new Date().toISOString();
     try {
-      const data = await notificationsApi.poll(developerId, lastPollTime.current);
+      const data = await notificationsApi.poll(developerId, since);
       if (data.notifications.length > 0) {
         // Prepend new notifications
         setNotifications(prev => [...data.notifications, ...prev]);
         setUnreadCount(prev => prev + data.notifications.length);
-        if (data.latest_timestamp) {
-          lastPollTime.current = data.latest_timestamp;
-        }
       }
+      // Always advance the cursor past this window so we don't refetch the
+      // same notifications on every tick. Prefer the server's latest timestamp;
+      // otherwise move to the time we polled at.
+      lastPollTime.current = data.latest_timestamp || since;
     } catch (err) {
       console.error("Failed to poll notifications:", err);
     }
