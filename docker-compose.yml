@@ -7,6 +7,12 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: aexy
+      # postgres:18+ images default PGDATA to a versioned subdirectory
+      # (/var/lib/postgresql/<major>/docker); without this override the
+      # entrypoint refuses to start against a volume mounted directly at
+      # /var/lib/postgresql/data. Pin the pre-18 single-directory layout
+      # explicitly so the existing volume mount below keeps working.
+      PGDATA: /var/lib/postgresql/data
     ports:
       - "5432:5432"
     volumes:
