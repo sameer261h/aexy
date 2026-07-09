@@ -7952,6 +7952,7 @@ export interface TicketForm {
   default_severity?: TicketSeverity;
   default_priority?: TicketPriority;
   conditional_rules: ConditionalRule[];
+  default_share_enabled: boolean;
   submission_count: number;
   created_by_id?: string;
   created_at: string;
@@ -7975,8 +7976,9 @@ export interface TicketFormListItem {
 }
 
 export interface TicketAttachment {
+  id?: string;
   filename: string;
-  url: string;
+  url?: string;
   size: number;
   type: string;
 }
@@ -8355,7 +8357,132 @@ export const ticketsApi = {
     );
     return response.data;
   },
+
+  // Get the current public share link (null if not shared)
+  getShare: async (
+    workspaceId: string,
+    ticketId: string
+  ): Promise<TicketShareLink | null> => {
+    const response = await api.get(`/workspaces/${workspaceId}/tickets/${ticketId}/share`);
+    return response.data;
+  },
+
+  // Create/enable a public share link
+  createShare: async (
+    workspaceId: string,
+    ticketId: string,
+    data?: { expires_at?: string; password?: string; max_uses?: number }
+  ): Promise<TicketShareLink> => {
+    const response = await api.post(
+      `/workspaces/${workspaceId}/tickets/${ticketId}/share`,
+      data ?? {}
+    );
+    return response.data;
+  },
+
+  // Update a share link (toggle active, expiry, password, regenerate token)
+  updateShare: async (
+    workspaceId: string,
+    ticketId: string,
+    data: {
+      is_active?: boolean;
+      expires_at?: string;
+      password?: string;
+      max_uses?: number;
+      regenerate?: boolean;
+    }
+  ): Promise<TicketShareLink> => {
+    const response = await api.patch(
+      `/workspaces/${workspaceId}/tickets/${ticketId}/share`,
+      data
+    );
+    return response.data;
+  },
+
+  // Revoke (delete) a share link
+  revokeShare: async (workspaceId: string, ticketId: string): Promise<void> => {
+    await api.delete(`/workspaces/${workspaceId}/tickets/${ticketId}/share`);
+  },
+
+  // Upload ticket-level attachments (multipart)
+  uploadAttachments: async (
+    workspaceId: string,
+    ticketId: string,
+    files: File[]
+  ): Promise<TicketAttachment[]> => {
+    const form = new FormData();
+    files.forEach((f) => form.append("files", f));
+    const response = await api.post(
+      `/workspaces/${workspaceId}/tickets/${ticketId}/attachments`,
+      form,
+      { headers: { "Content-Type": "multipart/form-data" } }
+    );
+    return response.data;
+  },
+
+  // Delete a ticket attachment
+  deleteAttachment: async (
+    workspaceId: string,
+    ticketId: string,
+    attachmentId: string
+  ): Promise<void> => {
+    await api.delete(
+      `/workspaces/${workspaceId}/tickets/${ticketId}/attachments/${attachmentId}`
+    );
+  },
+
+  // Fetch an attachment's bytes (auth-gated) for in-app preview/download
+  downloadAttachment: async (
+    workspaceId: string,
+    ticketId: string,
+    attachmentId: string
+  ): Promise<Blob> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/tickets/${ticketId}/attachments/${attachmentId}`,
+      { responseType: "blob" }
+    );
+    return response.data;
+  },
 };
+
+export interface TicketShareLink {
+  id: string;
+  ticket_id: string;
+  token: string;
+  url: string;
+  is_active: boolean;
+  has_password: boolean;
+  expires_at?: string | null;
+  max_uses?: number | null;
+  use_count: number;
+  created_at: string;
+}
+
+export interface PublicTicketComment {
+  id: string;
+  author_name?: string | null;
+  is_staff: boolean;
+  content: string;
+  attachments: TicketAttachment[];
+  created_at: string;
+}
+
+export interface PublicTicketView {
+  ticket_number: number;
+  subject?: string | null;
+  status: TicketStatus;
+  priority?: TicketPriority | null;
+  submitter_name?: string | null;
+  field_values: Record<string, unknown>;
+  fields: TicketFormField[];
+  attachments: TicketAttachment[];
+  form_name?: string | null;
+  workspace_name?: string | null;
+  responses: PublicTicketComment[];
+  created_at: string;
+  updated_at: string;
+  can_reply: boolean;
+}
 
 export const publicFormsApi = {
   // Get public form
@@ -8406,6 +8533,38 @@ export const publicFormsApi = {
   ): Promise<{ verified: boolean; ticket_number: number }> => {
     const response = await api.post(`/public/forms/${publicToken}/verify-email`, { token });
     return response.data;
+  },
+};
+
+export const publicTicketsApi = {
+  // Get a shared ticket by token. `password` is only needed for protected links.
+  // If the caller is authenticated (token attached automatically), `can_reply`
+  // will be true for workspace members.
+  get: async (token: string, password?: string): Promise<PublicTicketView> => {
+    const response = await api.get(`/public/tickets/${token}`, {
+      params: password ? { password } : undefined,
+    });
+    return response.data;
+  },
+
+  // Post a public reply (requires the caller to be an authenticated member).
+  reply: async (
+    token: string,
+    content: string,
+    password?: string
+  ): Promise<PublicTicketComment> => {
+    const response = await api.post(
+      `/public/tickets/${token}/reply`,
+      { content },
+      { params: password ? { password } : undefined }
+    );
+    return response.data;
+  },
+
+  // Build a direct (token-gated) URL for an attachment — usable in <img>/links.
+  attachmentUrl: (token: string, attachmentId: string, password?: string): string => {
+    const base = `${api.defaults.baseURL ?? ""}/public/tickets/${token}/attachments/${attachmentId}`;
+    return password ? `${base}?password=${encodeURIComponent(password)}` : base;
   },
 };
 

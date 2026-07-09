@@ -149,6 +149,7 @@ class TicketFormCreate(BaseModel):
     default_severity: TicketSeverity | None = None
     default_priority: TicketPriority | None = None
     conditional_rules: list[ConditionalRule] | None = None
+    default_share_enabled: bool = False
 
 
 class TicketFormUpdate(BaseModel):
@@ -168,6 +169,7 @@ class TicketFormUpdate(BaseModel):
     default_severity: TicketSeverity | None = None
     default_priority: TicketPriority | None = None
     conditional_rules: list[ConditionalRule] | None = None
+    default_share_enabled: bool | None = None
 
 
 class TicketFormResponse(BaseModel):
@@ -194,6 +196,7 @@ class TicketFormResponse(BaseModel):
     default_severity: TicketSeverity | None = None
     default_priority: TicketPriority | None = None
     conditional_rules: list[dict]
+    default_share_enabled: bool = False
     submission_count: int
     created_by_id: str | None = None
     created_at: datetime
@@ -395,6 +398,80 @@ class TicketCommentResponse(BaseModel):
     created_at: datetime
     # Expanded
     author_name: str | None = None
+
+
+# ==================== Ticket Share Link Schemas ====================
+
+class TicketShareCreate(BaseModel):
+    """Schema for creating/enabling a public share link for a ticket."""
+    expires_at: datetime | None = None
+    password: str | None = Field(default=None, min_length=1, max_length=128)
+    max_uses: int | None = Field(default=None, ge=1)
+
+
+class TicketShareUpdate(BaseModel):
+    """Schema for updating an existing share link.
+
+    ``password`` set to an empty string clears the password; ``None`` leaves it
+    unchanged. ``regenerate=True`` rotates the token (invalidates the old URL).
+    """
+    is_active: bool | None = None
+    expires_at: datetime | None = None
+    password: str | None = Field(default=None, max_length=128)
+    max_uses: int | None = Field(default=None, ge=1)
+    regenerate: bool = False
+
+
+class TicketShareResponse(BaseModel):
+    """Share link details returned to authenticated workspace members."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    ticket_id: str
+    token: str
+    url: str
+    is_active: bool
+    has_password: bool
+    expires_at: datetime | None = None
+    max_uses: int | None = None
+    use_count: int
+    created_at: datetime
+
+
+# ==================== Public Ticket View Schemas ====================
+
+class PublicTicketComment(BaseModel):
+    """A public (non-internal) reply shown on the shared ticket page."""
+    id: str
+    author_name: str | None = None
+    is_staff: bool = False
+    content: str
+    attachments: list[dict] = []
+    created_at: datetime
+
+
+class PublicTicketResponse(BaseModel):
+    """Read-only ticket view for a public share link (no sensitive data)."""
+    ticket_number: int
+    subject: str | None = None
+    status: TicketStatus
+    priority: TicketPriority | None = None
+    submitter_name: str | None = None
+    field_values: dict
+    fields: list[TicketFormFieldResponse]
+    attachments: list[dict] = []
+    form_name: str | None = None
+    workspace_name: str | None = None
+    responses: list[PublicTicketComment]
+    created_at: datetime
+    updated_at: datetime
+    # Whether the current viewer may post a reply (authenticated workspace member).
+    can_reply: bool = False
+
+
+class PublicTicketReply(BaseModel):
+    """A reply posted from the public ticket page by a logged-in member."""
+    content: str = Field(..., min_length=1)
 
 
 # ==================== SLA Policy Schemas ====================

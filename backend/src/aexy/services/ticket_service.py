@@ -1,17 +1,21 @@
 """Ticket service for managing tickets and responses."""
 
+import re
 import secrets
 from datetime import datetime, timezone
 from uuid import uuid4
 
+import bcrypt
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from aexy.core.config import settings
 from aexy.models.ticketing import (
     Ticket,
     TicketResponse as TicketResponseModel,
     TicketForm,
+    TicketShareLink,
     TicketStatus,
     TicketPriority,
     SLAPolicy,
@@ -34,6 +38,11 @@ from aexy.services.notification_service import (
     _get_text_snippet,
 )
 from aexy.services.activity_logger import log_activity
+from aexy.services.storage_service import get_storage_service
+
+
+TICKET_ATTACHMENTS_PREFIX = "ticket-attachments"
+_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class TicketService:
@@ -126,6 +135,22 @@ class TicketService:
             title=f"Created ticket #{ticket.ticket_number}",
             metadata={"ticket_number": ticket.ticket_number, "submitter_email": ticket.submitter_email},
         )
+
+        # Auto-create a public share link when the form defaults to shareable.
+        form_result = await self.db.execute(
+            select(TicketForm.default_share_enabled).where(TicketForm.id == form_id)
+        )
+        if form_result.scalar_one_or_none():
+            self.db.add(
+                TicketShareLink(
+                    id=str(uuid4()),
+                    ticket_id=ticket.id,
+                    workspace_id=workspace_id,
+                    token=secrets.token_urlsafe(16),
+                    is_active=True,
+                )
+            )
+            await self.db.flush()
 
         return ticket
 
@@ -702,6 +727,238 @@ class TicketService:
 
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+    # ==================== Share Links ====================
+
+    async def get_share_link(self, ticket_id: str) -> TicketShareLink | None:
+        """Get the (single) share link for a ticket, if any."""
+        stmt = (
+            select(TicketShareLink)
+            .where(TicketShareLink.ticket_id == ticket_id)
+            .order_by(TicketShareLink.created_at.desc())
+            .limit(1)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def create_or_enable_share_link(
+        self,
+        ticket: Ticket,
+        created_by_id: str | None = None,
+        expires_at: datetime | None = None,
+        password: str | None = None,
+        max_uses: int | None = None,
+    ) -> TicketShareLink:
+        """Create a share link for a ticket, or re-enable/update the existing one."""
+        link = await self.get_share_link(ticket.id)
+        if link is None:
+            link = TicketShareLink(
+                id=str(uuid4()),
+                ticket_id=ticket.id,
+                workspace_id=ticket.workspace_id,
+                token=secrets.token_urlsafe(16),
+                created_by_id=created_by_id,
+            )
+            self.db.add(link)
+
+        link.is_active = True
+        link.expires_at = expires_at
+        link.max_uses = max_uses
+        if password:
+            link.password_hash = bcrypt.hashpw(
+                password.encode(), bcrypt.gensalt()
+            ).decode()
+
+        await self.db.flush()
+        await self.db.refresh(link)
+        return link
+
+    async def update_share_link(
+        self,
+        ticket_id: str,
+        *,
+        is_active: bool | None = None,
+        expires_at: datetime | None = None,
+        password: str | None = None,
+        max_uses: int | None = None,
+        regenerate: bool = False,
+    ) -> TicketShareLink | None:
+        """Update an existing share link. Returns None if none exists."""
+        link = await self.get_share_link(ticket_id)
+        if link is None:
+            return None
+
+        if is_active is not None:
+            link.is_active = is_active
+        if expires_at is not None:
+            link.expires_at = expires_at
+        if max_uses is not None:
+            link.max_uses = max_uses
+        if password is not None:
+            # Empty string clears the password; any other value sets it.
+            link.password_hash = (
+                bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+                if password
+                else None
+            )
+        if regenerate:
+            link.token = secrets.token_urlsafe(16)
+            link.use_count = 0
+
+        await self.db.flush()
+        await self.db.refresh(link)
+        return link
+
+    async def revoke_share_link(self, ticket_id: str) -> bool:
+        """Delete the share link for a ticket. Returns True if one was removed."""
+        link = await self.get_share_link(ticket_id)
+        if link is None:
+            return False
+        await self.db.delete(link)
+        await self.db.flush()
+        return True
+
+    async def get_shared_ticket(
+        self,
+        token: str,
+        password: str | None = None,
+        bump: bool = True,
+    ) -> tuple[Ticket, TicketShareLink]:
+        """Resolve a share token to its ticket, enforcing link restrictions.
+
+        Raises ValueError with a machine-readable code:
+        ``not_found`` | ``expired`` | ``exhausted`` |
+        ``password_required`` | ``invalid_password``.
+        Increments the use counter on successful access unless ``bump`` is
+        False (e.g. secondary fetches like attachment downloads).
+        """
+        stmt = select(TicketShareLink).where(TicketShareLink.token == token)
+        result = await self.db.execute(stmt)
+        link = result.scalar_one_or_none()
+
+        if link is None or not link.is_active:
+            raise ValueError("not_found")
+
+        if link.expires_at is not None:
+            expires_at = link.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at < datetime.now(timezone.utc):
+                raise ValueError("expired")
+
+        if link.max_uses is not None and link.use_count >= link.max_uses:
+            raise ValueError("exhausted")
+
+        if link.password_hash:
+            if not password:
+                raise ValueError("password_required")
+            if not bcrypt.checkpw(password.encode(), link.password_hash.encode()):
+                raise ValueError("invalid_password")
+
+        ticket = await self.get_ticket(link.ticket_id)
+        if ticket is None:
+            raise ValueError("not_found")
+
+        if bump:
+            link.use_count += 1
+            await self.db.flush()
+
+        return ticket, link
+
+    # ==================== Attachments ====================
+
+    async def add_ticket_attachments(
+        self,
+        ticket: Ticket,
+        files: list[tuple[str, str | None, object, int]],
+    ) -> list[dict]:
+        """Stream-upload files to storage and record them on the ticket.
+
+        ``files`` is a list of (filename, content_type, fileobj, size). Each is
+        streamed to storage (memory-safe for large files) and recorded with its
+        private storage ``key`` (never a public URL). Returns the created
+        metadata. Raises ValueError("storage_unconfigured") / ("upload_failed")
+        / ("too_large").
+        """
+        storage = get_storage_service()
+        if not storage.is_configured():
+            raise ValueError("storage_unconfigured")
+
+        max_bytes = settings.ticket_max_attachment_mb * 1024 * 1024
+
+        attachments = list(ticket.attachments or [])
+        created: list[dict] = []
+        for filename, content_type, fileobj, size in files:
+            if size is not None and size <= 0:
+                continue
+            if size is not None and size > max_bytes:
+                raise ValueError("too_large")
+            safe_name = _SAFE_FILENAME_RE.sub("_", filename or "attachment") or "attachment"
+            key = f"{TICKET_ATTACHMENTS_PREFIX}/{ticket.id}/{uuid4().hex}_{safe_name}"
+            ctype = content_type or "application/octet-stream"
+            if not storage.upload_fileobj(key, fileobj, ctype):
+                raise ValueError("upload_failed")
+            meta = {
+                "id": str(uuid4()),
+                "filename": filename or "attachment",
+                "size": size or 0,
+                "type": ctype,
+                "key": key,
+            }
+            attachments.append(meta)
+            created.append(meta)
+
+        # Reassign so SQLAlchemy detects the JSONB change.
+        ticket.attachments = attachments
+        await self.db.flush()
+        return created
+
+    def _iter_attachments(self, ticket: Ticket, include_internal: bool):
+        """Yield attachment dicts from the ticket and its responses."""
+        for a in ticket.attachments or []:
+            yield a
+        for response in ticket.responses:
+            if response.is_internal and not include_internal:
+                continue
+            for a in response.attachments or []:
+                yield a
+
+    def find_ticket_attachment(
+        self,
+        ticket: Ticket,
+        attachment_id: str,
+        include_internal: bool = False,
+    ) -> dict | None:
+        """Locate an attachment by id on the ticket or its (public) responses."""
+        for a in self._iter_attachments(ticket, include_internal):
+            if a.get("id") == attachment_id:
+                return a
+        return None
+
+    @staticmethod
+    def attachment_key(meta: dict) -> str | None:
+        """Resolve an attachment's storage key (supporting legacy url-only rows)."""
+        if meta.get("key"):
+            return meta["key"]
+        url = meta.get("url")
+        if url:
+            return get_storage_service().key_from_url(url)
+        return None
+
+    async def remove_ticket_attachment(self, ticket: Ticket, attachment_id: str) -> bool:
+        """Delete a ticket-level attachment from storage and the ticket."""
+        attachments = list(ticket.attachments or [])
+        match = next((a for a in attachments if a.get("id") == attachment_id), None)
+        if match is None:
+            return False
+
+        key = self.attachment_key(match)
+        if key:
+            await get_storage_service().delete_object(key)
+
+        ticket.attachments = [a for a in attachments if a.get("id") != attachment_id]
+        await self.db.flush()
+        return True
 
     # ==================== Email Verification ====================
 

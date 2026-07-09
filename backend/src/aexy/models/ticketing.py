@@ -159,6 +159,12 @@ class TicketForm(Base):
     # Stats cache
     submission_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
+    # Default public-share visibility for tickets created from this form.
+    # When true, a share link is auto-created (and enabled) on submission.
+    default_share_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+
     # Creator
     created_by_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
@@ -424,6 +430,12 @@ class Ticket(Base):
         order_by="TicketResponse.created_at",
         lazy="selectin",
     )
+    share_links: Mapped[list["TicketShareLink"]] = relationship(
+        "TicketShareLink",
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
 
     __table_args__ = (
         UniqueConstraint("workspace_id", "ticket_number", name="uq_ticket_number"),
@@ -480,6 +492,63 @@ class TicketResponse(Base):
     # Relationships
     ticket: Mapped["Ticket"] = relationship("Ticket", back_populates="responses")
     author: Mapped["Developer"] = relationship("Developer", lazy="selectin")
+
+
+class TicketShareLink(Base):
+    """Public share link for read-only external access to a ticket."""
+
+    __tablename__ = "ticket_share_links"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    ticket_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("tickets.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    token: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False, index=True,
+        default=generate_public_token,
+    )
+
+    # Restrictions
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    use_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    created_by_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("developers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    # Relationships
+    ticket: Mapped["Ticket"] = relationship("Ticket", back_populates="share_links")
 
 
 class TicketMetrics(Base):

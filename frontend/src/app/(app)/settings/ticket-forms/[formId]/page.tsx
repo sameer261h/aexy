@@ -340,6 +340,7 @@ export default function FormBuilderPage() {
     auto_assign_oncall: false,
     default_priority: undefined as TicketPriority | undefined,
     default_severity: undefined as TicketSeverity | undefined,
+    default_share_enabled: false,
   });
   const [settingsHasChanges, setSettingsHasChanges] = useState(false);
 
@@ -356,6 +357,7 @@ export default function FormBuilderPage() {
         auto_assign_oncall: form.auto_assign_oncall || false,
         default_priority: form.default_priority,
         default_severity: form.default_severity,
+        default_share_enabled: form.default_share_enabled || false,
       });
     }
   });
@@ -679,6 +681,22 @@ export default function FormBuilderPage() {
                 </label>
                 <span className="text-muted-foreground text-sm ml-2">
                   Tickets will be automatically assigned to whoever is currently on-call
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2 p-4 bg-muted rounded-lg">
+                <input
+                  type="checkbox"
+                  id="default_share_enabled"
+                  checked={formSettings.default_share_enabled}
+                  onChange={(e) => handleSettingsChange("default_share_enabled", e.target.checked)}
+                  className="w-4 h-4 rounded border-border bg-card text-purple-500 focus:ring-purple-500"
+                />
+                <label htmlFor="default_share_enabled" className="text-foreground">
+                  Create a public share link for new tickets
+                </label>
+                <span className="text-muted-foreground text-sm ml-2">
+                  Every ticket from this form gets a shareable read-only link automatically
                 </span>
               </div>
             </div>

@@ -22,8 +22,11 @@ import {
   Building2,
   DollarSign,
   TrendingUp,
+  Share2,
 } from "lucide-react";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { ShareTicketDialog } from "@/components/tickets/ShareTicketDialog";
+import { TicketAttachments } from "@/components/tickets/TicketAttachments";
 import { useAuth } from "@/hooks/useAuth";
 import { useWorkspace, useWorkspaceMembers } from "@/hooks/useWorkspace";
 import { useTicket, useTicketResponses } from "@/hooks/useTicketing";
@@ -71,6 +74,7 @@ export default function TicketDetailPage() {
   const [newResponse, setNewResponse] = useState("");
   const [isInternal, setIsInternal] = useState(false);
   const [newStatus, setNewStatus] = useState<TicketStatus | undefined>();
+  const [showShareModal, setShowShareModal] = useState(false);
 
   // Create task modal state
   const [showCreateTaskModal, setShowCreateTaskModal] = useState(false);
@@ -180,12 +184,21 @@ export default function TicketDetailPage() {
                     {ticket.form_name || "Ticket"}
                   </h1>
                 </div>
-                {ticket.sla_breached && (
-                  <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400 rounded-lg text-sm">
-                    <AlertTriangle className="h-4 w-4" />
-                    SLA Breached
-                  </div>
-                )}
+                <div className="flex items-center gap-2">
+                  {ticket.sla_breached && (
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400 rounded-lg text-sm">
+                      <AlertTriangle className="h-4 w-4" />
+                      SLA Breached
+                    </div>
+                  )}
+                  <button
+                    onClick={() => setShowShareModal(true)}
+                    className="flex items-center gap-2 px-3 py-1.5 border border-border text-foreground rounded-lg text-sm hover:bg-background transition"
+                  >
+                    <Share2 className="h-4 w-4" />
+                    Share
+                  </button>
+                </div>
               </div>
 
               {/* Submitter Info */}
@@ -243,6 +256,16 @@ export default function TicketDetailPage() {
                 ))}
               </div>
             </div>
+
+            {/* Attachments */}
+            {workspaceId && (
+              <TicketAttachments
+                workspaceId={workspaceId}
+                ticketId={ticketId}
+                attachments={ticket.attachments || []}
+                onChanged={() => window.location.reload()}
+              />
+            )}
 
             {/* Responses Timeline */}
             <div className="bg-muted rounded-xl border border-border p-6">
@@ -600,6 +623,16 @@ export default function TicketDetailPage() {
             </div>
           </div>
         </div>
+
+        {/* Share Modal */}
+        {showShareModal && workspaceId && (
+          <ShareTicketDialog
+            workspaceId={workspaceId}
+            ticketId={ticketId}
+            ticketNumber={ticket.ticket_number}
+            onClose={() => setShowShareModal(false)}
+          />
+        )}
 
         {/* Create Task Modal */}
         {showCreateTaskModal && (

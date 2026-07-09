@@ -273,6 +273,7 @@ class TicketFormService:
             auto_create_task=form_data.auto_create_task,
             default_team_id=form_data.default_team_id,
             conditional_rules=[r.model_dump() for r in form_data.conditional_rules] if form_data.conditional_rules else [],
+            default_share_enabled=form_data.default_share_enabled,
             created_by_id=created_by_id,
         )
         self.db.add(form)
