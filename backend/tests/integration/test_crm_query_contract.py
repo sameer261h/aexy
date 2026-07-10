@@ -208,6 +208,32 @@ async def test_05_invalid_filter_operator_rejected(client: AsyncClient, query_fi
 
 
 @pytest.mark.asyncio
+async def test_05b_between_operator_rejected(client: AsyncClient, query_fixture: dict):
+    """A between filter operator receives HTTP 422 — not supported by the shared engine."""
+    data = query_fixture
+    headers = _auth(data["user"].id)
+    url = _query_url(data["ws"].id, data["obj"].id)
+
+    resp = await client.post(url, headers=headers, json={
+        "filters": [{"attribute": "name", "operator": "between", "value": ["a", "z"]}],
+    })
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_05c_nulls_sort_option_rejected(client: AsyncClient, query_fixture: dict):
+    """A sort payload containing nulls receives HTTP 422 — not consumed by the shared engine."""
+    data = query_fixture
+    headers = _auth(data["user"].id)
+    url = _query_url(data["ws"].id, data["obj"].id)
+
+    resp = await client.post(url, headers=headers, json={
+        "sorts": [{"attribute": "name", "direction": "asc", "nulls": "first"}],
+    })
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_06_cross_workspace_rejected(client: AsyncClient, query_fixture: dict, db_session: AsyncSession):
     """Cross-workspace access remains rejected."""
     data = query_fixture
@@ -220,12 +246,12 @@ async def test_06_cross_workspace_rejected(client: AsyncClient, query_fixture: d
 
 
 @pytest.mark.asyncio
-async def test_07_inaccessible_object_rejected(client: AsyncClient, query_fixture: dict, db_session: AsyncSession):
-    """An inaccessible CRM object is rejected."""
+async def test_07_foreign_workspace_membership_rejected(client: AsyncClient, query_fixture: dict, db_session: AsyncSession):
+    """Foreign workspace membership is rejected (CRM objects have no separate object-level ACL)."""
     data = query_fixture
     ws_b, user_b = await _setup_workspace(db_session, "other-b")
     headers_b = _auth(user_b.id)
-    # User B trying to access obj2 from workspace A
+    # User B is not a member of workspace A
     url = _query_url(data["ws"].id, data["obj2"].id)
     resp = await client.post(url, headers=headers_b, json={"filters": []})
     assert resp.status_code == 403
