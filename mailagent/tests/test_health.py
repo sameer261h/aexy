@@ -48,6 +48,7 @@ class TestHealthAPI:
 
         monkeypatch.setattr("mailagent.api.health.check_db_connection", available)
         monkeypatch.setattr("mailagent.api.health.check_redis_connection", available)
+        monkeypatch.setattr("mailagent.api.health.check_schema_connection", available)
 
         response = await client.get("/ready")
 
@@ -69,6 +70,7 @@ class TestHealthAPI:
 
         monkeypatch.setattr("mailagent.api.health.check_db_connection", unavailable)
         monkeypatch.setattr("mailagent.api.health.check_redis_connection", available)
+        monkeypatch.setattr("mailagent.api.health.check_schema_connection", available)
 
         response = await client.get("/ready")
 
@@ -77,6 +79,7 @@ class TestHealthAPI:
             "ready": False,
             "database": False,
             "redis": True,
+            "schema": True,
         }
 
     @pytest.mark.asyncio

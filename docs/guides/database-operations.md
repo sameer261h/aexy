@@ -71,6 +71,20 @@ disposable local volume can bootstrap the model baseline. Production sets it
 to `false` explicitly. After local bootstrap, run the SQL migration runner for
 tracked schema changes; do not treat `create_all()` as a migration mechanism.
 
+### Audit model/migration coverage
+
+The table inventory audit checks both services and reports model-only tables
+before a deployment relies on readiness checks:
+
+```bash
+python scripts/audit_schema_authority.py
+python scripts/audit_schema_authority.py --strict
+```
+
+This is a table-level audit, not proof that columns, constraints, indexes,
+backfills, or triggers match. A live-schema diff is still required before a
+production migration is declared complete.
+
 ---
 
 ## Will rebuilding postgres delete my data?
