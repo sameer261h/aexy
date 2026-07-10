@@ -21,9 +21,12 @@ import {
   RecordTabId,
   NotesTabContent,
   ActivityTabContent,
-  RelatedTabContent,
   OverviewTabContent,
 } from "@/components/crm/RecordTabs";
+import { RelationshipsPanel } from "@/components/crm/relationships/RelationshipsPanel";
+import { BacklinksPanel } from "@/components/crm/relationships/BacklinksPanel";
+import { RelationshipCandidatePicker } from "@/components/crm/relationships/RelationshipCandidatePicker";
+import { useRecordRelationships, useRecordBacklinks } from "@/hooks/useCRMRelationships";
 
 export default function RecordDetailPage() {
   const router = useRouter();
@@ -67,12 +70,24 @@ export default function RecordDetailPage() {
     recordId
   );
 
+  // Relationship counts for the "Related" tab badge -- same queries the
+  // panels below run, so react-query dedupes them rather than double-fetching.
+  const { groups: relationshipGroups } = useRecordRelationships(
+    workspaceId, currentObject?.id || null, recordId
+  );
+  const { total: backlinksTotal } = useRecordBacklinks(
+    workspaceId, currentObject?.id || null, recordId
+  );
+  const relatedCount =
+    relationshipGroups.reduce((sum, g) => sum + g.total, 0) + backlinksTotal;
+
   // UI State
   const [isEditing, setIsEditing] = useState(false);
   const [editedValues, setEditedValues] = useState<Record<string, unknown>>({});
   const [activeTab, setActiveTab] = useState<RecordTabId>("overview");
   const [newNote, setNewNote] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [candidateTargetObjectId, setCandidateTargetObjectId] = useState<string | null>(null);
 
   // Navigation helpers
   const currentIndex = useMemo(() => {
@@ -230,7 +245,7 @@ export default function RecordDetailPage() {
               onTabChange={setActiveTab}
               notesCount={notes.length}
               activitiesCount={activities.length}
-              relatedCount={0}
+              relatedCount={relatedCount}
             />
           </div>
 
@@ -270,12 +285,54 @@ export default function RecordDetailPage() {
             )}
 
             {activeTab === "related" && (
-              <RelatedTabContent
-                relatedRecords={[]}
-                onRecordClick={(related) =>
-                  router.push(`/crm/${related.object_slug}/${related.id}`)
-                }
-              />
+              <div className="space-y-8">
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground mb-3">Relationships</h3>
+                  <RelationshipsPanel
+                    workspaceId={workspaceId}
+                    objectId={currentObject?.id || null}
+                    recordId={recordId}
+                    objects={objects}
+                  />
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground mb-3">Referenced by</h3>
+                  <BacklinksPanel
+                    workspaceId={workspaceId}
+                    objectId={currentObject?.id || null}
+                    recordId={recordId}
+                    objects={objects}
+                  />
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground mb-3">Find records</h3>
+                  <div className="flex items-center gap-2 mb-2">
+                    <label className="text-xs text-muted-foreground">In:</label>
+                    <select
+                      value={candidateTargetObjectId || currentObject?.id || ""}
+                      onChange={(e) => setCandidateTargetObjectId(e.target.value)}
+                      className="text-xs bg-muted border border-border rounded-md px-2 py-1 text-foreground"
+                    >
+                      {objects.map((o) => (
+                        <option key={o.id} value={o.id}>{o.plural_name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <RelationshipCandidatePicker
+                    workspaceId={workspaceId}
+                    objectId={currentObject?.id || null}
+                    targetObjectId={candidateTargetObjectId || currentObject?.id || null}
+                    excludeRecordId={recordId}
+                    onSelect={() => {
+                      // Read-only demonstration: the picker only reports a
+                      // selection via this callback. Nothing is persisted --
+                      // there is no relationship-write endpoint yet.
+                    }}
+                  />
+                </div>
+              </div>
             )}
           </div>
         </div>

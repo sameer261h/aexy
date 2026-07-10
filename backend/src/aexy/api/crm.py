@@ -46,6 +46,12 @@ from aexy.schemas.crm import (
     SortCondition,
     CRMRecordQuery,
 )
+from aexy.schemas.crm_relationships import (
+    RelationshipsResponse,
+    BacklinksResponse,
+    CandidateSearchResponse,
+)
+from aexy.services.crm_relationship_service import CRMRelationshipService
 from aexy.services.crm_service import (
     CRMObjectService,
     CRMAttributeService,
@@ -1572,6 +1578,119 @@ async def get_record(
         updated_at=record.updated_at,
         owner_name=record.owner.name if record.owner else None,
         created_by_name=record.created_by.name if record.created_by else None,
+    )
+
+
+# -- Relationship navigation (read-only) -------------------------------------
+# Registered with an extra path segment after {record_id}, so these can never
+# collide with the single-record GET/PATCH/DELETE routes above or below
+# regardless of registration order (see test_relationship_route_ordering).
+
+@router.get(
+    "/objects/{object_id}/records/{record_id}/relationships",
+    response_model=RelationshipsResponse,
+)
+async def get_record_relationships(
+    workspace_id: str,
+    object_id: str,
+    record_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resolve this record's outgoing `record_reference` values into
+    authorized summaries. Stale, foreign-workspace, or inaccessible targets
+    are returned as opaque placeholders rather than omitted or disclosed."""
+    await check_workspace_permission(workspace_id, current_user, db)
+
+    record_service = CRMRecordService(db)
+    record = await record_service.get_record(record_id, object_id, workspace_id)
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Record not found",
+        )
+
+    relationship_service = CRMRelationshipService(db)
+    return await relationship_service.get_relationships(
+        object_id=object_id,
+        record=record,
+        workspace_id=workspace_id,
+        user_id=str(current_user.id),
+    )
+
+
+@router.get(
+    "/objects/{object_id}/records/{record_id}/backlinks",
+    response_model=BacklinksResponse,
+)
+async def get_record_backlinks(
+    workspace_id: str,
+    object_id: str,
+    record_id: str,
+    include_archived: bool = False,
+    limit: int = Query(default=50, le=100),
+    offset: int = Query(default=0, ge=0),
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Derive authorized records elsewhere in the workspace that reference
+    this record. Backlinks are never persisted -- computed fresh from
+    `record_reference` attribute metadata on every call."""
+    await check_workspace_permission(workspace_id, current_user, db)
+
+    record_service = CRMRecordService(db)
+    record = await record_service.get_record(record_id, object_id, workspace_id)
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Record not found",
+        )
+
+    relationship_service = CRMRelationshipService(db)
+    return await relationship_service.get_backlinks(
+        object_id=object_id,
+        record_id=record_id,
+        workspace_id=workspace_id,
+        user_id=str(current_user.id),
+        limit=limit,
+        offset=offset,
+        include_archived=include_archived,
+    )
+
+
+@router.get(
+    "/objects/{object_id}/relationship-candidates",
+    response_model=CandidateSearchResponse,
+)
+async def search_relationship_candidates(
+    workspace_id: str,
+    object_id: str,
+    target_object_id: str = Query(...),
+    q: str | None = Query(default=None, max_length=200),
+    include_archived: bool = False,
+    limit: int = Query(default=50, le=100),
+    offset: int = Query(default=0, ge=0),
+    exclude_record_id: str | None = Query(default=None),
+    exclude_ids: list[str] = Query(default=[]),
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Read-only candidate search for a future relationship picker. `object_id`
+    scopes the request to the record being viewed/edited; `target_object_id`
+    is the object being searched for candidates. Never mutates anything."""
+    await check_workspace_permission(workspace_id, current_user, db)
+
+    relationship_service = CRMRelationshipService(db)
+    return await relationship_service.search_candidates(
+        target_object_id=target_object_id,
+        workspace_id=workspace_id,
+        user_id=str(current_user.id),
+        q=q,
+        limit=limit,
+        offset=offset,
+        exclude_record_id=exclude_record_id,
+        exclude_ids=exclude_ids or None,
+        include_archived=include_archived,
     )
 
 

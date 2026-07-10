@@ -10053,6 +10053,56 @@ export interface CRMWebhookDelivery {
   created_at: string;
 }
 
+// -- Relationship navigation (read-only) ------------------------------------
+
+export interface RelatedRecordSummary {
+  attribute_id: string;
+  record_id: string;
+  accessible: boolean;
+  object_id: string | null;
+  object_label: string | null;
+  record_label: string | null;
+  is_archived: boolean | null;
+}
+
+export interface RelationshipGroup {
+  attribute_id: string;
+  attribute_name: string;
+  target_object_id: string;
+  allow_multiple: boolean;
+  total: number;
+  items: RelatedRecordSummary[];
+}
+
+export interface RelationshipsResponse {
+  groups: RelationshipGroup[];
+}
+
+export interface BacklinkItem extends RelatedRecordSummary {
+  source_object_id: string;
+  source_object_label: string;
+}
+
+export interface BacklinksResponse {
+  items: BacklinkItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface CandidateRecord {
+  record_id: string;
+  record_label: string;
+  is_archived: boolean;
+}
+
+export interface CandidateSearchResponse {
+  items: CandidateRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 // ============================================================================
 // CRM API
 // ============================================================================
@@ -10242,6 +10292,55 @@ export const crmApi = {
         data: { record_ids: recordIds },
         params: { permanent },
       });
+      return response.data;
+    },
+  },
+
+  // Relationship navigation (read-only)
+  relationships: {
+    get: async (workspaceId: string, objectId: string, recordId: string): Promise<RelationshipsResponse> => {
+      const response = await api.get(
+        `/workspaces/${workspaceId}/crm/objects/${objectId}/records/${recordId}/relationships`
+      );
+      return response.data;
+    },
+
+    backlinks: async (
+      workspaceId: string,
+      objectId: string,
+      recordId: string,
+      params?: { limit?: number; offset?: number; include_archived?: boolean }
+    ): Promise<BacklinksResponse> => {
+      const response = await api.get(
+        `/workspaces/${workspaceId}/crm/objects/${objectId}/records/${recordId}/backlinks`,
+        { params }
+      );
+      return response.data;
+    },
+
+    searchCandidates: async (
+      workspaceId: string,
+      objectId: string,
+      params: {
+        target_object_id: string;
+        q?: string;
+        limit?: number;
+        offset?: number;
+        exclude_record_id?: string;
+        exclude_ids?: string[];
+        include_archived?: boolean;
+      }
+    ): Promise<CandidateSearchResponse> => {
+      const response = await api.get(
+        `/workspaces/${workspaceId}/crm/objects/${objectId}/relationship-candidates`,
+        {
+          params,
+          // Axios default serializes arrays as `key[]=`; the FastAPI
+          // endpoint's `exclude_ids: list[str] = Query(...)` expects
+          // repeated `key=` params instead.
+          paramsSerializer: { indexes: null },
+        }
+      );
       return response.data;
     },
   },
