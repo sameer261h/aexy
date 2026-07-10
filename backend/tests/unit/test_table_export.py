@@ -164,3 +164,22 @@ async def test_export_rejects_oversized_table_without_partial_csv(db_session):
 
     with pytest.raises(ValueError, match="too_large"):
         await service.export_table_csv(table.id, ws.id, access, user_id=user.id, max_records=2)
+
+
+@pytest.mark.asyncio
+async def test_export_succeeds_when_accessible_count_exactly_matches_limit(db_session):
+    ws, user = await _workspace(db_session, "i")
+    service = DataTableService(db_session)
+    table = await service.create_table(
+        workspace_id=ws.id, name="Exact", plural_name="Exacts", created_by_id=user.id,
+    )
+    await service.add_field(table.id, "Name", workspace_id=ws.id, field_type="text")
+    for i in range(3):
+        await service.create_record(table.id, ws.id, {"name": f"Row {i}"})
+
+    access = await service.auth.check_access(table.id, user.id, "view", ws.id)
+
+    # Accessible count (3) exactly equals max_records (3) — must export, not raise.
+    csv_text, _ = await service.export_table_csv(table.id, ws.id, access, user_id=user.id, max_records=3)
+    rows = _parse_csv(csv_text)
+    assert len(rows) == 4  # header + 3 records
