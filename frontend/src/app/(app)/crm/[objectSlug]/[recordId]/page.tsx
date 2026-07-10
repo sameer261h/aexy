@@ -233,6 +233,8 @@ export default function RecordDetailPage() {
               record={record}
               attributes={attributes}
               maxCards={6}
+              relationshipGroups={relationshipGroups}
+              objects={objects}
             />
           </div>
 
@@ -320,6 +322,8 @@ export default function RecordDetailPage() {
           notes={notes}
           onTogglePin={handleTogglePin}
           onDeleteNote={handleDeleteNote}
+          relationshipGroups={relationshipGroups}
+          objects={objects}
         />
       </div>
 

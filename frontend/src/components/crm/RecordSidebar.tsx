@@ -14,8 +14,9 @@ import {
   StickyNote,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CRMRecord, CRMAttribute, CRMNote } from "@/lib/api";
+import { CRMRecord, CRMAttribute, CRMNote, CRMObject, RelationshipGroup } from "@/lib/api";
 import { FieldRenderer, FieldEditor } from "@/components/fields";
+import { RelationshipFieldValue } from "@/components/crm/relationships/RelationshipFieldValue";
 
 type SidebarTab = "details" | "notes" | "lists";
 
@@ -35,6 +36,11 @@ interface RecordSidebarProps {
   onDeleteNote?: (noteId: string) => void;
   // Lists the record belongs to
   lists?: { id: string; name: string; color?: string }[];
+  // Already-loaded relationship groups for `record_reference` attributes --
+  // resolved authorized summaries instead of raw IDs. Optional so this
+  // component still works wherever relationship data hasn't been fetched.
+  relationshipGroups?: RelationshipGroup[];
+  objects?: CRMObject[];
   className?: string;
 }
 
@@ -85,6 +91,8 @@ export function RecordSidebar({
   onTogglePin,
   onDeleteNote,
   lists = [],
+  relationshipGroups = [],
+  objects = [],
   className,
 }: RecordSidebarProps) {
   const [activeTab, setActiveTab] = useState<SidebarTab>("details");
@@ -259,6 +267,13 @@ export function RecordSidebar({
                         attribute={attr}
                         value={editedValues[attr.slug] ?? record.values[attr.slug]}
                         onChange={(val) => onValueChange?.(attr.slug, val)}
+                      />
+                    ) : attr.attribute_type === "record_reference" ? (
+                      <RelationshipFieldValue
+                        attribute={attr}
+                        groups={relationshipGroups}
+                        objects={objects}
+                        surface="detail_view"
                       />
                     ) : (
                       <div className="text-foreground">
