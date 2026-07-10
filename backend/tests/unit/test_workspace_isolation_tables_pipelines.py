@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from aexy.models.crm import CRMAttribute, CRMRecord, TableCollaborator
+from aexy.models.crm import CRMAttribute, CRMRecord, TableCollaborator, TableShareLink
 from aexy.models.developer import Developer
 from aexy.models.workspace import Workspace, WorkspaceMember
 from aexy.services.crm_pipeline_service import (
@@ -17,6 +17,7 @@ from aexy.services.crm_pipeline_service import (
 )
 from aexy.services.crm_service import CRMAttributeService, CRMObjectService, CRMRecordService
 from aexy.services.data_table_service import DataTableService
+from aexy.services.table_audit_service import TableShareService
 
 
 async def _workspace(db, suffix: str) -> tuple[Workspace, Developer]:
@@ -231,3 +232,38 @@ async def test_table_collaborator_mutations_are_table_bound(db_session):
         )
     ).scalar_one()
     assert persisted.permission == "view"
+
+
+@pytest.mark.asyncio
+async def test_share_link_revocation_is_table_bound(db_session):
+    ws_a, user_a = await _workspace(db_session, "a")
+    ws_b, user_b = await _workspace(db_session, "b")
+    table_a1 = await _table(db_session, ws_a, "Local1")
+    table_a2 = await _table(db_session, ws_a, "Local2")
+    table_b = await _table(db_session, ws_b, "Foreign")
+    share_svc = TableShareService(db_session)
+
+    own_link = await share_svc.create_share_link(table_id=table_a1.id, created_by_id=user_a.id)
+    other_table_link = await share_svc.create_share_link(table_id=table_a2.id, created_by_id=user_a.id)
+    foreign_link = await share_svc.create_share_link(table_id=table_b.id, created_by_id=user_b.id)
+
+    # A legitimate admin can revoke their own table's link.
+    assert await share_svc.revoke_link(own_link.id, table_id=table_a1.id) is True
+
+    # The same admin cannot revoke a link that belongs to a different table
+    # (even in their own workspace) or a different workspace, using the link's ID alone.
+    assert await share_svc.revoke_link(other_table_link.id, table_id=table_a1.id) is False
+    assert await share_svc.revoke_link(foreign_link.id, table_id=table_a1.id) is False
+
+    persisted_other = (
+        await db_session.execute(
+            select(TableShareLink).where(TableShareLink.id == other_table_link.id)
+        )
+    ).scalar_one()
+    persisted_foreign = (
+        await db_session.execute(
+            select(TableShareLink).where(TableShareLink.id == foreign_link.id)
+        )
+    ).scalar_one()
+    assert persisted_other.is_active is True
+    assert persisted_foreign.is_active is True

@@ -169,10 +169,18 @@ class TableShareService:
         )
         return list(result.scalars().all())
 
-    async def revoke_link(self, link_id: str) -> bool:
-        """Deactivate a share link."""
+    async def revoke_link(self, link_id: str, table_id: str) -> bool:
+        """Deactivate a share link.
+
+        ``table_id`` must be the caller's already-authorized table (proven by
+        ``check_access`` against the URL workspace) so a link belonging to a
+        different table/workspace can't be revoked by guessing its ID.
+        """
         result = await self.db.execute(
-            select(TableShareLink).where(TableShareLink.id == link_id)
+            select(TableShareLink).where(
+                TableShareLink.id == link_id,
+                TableShareLink.table_id == table_id,
+            )
         )
         link = result.scalar_one_or_none()
         if link:

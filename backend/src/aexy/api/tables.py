@@ -936,7 +936,7 @@ async def revoke_share_link(
     )
 
     share_svc = TableShareService(db)
-    if not await share_svc.revoke_link(link_id):
+    if not await share_svc.revoke_link(link_id, table_id):
         raise HTTPException(status_code=404, detail="Share link not found")
 
     await db.commit()
