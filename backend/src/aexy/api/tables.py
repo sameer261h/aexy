@@ -32,6 +32,50 @@ from aexy.services.table_audit_service import TableAuditService, TableShareServi
 from aexy.services.workspace_service import WorkspaceService
 
 
+# -- Endpoint-specific query models for POST /tables/{table_id}/records/query --
+# These intentionally omit operators and fields the shared DataTableService
+# engine does not currently implement (between, nulls-ordering).  They exist
+# only here so the Tables module does not depend on unmerged experimental
+# CRM branches.  Claude should consolidate these with the equivalent
+# QueryFilterCondition/QuerySortCondition/QueryFilterOperator types in
+# schemas/crm.py during final integration.
+
+from typing import Literal, Any
+from pydantic import ConfigDict
+
+TableQueryFilterOperator = Literal[
+    "equals", "not_equals", "contains", "not_contains",
+    "starts_with", "ends_with",
+    "gt", "gte", "lt", "lte",
+    "is_empty", "is_not_empty",
+    "in", "not_in"
+]
+
+TableSortDirection = Literal["asc", "desc"]
+
+
+class TableQueryFilterCondition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attribute: str
+    operator: TableQueryFilterOperator
+    value: Any = None
+
+
+class TableQuerySortCondition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attribute: str
+    direction: TableSortDirection = "asc"
+
+
+class TableRecordQuery(BaseModel):
+    filters: list[TableQueryFilterCondition] | None = None
+    sorts: list[TableQuerySortCondition] | None = None
+    include_archived: bool = False
+    limit: int = Field(default=50, le=100)
+    offset: int = Field(default=0, ge=0)
+# -- end endpoint-specific query models --
+
+
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/tables",
     tags=["Tables"],
@@ -459,6 +503,71 @@ async def delete_field(
 # =============================================================================
 # RECORD CRUD
 # =============================================================================
+
+@router.post("/{table_id}/records/query")
+async def query_records(
+    workspace_id: str,
+    table_id: str,
+    data: TableRecordQuery,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Query table records with server-side filtering and sorting."""
+    await check_workspace_permission(workspace_id, current_user, db)
+
+    service = DataTableService(db)
+    access = await service.auth.check_access(
+        table_id, str(current_user.id), "view", workspace_id
+    )
+
+    filters_dicts: list[dict] | None = None
+    if data.filters:
+        filters_dicts = [
+            {"attribute": f.attribute, "operator": f.operator, "value": f.value}
+            for f in data.filters
+        ]
+
+    sorts_dicts: list[dict] | None = None
+    if data.sorts:
+        sorts_dicts = [
+            {"attribute": s.attribute, "direction": s.direction}
+            for s in data.sorts
+        ]
+
+    records, total = await service.list_records(
+        table_id=table_id,
+        workspace_id=workspace_id,
+        filters=filters_dicts,
+        sorts=sorts_dicts,
+        include_archived=data.include_archived,
+        limit=data.limit,
+        offset=data.offset,
+        access=access,
+        user_id=str(current_user.id),
+    )
+
+    return {
+        "records": [
+            CRMRecordListResponse(
+                id=str(r.id),
+                object_id=str(r.object_id),
+                values={
+                    k: v for k, v in r.values.items()
+                    if k not in access.hidden_columns
+                },
+                display_name=r.display_name,
+                owner_id=str(r.owner_id) if r.owner_id else None,
+                is_archived=r.is_archived,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+            )
+            for r in records
+        ],
+        "total": total,
+        "limit": data.limit,
+        "offset": data.offset,
+    }
+
 
 @router.get("/{table_id}/records")
 async def list_records(
