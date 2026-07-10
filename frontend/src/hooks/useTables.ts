@@ -182,18 +182,18 @@ export function useTableRecords(
   workspaceId: string | null,
   tableId: string | null,
   params?: {
-    skip?: number;
+    filters?: Record<string, unknown>[];
+    sorts?: Record<string, unknown>[];
+    include_archived?: boolean;
     limit?: number;
-    sort_by?: string;
-    sort_dir?: "asc" | "desc";
-    search?: string;
+    offset?: number;
   }
 ) {
   const queryClient = useQueryClient();
 
   const { data, isLoading, error, refetch } = useQuery<{ records: TableRecord[]; total: number }>({
     queryKey: ["tableRecords", workspaceId, tableId, params],
-    queryFn: () => tablesApi.records.list(workspaceId!, tableId!, params),
+    queryFn: () => tablesApi.records.query(workspaceId!, tableId!, params),
     enabled: !!workspaceId && !!tableId,
   });
 
