@@ -1,6 +1,6 @@
 """Standalone Tables API endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -619,6 +619,38 @@ async def list_records(
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.get("/{table_id}/export")
+async def export_table_records(
+    workspace_id: str,
+    table_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export a table's visible fields and accessible records as CSV."""
+    await check_workspace_permission(workspace_id, current_user, db)
+
+    service = DataTableService(db)
+    access = await service.auth.check_access(
+        table_id, str(current_user.id), "view", workspace_id
+    )
+
+    try:
+        csv_text, filename = await service.export_table_csv(
+            table_id=table_id,
+            workspace_id=workspace_id,
+            access=access,
+            user_id=str(current_user.id),
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Table not found")
+
+    return Response(
+        content=csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/{table_id}/records", status_code=201)

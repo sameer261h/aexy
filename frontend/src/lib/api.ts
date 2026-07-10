@@ -21563,6 +21563,14 @@ export const tablesApi = {
     delete: async (workspaceId: string, tableId: string): Promise<void> => {
       await api.delete(`/workspaces/${workspaceId}/tables/${tableId}`);
     },
+    exportCsv: async (workspaceId: string, tableId: string): Promise<{ blob: Blob; filename: string }> => {
+      const response = await api.get(`/workspaces/${workspaceId}/tables/${tableId}/export`, {
+        responseType: "blob",
+      });
+      const disposition: string | undefined = response.headers?.["content-disposition"];
+      const match = disposition?.match(/filename="([^"]+)"/);
+      return { blob: response.data, filename: match?.[1] ?? "export.csv" };
+    },
   },
 
   // Fields

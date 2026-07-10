@@ -5,6 +5,9 @@ their table/record CRUD to this service. Module-specific logic (automations,
 activity logging, domain events) stays in the module service.
 """
 
+import csv
+import io
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -78,6 +81,25 @@ def _generate_attribute_slug(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "_", slug)
     slug = slug.strip("_")
     return slug[:100]
+
+
+# Cell values starting with these characters are treated as formulas by
+# Excel/Sheets/LibreOffice when a CSV is opened — prefixing with a single
+# quote neutralizes the formula without changing the visible text.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe_cell(value: Any) -> str:
+    """Render a record value as a CSV-injection-safe string."""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        text = json.dumps(value)
+    else:
+        text = str(value)
+    if text and text[0] in _CSV_FORMULA_PREFIXES:
+        return "'" + text
+    return text
 
 
 # =============================================================================
@@ -658,6 +680,56 @@ class DataTableService:
         records = list(result.scalars().all())
 
         return records, total
+
+    async def export_table_csv(
+        self,
+        table_id: str,
+        workspace_id: str,
+        access: TableAccess,
+        user_id: str | None = None,
+        max_records: int = 50_000,
+    ) -> tuple[str, str]:
+        """Build a CSV export of a table's visible fields and accessible records.
+
+        Reuses ``list_records`` so cross-tenant scoping, row security, and
+        hidden-column rules are identical to the records API — this never
+        runs its own unscoped query. Returns ``(csv_text, filename)``.
+        """
+        table = await self.get_table(table_id, workspace_id)
+        if not table:
+            raise ValueError("Table not found")
+
+        # Query attributes directly rather than trusting `table.attributes` —
+        # the relationship can be stale within a single session if the table
+        # was loaded before a field was added to it.
+        attrs_result = await self.db.execute(
+            select(CRMAttribute).where(CRMAttribute.object_id == table_id)
+        )
+        fields = sorted(
+            (
+                attr for attr in attrs_result.scalars().all()
+                if attr.is_visible and attr.slug not in access.hidden_columns
+            ),
+            key=lambda attr: attr.position,
+        )
+
+        records, _ = await self.list_records(
+            table_id=table_id,
+            workspace_id=workspace_id,
+            limit=max_records,
+            offset=0,
+            access=access,
+            user_id=user_id,
+        )
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow([attr.name for attr in fields])
+        for record in records:
+            writer.writerow([_csv_safe_cell(record.values.get(attr.slug)) for attr in fields])
+
+        filename = f"{_generate_slug(table.slug or table.name) or 'table'}.csv"
+        return buffer.getvalue(), filename
 
     async def update_record(
         self,
