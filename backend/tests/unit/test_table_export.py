@@ -147,3 +147,20 @@ async def test_export_rejects_foreign_workspace_table(db_session):
     with pytest.raises(HTTPException) as exc:
         await service.auth.check_access(table_b.id, user_a.id, "view", ws_a.id)
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_export_rejects_oversized_table_without_partial_csv(db_session):
+    ws, user = await _workspace(db_session, "h")
+    service = DataTableService(db_session)
+    table = await service.create_table(
+        workspace_id=ws.id, name="Huge", plural_name="Huges", created_by_id=user.id,
+    )
+    await service.add_field(table.id, "Name", workspace_id=ws.id, field_type="text")
+    for i in range(3):
+        await service.create_record(table.id, ws.id, {"name": f"Row {i}"})
+
+    access = await service.auth.check_access(table.id, user.id, "view", ws.id)
+
+    with pytest.raises(ValueError, match="too_large"):
+        await service.export_table_csv(table.id, ws.id, access, user_id=user.id, max_records=2)

@@ -694,6 +694,11 @@ class DataTableService:
         Reuses ``list_records`` so cross-tenant scoping, row security, and
         hidden-column rules are identical to the records API — this never
         runs its own unscoped query. Returns ``(csv_text, filename)``.
+
+        Raises ``ValueError("too_large")`` — before any CSV is built — when
+        the accessible record count exceeds ``max_records``, so a synchronous
+        export never silently returns a truncated file. Detected by asking
+        for one more row than the limit rather than a separate COUNT(*).
         """
         table = await self.get_table(table_id, workspace_id)
         if not table:
@@ -716,11 +721,13 @@ class DataTableService:
         records, _ = await self.list_records(
             table_id=table_id,
             workspace_id=workspace_id,
-            limit=max_records,
+            limit=max_records + 1,
             offset=0,
             access=access,
             user_id=user_id,
         )
+        if len(records) > max_records:
+            raise ValueError("too_large")
 
         buffer = io.StringIO()
         writer = csv.writer(buffer)

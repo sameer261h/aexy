@@ -1,5 +1,6 @@
 "use client";
 
+import axios from "axios";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -290,7 +291,11 @@ export function useExportTableCsv(workspaceId: string | null, tableId: string | 
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
     },
-    onError: () => {
+    onError: (error) => {
+      if (axios.isAxiosError(error) && error.response?.status === 413) {
+        toast.error("This table has too many records for a direct export. Contact support for a full export.");
+        return;
+      }
       toast.error("Couldn't export this table. Check your access and try again.");
     },
   });

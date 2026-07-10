@@ -643,7 +643,12 @@ async def export_table_records(
             access=access,
             user_id=str(current_user.id),
         )
-    except ValueError:
+    except ValueError as exc:
+        if str(exc) == "too_large":
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="This table has too many records for a direct export. Contact support for a full export.",
+            )
         raise HTTPException(status_code=404, detail="Table not found")
 
     return Response(
