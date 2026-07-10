@@ -49,7 +49,26 @@ class CsvImportPreflightService:
         filename: str | None = None,
         limits: CsvImportLimits = DEFAULT_CSV_IMPORT_LIMITS,
     ) -> CsvImportPreflightResult:
-        """Parse and validate CSV input for a later, separate import-execution phase."""
+        """Return the public preflight result without exposing parsed row internals."""
+        result, _ = self.preflight_with_rows(
+            raw_csv,
+            target_attributes,
+            proposed_mapping,
+            filename=filename,
+            limits=limits,
+        )
+        return result
+
+    def preflight_with_rows(
+        self,
+        raw_csv: bytes,
+        target_attributes: Sequence[CsvImportTargetAttribute],
+        proposed_mapping: Sequence[CsvColumnMapping] | None = None,
+        *,
+        filename: str | None = None,
+        limits: CsvImportLimits = DEFAULT_CSV_IMPORT_LIMITS,
+    ) -> tuple[CsvImportPreflightResult, list[tuple[int, list[str]]]]:
+        """Parse and validate CSV input and return its accepted rows."""
         result = CsvImportPreflightResult(filename=filename)
 
         if len(raw_csv) > limits.max_file_size_bytes:
@@ -60,11 +79,11 @@ class CsvImportPreflightService:
                     context={"limit_bytes": limits.max_file_size_bytes, "received_bytes": len(raw_csv)},
                 )
             )
-            return self._finalize(result)
+            return self._finalize(result), []
 
         if not raw_csv:
             result.errors.append(CsvPreflightIssue(code="EMPTY_FILE", message="CSV file is empty."))
-            return self._finalize(result)
+            return self._finalize(result), []
 
         try:
             text = raw_csv.decode("utf-8-sig")
@@ -75,27 +94,27 @@ class CsvImportPreflightService:
                     message="CSV must be encoded as UTF-8 or UTF-8 with a BOM.",
                 )
             )
-            return self._finalize(result)
+            return self._finalize(result), []
 
         result.encoding = "utf-8-sig" if raw_csv.startswith(b"\xef\xbb\xbf") else "utf-8"
         if not text:
             result.errors.append(CsvPreflightIssue(code="EMPTY_FILE", message="CSV file is empty."))
-            return self._finalize(result)
+            return self._finalize(result), []
 
         parsed_rows = self._parse_rows(text, limits, result)
         if parsed_rows is None:
-            return self._finalize(result)
+            return self._finalize(result), []
 
         header, header_line, data_rows, blank_lines = parsed_rows
         self._validate_header(header, header_line, limits, result)
         if result.errors:
-            return self._finalize(result)
+            return self._finalize(result), []
 
         result.original_headers = list(header)
         result.normalized_headers = [normalize_csv_header(item) for item in header]
         self._validate_normalized_headers(result)
         if result.errors:
-            return self._finalize(result)
+            return self._finalize(result), []
 
         if blank_lines:
             result.warnings.append(
@@ -108,7 +127,7 @@ class CsvImportPreflightService:
 
         self._validate_rows(data_rows, len(header), limits, result)
         if result.errors:
-            return self._finalize(result)
+            return self._finalize(result), []
 
         result.total_data_row_count = len(data_rows)
         result.preview_rows = [
@@ -139,7 +158,7 @@ class CsvImportPreflightService:
         result.warnings.extend(suggestion_warnings)
         self._validate_mapping(header, target_attributes, proposed_mapping, result)
         self._add_unmapped_column_warnings(header, proposed_mapping, suggestions, result)
-        return self._finalize(result)
+        return self._finalize(result), data_rows
 
     def _parse_rows(
         self,
