@@ -70,6 +70,7 @@ class TableQuerySortCondition(BaseModel):
 class TableRecordQuery(BaseModel):
     filters: list[TableQueryFilterCondition] | None = None
     sorts: list[TableQuerySortCondition] | None = None
+    q: str | None = None
     include_archived: bool = False
     limit: int = Field(default=50, le=100)
     offset: int = Field(default=0, ge=0)
@@ -539,6 +540,7 @@ async def query_records(
         workspace_id=workspace_id,
         filters=filters_dicts,
         sorts=sorts_dicts,
+        search=data.q.strip() if data.q and data.q.strip() else None,
         include_archived=data.include_archived,
         limit=data.limit,
         offset=data.offset,

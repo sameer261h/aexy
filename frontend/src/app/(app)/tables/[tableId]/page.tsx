@@ -480,7 +480,7 @@ export default function TableDetailPage() {
   // offset never gets applied to a different result set.
   useEffect(() => {
     setOffset(0);
-  }, [queryFilters, sortConfig, activeViewId]);
+  }, [queryFilters, sortConfig, activeViewId, searchQuery]);
 
   // Initialize and sync columns when fields change
   useEffect(() => {
@@ -516,6 +516,7 @@ export default function TableDetailPage() {
   } = useTableRecords(workspaceId, tableId, {
     filters: queryFilters.length ? queryFilters : undefined,
     sorts: sortConfig ? [{ attribute: sortConfig.attribute, direction: sortConfig.direction }] : undefined,
+    q: searchQuery || undefined,
     limit: PAGE_LIMIT,
     offset,
   });
@@ -537,22 +538,10 @@ export default function TableDetailPage() {
     }));
   }, [rawRecords]);
 
-  // Structured filters and sorting are applied server-side (see
-  // useTableRecords above) against the complete authorized dataset, not
-  // just this page. Free-text search remains client-side over the loaded
-  // page only: the Tables query contract has no `q` parameter yet (unlike
-  // CRM's), so wiring it to the server is out of this integration's bounded
-  // scope -- see the handoff's known limitations.
-  const filteredRecords = useMemo(() => {
-    let result = records;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter((r) =>
-        Object.values(r.values).some((val) => String(val).toLowerCase().includes(q))
-      );
-    }
-    return result;
-  }, [records, searchQuery, filterRules, attributes]);
+  // Structured filters, sorting, and free-text search are all applied
+  // server-side against the complete authorized dataset via the POST
+  // query endpoint. No client-side filtering remains.
+  const searchableRecords = records;
 
   const hasStatusField = useMemo(() => {
     return fields.some((f) => f.attribute_type === "status");
@@ -578,7 +567,7 @@ export default function TableDetailPage() {
 
   const handleSelectAll = () => {
     setSelectedRecords(
-      selectedRecords.length === filteredRecords.length ? [] : filteredRecords.map((r) => r.id)
+      selectedRecords.length === searchableRecords.length ? [] : searchableRecords.map((r) => r.id)
     );
   };
 
@@ -863,7 +852,7 @@ export default function TableDetailPage() {
           {fields.length > 0 && (
             viewMode === "table" ? (
               <DataTable
-                records={filteredRecords}
+                records={searchableRecords}
                 attributes={attributes}
                 isLoading={isLoading}
                 emptyMessage={searchQuery ? "No records match your search" : "No records yet"}
@@ -888,7 +877,7 @@ export default function TableDetailPage() {
               />
             ) : (
               <KanbanBoard
-                records={filteredRecords}
+                records={searchableRecords}
                 attributes={attributes}
                 onRecordClick={handleRecordClick}
                 onRecordUpdate={handleRecordUpdate}

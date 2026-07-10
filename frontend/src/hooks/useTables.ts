@@ -184,6 +184,7 @@ export function useTableRecords(
   params?: {
     filters?: Record<string, unknown>[];
     sorts?: Record<string, unknown>[];
+    q?: string;
     include_archived?: boolean;
     limit?: number;
     offset?: number;

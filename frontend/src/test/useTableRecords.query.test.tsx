@@ -101,4 +101,28 @@ describe("useTableRecords", () => {
     await waitFor(() => expect(queryMock).toHaveBeenCalledTimes(2));
     expect(queryMock).toHaveBeenLastCalledWith(WORKSPACE, TABLE, { limit: 2, offset: 2 });
   });
+
+  it("sends q to the POST query endpoint for server-side search", async () => {
+    queryMock.mockResolvedValue({ records: [], total: 0, limit: 50, offset: 0 });
+
+    renderHook(
+      () => useTableRecords(WORKSPACE, TABLE, { q: "Acme" }),
+      { wrapper: makeWrapper() }
+    );
+
+    await waitFor(() => expect(queryMock).toHaveBeenCalledTimes(1));
+    expect(queryMock).toHaveBeenCalledWith(WORKSPACE, TABLE, { q: "Acme" });
+  });
+
+  it("omits q from the body when undefined", async () => {
+    queryMock.mockResolvedValue({ records: [], total: 0, limit: 50, offset: 0 });
+
+    renderHook(
+      () => useTableRecords(WORKSPACE, TABLE, {}),
+      { wrapper: makeWrapper() }
+    );
+
+    await waitFor(() => expect(queryMock).toHaveBeenCalledTimes(1));
+    expect(queryMock).toHaveBeenCalledWith(WORKSPACE, TABLE, {});
+  });
 });

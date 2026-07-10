@@ -21624,6 +21624,7 @@ export const tablesApi = {
     query: async (workspaceId: string, tableId: string, body?: {
       filters?: Record<string, unknown>[];
       sorts?: Record<string, unknown>[];
+      q?: string;
       include_archived?: boolean;
       limit?: number;
       offset?: number;
