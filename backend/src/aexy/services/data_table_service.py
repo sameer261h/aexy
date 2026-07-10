@@ -610,13 +610,14 @@ class DataTableService:
         workspace_id: str,
         filters: list[dict] | None = None,
         sorts: list[dict] | None = None,
+        search: str | None = None,
         include_archived: bool = False,
         limit: int = 50,
         offset: int = 0,
         access: TableAccess | None = None,
         user_id: str | None = None,
     ) -> tuple[list[CRMRecord], int]:
-        """List records with filtering, sorting, pagination, and row security."""
+        """List records with filtering, free-text search, sorting, pagination, and row security."""
         table = await self.get_table(table_id)
 
         stmt = (
@@ -636,6 +637,11 @@ class DataTableService:
         # Apply filters
         if filters:
             stmt = self._apply_filters(stmt, filters)
+
+        # Apply free-text search (further narrows the already-scoped query;
+        # never widens it beyond the workspace/object/security predicates above)
+        if search:
+            stmt = await self._apply_search(stmt, table_id, search)
 
         # Count
         count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -1080,6 +1086,41 @@ class DataTableService:
                     )
 
         return stmt
+
+    # Attribute types whose stored value is a plain, directly-searchable
+    # string. Select/multi_select/status store a value slug (not the
+    # display label) and location's shape isn't guaranteed scalar, so they
+    # are excluded rather than searched unsafely.
+    TEXT_SEARCHABLE_ATTRIBUTE_TYPES = {
+        CRMAttributeType.TEXT.value,
+        CRMAttributeType.TEXTAREA.value,
+        CRMAttributeType.EMAIL.value,
+        CRMAttributeType.PHONE.value,
+        CRMAttributeType.PERSON_NAME.value,
+        CRMAttributeType.URL.value,
+    }
+
+    async def _apply_search(self, stmt, table_id: str, search: str):
+        """Apply free-text search across display_name and textual attributes.
+
+        Only narrows the query passed in (adds an AND'd predicate) — never
+        widens the workspace/object/security scope already applied by the
+        caller.
+        """
+        attrs_result = await self.db.execute(
+            select(CRMAttribute.slug).where(
+                CRMAttribute.object_id == table_id,
+                CRMAttribute.attribute_type.in_(self.TEXT_SEARCHABLE_ATTRIBUTE_TYPES),
+            )
+        )
+        slugs = [row[0] for row in attrs_result.all()]
+
+        pattern = f"%{self._escape_like(search)}%"
+        conditions = [CRMRecord.display_name.ilike(pattern)]
+        for slug in slugs:
+            conditions.append(CRMRecord.values[slug].astext.ilike(pattern))
+
+        return stmt.where(or_(*conditions))
 
     def _apply_sorts(self, stmt, sorts: list[dict] | None):
         """Apply sort conditions to a query."""

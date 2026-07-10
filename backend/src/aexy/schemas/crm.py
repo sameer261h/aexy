@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Literal, Any
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # =============================================================================
@@ -420,9 +420,19 @@ class CRMRecordQuery(BaseModel):
     """Query body for POST-based CRM record filtering and sorting."""
     filters: list[QueryFilterCondition] | None = None
     sorts: list[QuerySortCondition] | None = None
+    q: str | None = Field(default=None, max_length=200)
     include_archived: bool = False
     limit: int = Field(default=50, le=100)
     offset: int = Field(default=0, ge=0)
+
+    @field_validator("q")
+    @classmethod
+    def _blank_search_is_no_search(cls, value: str | None) -> str | None:
+        """Trim whitespace; an absent or blank search behaves like no search."""
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
 
 
 class KanbanSettings(BaseModel):

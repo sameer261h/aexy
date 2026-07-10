@@ -817,16 +817,18 @@ class CRMRecordService:
         object_id: str,
         filters: list[dict] | None = None,
         sorts: list[dict] | None = None,
+        search: str | None = None,
         include_archived: bool = False,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[CRMRecord], int]:
-        """List records with filtering and sorting."""
+        """List records with filtering, free-text search, and sorting."""
         return await self.dts.list_records(
             table_id=object_id,
             workspace_id=workspace_id,
             filters=filters,
             sorts=sorts,
+            search=search,
             include_archived=include_archived,
             limit=limit,
             offset=offset,

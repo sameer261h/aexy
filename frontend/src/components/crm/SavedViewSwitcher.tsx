@@ -40,6 +40,7 @@ interface SavedViewSwitcherProps {
     visible_attributes?: string[];
     column_config?: ColumnDisplayConfig[];
     sorts?: Record<string, unknown>[];
+    filters?: Record<string, unknown>[];
     view_type?: "table" | "kanban" | "board";
   };
   isCreating?: boolean;
@@ -95,6 +96,7 @@ export function SavedViewSwitcher({
       visible_attributes: currentConfig?.visible_attributes,
       column_config: currentConfig?.column_config,
       sorts: currentConfig?.sorts,
+      filters: currentConfig?.filters,
     });
     setNewName("");
     setIsNaming(false);
@@ -112,6 +114,7 @@ export function SavedViewSwitcher({
       visible_attributes: currentConfig.visible_attributes,
       column_config: currentConfig.column_config,
       sorts: currentConfig.sorts,
+      filters: currentConfig.filters,
     });
   };
 

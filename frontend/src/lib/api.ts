@@ -10173,6 +10173,25 @@ export const crmApi = {
       return response.data;
     },
 
+    // Server-side filter/sort/search query (truthful pagination: the
+    // returned `total` reflects the complete authorized+filtered dataset,
+    // not just the returned page).
+    query: async (
+      workspaceId: string,
+      objectId: string,
+      body?: {
+        filters?: Record<string, unknown>[];
+        sorts?: Record<string, unknown>[];
+        q?: string;
+        include_archived?: boolean;
+        limit?: number;
+        offset?: number;
+      }
+    ): Promise<{ records: CRMRecord[]; total: number; limit: number; offset: number }> => {
+      const response = await api.post(`/workspaces/${workspaceId}/crm/objects/${objectId}/records/query`, body ?? {});
+      return response.data;
+    },
+
     get: async (workspaceId: string, recordId: string): Promise<CRMRecord> => {
       const response = await api.get(`/workspaces/${workspaceId}/crm/records/${recordId}`);
       return response.data;

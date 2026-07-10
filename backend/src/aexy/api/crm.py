@@ -1468,6 +1468,7 @@ async def query_records(
         object_id=object_id,
         filters=filters_dicts,
         sorts=sorts_dicts,
+        search=data.q,
         include_archived=data.include_archived,
         limit=data.limit,
         offset=data.offset,
