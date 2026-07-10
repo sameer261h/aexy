@@ -18,14 +18,17 @@ interface RelationshipCandidatePickerProps {
   placeholder?: string;
   /** Fires with the chosen candidate. This component never persists the
    * selection itself -- it is purely a search-and-callback picker, not an
-   * editor. Callers that want to keep it are responsible for that. */
+   * editor. Whether the selection is actually saved is entirely up to the
+   * caller (e.g. `RelationshipsPanel` calls the mutation endpoint from its
+   * own `onSelect`; a read-only caller can pass a no-op). */
   onSelect: (candidate: CandidateRecord) => void;
 }
 
-/** Reusable, read-only, debounced candidate search for a future
- * relationship picker. No save action, no local persistence of the
- * selection -- selecting a result only invokes `onSelect` and clears the
- * search, exactly like a "jump to" search rather than an editor. */
+/** Reusable, debounced candidate search. Never calls a save API itself and
+ * never remembers the selection -- it only invokes `onSelect` with the
+ * chosen candidate and clears the search, exactly like a "jump to" search
+ * rather than an editor. Callers that do persist the selection should show
+ * their own saving/error state; this component makes no claim either way. */
 export function RelationshipCandidatePicker({
   workspaceId,
   objectId,
@@ -86,7 +89,7 @@ export function RelationshipCandidatePicker({
 
       {lastSelected && (
         <p className="text-xs text-purple-400">
-          Selected &quot;{lastSelected.record_label}&quot; -- not saved.
+          Selected &quot;{lastSelected.record_label}&quot;.
         </p>
       )}
 

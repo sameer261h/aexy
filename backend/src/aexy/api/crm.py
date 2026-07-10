@@ -50,6 +50,8 @@ from aexy.schemas.crm_relationships import (
     RelationshipsResponse,
     BacklinksResponse,
     CandidateSearchResponse,
+    RelationshipGroup,
+    RelationshipMutationRequest,
 )
 from aexy.services.crm_relationship_service import CRMRelationshipService
 from aexy.services.crm_service import (
@@ -1691,6 +1693,42 @@ async def search_relationship_candidates(
         exclude_record_id=exclude_record_id,
         exclude_ids=exclude_ids or None,
         include_archived=include_archived,
+    )
+
+
+@router.patch(
+    "/objects/{object_id}/records/{record_id}/relationships/{attribute_id}",
+    response_model=RelationshipGroup,
+)
+async def update_record_relationship(
+    workspace_id: str,
+    object_id: str,
+    record_id: str,
+    attribute_id: str,
+    data: RelationshipMutationRequest,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set a `record_reference` attribute to its desired final value (a
+    full replace, not an incremental add/remove -- callers compute the
+    after-state and submit it here). Requires `edit` access on the source
+    object plus row-security on the specific record; every requested target
+    identifier is independently re-validated against the target object's
+    own authorization and row-security before anything is persisted.
+
+    Two extra path segments beyond `/records/{record_id}` (`relationships`
+    then `{attribute_id}`), so this can never collide with the plain
+    record GET/PATCH/DELETE routes regardless of registration order."""
+    await check_workspace_permission(workspace_id, current_user, db)
+
+    relationship_service = CRMRelationshipService(db)
+    return await relationship_service.mutate_relationship(
+        object_id=object_id,
+        record_id=record_id,
+        attribute_id=attribute_id,
+        requested_value=data.value,
+        workspace_id=workspace_id,
+        user_id=str(current_user.id),
     )
 
 

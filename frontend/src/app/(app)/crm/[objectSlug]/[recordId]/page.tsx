@@ -25,7 +25,6 @@ import {
 } from "@/components/crm/RecordTabs";
 import { RelationshipsPanel } from "@/components/crm/relationships/RelationshipsPanel";
 import { BacklinksPanel } from "@/components/crm/relationships/BacklinksPanel";
-import { RelationshipCandidatePicker } from "@/components/crm/relationships/RelationshipCandidatePicker";
 import { useRecordRelationships, useRecordBacklinks } from "@/hooks/useCRMRelationships";
 
 export default function RecordDetailPage() {
@@ -87,7 +86,6 @@ export default function RecordDetailPage() {
   const [activeTab, setActiveTab] = useState<RecordTabId>("overview");
   const [newNote, setNewNote] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [candidateTargetObjectId, setCandidateTargetObjectId] = useState<string | null>(null);
 
   // Navigation helpers
   const currentIndex = useMemo(() => {
@@ -303,33 +301,6 @@ export default function RecordDetailPage() {
                     objectId={currentObject?.id || null}
                     recordId={recordId}
                     objects={objects}
-                  />
-                </div>
-
-                <div>
-                  <h3 className="text-sm font-semibold text-foreground mb-3">Find records</h3>
-                  <div className="flex items-center gap-2 mb-2">
-                    <label className="text-xs text-muted-foreground">In:</label>
-                    <select
-                      value={candidateTargetObjectId || currentObject?.id || ""}
-                      onChange={(e) => setCandidateTargetObjectId(e.target.value)}
-                      className="text-xs bg-muted border border-border rounded-md px-2 py-1 text-foreground"
-                    >
-                      {objects.map((o) => (
-                        <option key={o.id} value={o.id}>{o.plural_name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <RelationshipCandidatePicker
-                    workspaceId={workspaceId}
-                    objectId={currentObject?.id || null}
-                    targetObjectId={candidateTargetObjectId || currentObject?.id || null}
-                    excludeRecordId={recordId}
-                    onSelect={() => {
-                      // Read-only demonstration: the picker only reports a
-                      // selection via this callback. Nothing is persisted --
-                      // there is no relationship-write endpoint yet.
-                    }}
                   />
                 </div>
               </div>

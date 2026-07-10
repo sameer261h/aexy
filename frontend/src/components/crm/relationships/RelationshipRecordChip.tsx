@@ -1,6 +1,6 @@
 "use client";
 
-import { Database, Archive, EyeOff } from "lucide-react";
+import { Database, Archive, EyeOff, X } from "lucide-react";
 import { RelatedRecordSummary } from "@/lib/api";
 
 interface RelationshipRecordChipProps {
@@ -10,12 +10,17 @@ interface RelationshipRecordChipProps {
    * navigable yet, in which case the chip renders as non-clickable. */
   objectSlug?: string;
   onClick?: () => void;
+  /** When provided, renders a remove control on the chip. Available even
+   * for inaccessible/placeholder references -- the stored ID can still be
+   * removed from the relationship even though its label can't be shown. */
+  onRemove?: () => void;
+  removing?: boolean;
 }
 
 /** A single resolved (or intentionally opaque) relationship reference.
  * Never discloses a label for an inaccessible/stale/foreign reference --
  * it only ever echoes back the ID the caller's own record already stored. */
-export function RelationshipRecordChip({ summary, objectSlug, onClick }: RelationshipRecordChipProps) {
+export function RelationshipRecordChip({ summary, objectSlug, onClick, onRemove, removing }: RelationshipRecordChipProps) {
   if (!summary.accessible) {
     return (
       <span
@@ -24,6 +29,17 @@ export function RelationshipRecordChip({ summary, objectSlug, onClick }: Relatio
       >
         <EyeOff className="h-3 w-3" />
         Unavailable reference
+        {onRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            disabled={removing}
+            aria-label="Remove reference"
+            className="ml-0.5 rounded hover:bg-muted disabled:opacity-50"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        )}
       </span>
     );
   }
@@ -31,22 +47,32 @@ export function RelationshipRecordChip({ summary, objectSlug, onClick }: Relatio
   const clickable = !!onClick && !!objectSlug;
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={!clickable}
+    <span
       className={
         clickable
           ? "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-muted/50 hover:border-purple-500/50 hover:bg-purple-500/10 text-sm text-foreground transition-colors"
-          : "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-muted/30 text-sm text-muted-foreground cursor-default"
+          : "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-muted/30 text-sm text-muted-foreground"
       }
       title={summary.object_label ? `${summary.object_label}: ${summary.record_label}` : summary.record_label ?? undefined}
     >
-      <Database className="h-3 w-3 text-purple-400 shrink-0" />
-      <span className="truncate max-w-[220px]">{summary.record_label}</span>
-      {summary.is_archived && (
-        <Archive className="h-3 w-3 text-muted-foreground shrink-0" aria-label="Archived" />
+      <button type="button" onClick={onClick} disabled={!clickable} className="inline-flex items-center gap-1.5 disabled:cursor-default">
+        <Database className="h-3 w-3 text-purple-400 shrink-0" />
+        <span className="truncate max-w-[220px]">{summary.record_label}</span>
+        {summary.is_archived && (
+          <Archive className="h-3 w-3 text-muted-foreground shrink-0" aria-label="Archived" />
+        )}
+      </button>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={removing}
+          aria-label="Remove reference"
+          className="rounded hover:bg-muted disabled:opacity-50"
+        >
+          <X className="h-3 w-3" />
+        </button>
       )}
-    </button>
+    </span>
   );
 }

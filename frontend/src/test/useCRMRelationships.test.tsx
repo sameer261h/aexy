@@ -12,6 +12,7 @@ import type { ReactNode } from "react";
 const getRelationshipsMock = vi.fn();
 const getBacklinksMock = vi.fn();
 const searchCandidatesMock = vi.fn();
+const mutateApiMock = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   crmApi: {
@@ -19,6 +20,7 @@ vi.mock("@/lib/api", () => ({
       get: (...args: unknown[]) => getRelationshipsMock(...args),
       backlinks: (...args: unknown[]) => getBacklinksMock(...args),
       searchCandidates: (...args: unknown[]) => searchCandidatesMock(...args),
+      mutate: (...args: unknown[]) => mutateApiMock(...args),
     },
   },
 }));
@@ -27,6 +29,7 @@ import {
   useRecordRelationships,
   useRecordBacklinks,
   useRelationshipCandidates,
+  useMutateRelationship,
 } from "@/hooks/useCRMRelationships";
 
 function makeWrapper() {
@@ -47,6 +50,7 @@ beforeEach(() => {
   getRelationshipsMock.mockReset();
   getBacklinksMock.mockReset();
   searchCandidatesMock.mockReset();
+  mutateApiMock.mockReset();
 });
 
 describe("useRecordRelationships", () => {
@@ -136,5 +140,50 @@ describe("useRelationshipCandidates", () => {
     );
     await new Promise((r) => setTimeout(r, 50));
     expect(searchCandidatesMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("useMutateRelationship", () => {
+  it("calls the mutate endpoint with the attribute id and full desired value", async () => {
+    mutateApiMock.mockResolvedValue({
+      attribute_id: "a1", attribute_name: "Company", target_object_id: "obj-2",
+      allow_multiple: false, total: 1, items: [],
+    });
+    const { result } = renderHook(() => useMutateRelationship(WORKSPACE, OBJECT, RECORD), { wrapper: makeWrapper() });
+    result.current.mutate({ attributeId: "a1", value: "target-1" });
+    await waitFor(() =>
+      expect(mutateApiMock).toHaveBeenCalledWith(WORKSPACE, OBJECT, RECORD, "a1", "target-1")
+    );
+  });
+
+  it("invalidates and refetches relationships after a successful mutation", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const Wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    getRelationshipsMock.mockResolvedValue({ groups: [] });
+    mutateApiMock.mockResolvedValue({
+      attribute_id: "a1", attribute_name: "Company", target_object_id: "obj-2",
+      allow_multiple: false, total: 1, items: [],
+    });
+
+    renderHook(() => useRecordRelationships(WORKSPACE, OBJECT, RECORD), { wrapper: Wrapper });
+    await waitFor(() => expect(getRelationshipsMock).toHaveBeenCalledTimes(1));
+
+    const { result: mutResult } = renderHook(
+      () => useMutateRelationship(WORKSPACE, OBJECT, RECORD), { wrapper: Wrapper }
+    );
+    mutResult.current.mutate({ attributeId: "a1", value: "target-1" });
+
+    await waitFor(() => expect(getRelationshipsMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("surfaces a failed mutation as an error without throwing", async () => {
+    mutateApiMock.mockRejectedValue(new Error("boom"));
+    const { result } = renderHook(() => useMutateRelationship(WORKSPACE, OBJECT, RECORD), { wrapper: makeWrapper() });
+    result.current.mutate({ attributeId: "a1", value: "target-1" });
+    await waitFor(() => expect(result.current.error).toBeTruthy());
   });
 });

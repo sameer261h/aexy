@@ -1,10 +1,11 @@
-"""Read-only schemas for CRM record relationship navigation.
+"""Schemas for CRM record relationship navigation and mutation.
 
 Covers resolving `record_reference` attribute values into authorized
-summaries, deriving incoming backlinks, and searching candidate records for
-a future picker. No mutation/write schemas live here -- see
-`DEEPSEEK_RELATIONSHIP_VALUES_HANDOFF`-owned normalization utility (a
-separate worktree) for write-side value handling.
+summaries, deriving incoming backlinks, searching candidate records, and
+writing a relationship attribute's value. Write-side validation/diffing is
+delegated entirely to `aexy.services.relationship_value_service` (the
+normalization engine) -- this module only defines the request/response
+shapes.
 """
 
 from pydantic import BaseModel
@@ -72,3 +73,12 @@ class CandidateSearchResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class RelationshipMutationRequest(BaseModel):
+    """The desired final value for one `record_reference` attribute --
+    not an incremental add/remove. Callers compute the after-state (e.g.
+    existing IDs minus one to remove) and submit it here; the normalization
+    engine diffs it against the stored value server-side."""
+
+    value: str | list[str] | None = None

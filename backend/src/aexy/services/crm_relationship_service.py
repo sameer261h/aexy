@@ -1,19 +1,27 @@
-"""Read-only CRM relationship navigation: resolving `record_reference`
+"""CRM relationship navigation and mutation: resolving `record_reference`
 attribute values into authorized summaries, deriving incoming backlinks,
-and searching candidate records for a future picker.
+searching candidate records, and writing a relationship attribute's value.
 
-No relationship writes, normalization, or persistence live here. Reuses
-`DataTableService`/`TableAuthService` for all authorization, row-security,
-and search -- it does not duplicate that query engine.
+Reuses `DataTableService`/`TableAuthService` for all authorization,
+row-security, and search -- it does not duplicate that query engine. Write
+validation/diffing is delegated entirely to
+`aexy.services.relationship_value_service` (the normalization engine); this
+service only handles authorization, target resolution, and persistence.
 """
 
 from typing import Any
 
+from fastapi import HTTPException, status
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aexy.models.crm import CRMAttribute, CRMObject, CRMRecord, CRMAttributeType
 from aexy.services.data_table_service import DataTableService, TableAccess
+from aexy.services.relationship_value_service import (
+    normalize_relationship_value,
+    RelationshipNormalizationResult,
+)
+from aexy.services.crm_service import CRMRecordService
 from aexy.schemas.crm_relationships import (
     RelatedRecordSummary,
     RelationshipGroup,
@@ -23,6 +31,28 @@ from aexy.schemas.crm_relationships import (
     CandidateRecord,
     CandidateSearchResponse,
 )
+
+
+def _serialize_issues(result: RelationshipNormalizationResult) -> dict[str, Any]:
+    """Convert normalization errors/warnings (dataclasses with Enum fields)
+    into plain JSON-serializable dicts for an HTTPException detail --
+    Starlette's JSONResponse does not run detail through jsonable_encoder."""
+    return {
+        "errors": [
+            {
+                "code": e.code.value,
+                "message": e.message,
+                "identifier": e.identifier,
+                "position": e.position,
+                "cardinality": e.cardinality,
+            }
+            for e in result.errors
+        ],
+        "warnings": [
+            {"code": w.code.value, "message": w.message, "identifier": w.identifier}
+            for w in result.warnings
+        ],
+    }
 
 # Attribute types whose value is meaningfully displayable as a record label.
 # Mirrors the free-text search allowlist in DataTableService -- a record's
@@ -356,3 +386,124 @@ class CRMRelationshipService:
             for r in records
         ]
         return CandidateSearchResponse(items=items, total=total, limit=limit, offset=offset)
+
+    async def mutate_relationship(
+        self,
+        object_id: str,
+        record_id: str,
+        attribute_id: str,
+        requested_value: str | list[str] | None,
+        workspace_id: str,
+        user_id: str,
+    ) -> RelationshipGroup:
+        """Validate and persist a `record_reference` attribute's value to
+        the caller-supplied desired final state, then return the refreshed
+        group. Every validation failure raises before any persistence --
+        there is no path that mutates `record.values` and then fails."""
+        access = await self.dts.auth.check_access(object_id, user_id, "edit", workspace_id)
+
+        source_table = await self.dts.get_table(object_id, workspace_id)
+        if not source_table:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Object not found")
+
+        record_stmt = select(CRMRecord).where(
+            CRMRecord.id == record_id,
+            CRMRecord.workspace_id == workspace_id,
+            CRMRecord.object_id == object_id,
+        )
+        record_stmt = self.dts._apply_row_security(record_stmt, source_table, access, user_id=user_id)
+        record = (await self.db.execute(record_stmt)).scalar_one_or_none()
+        if not record:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")
+
+        attr_stmt = select(CRMAttribute).where(
+            CRMAttribute.id == attribute_id,
+            CRMAttribute.object_id == object_id,
+        )
+        attr = (await self.db.execute(attr_stmt)).scalar_one_or_none()
+        if not attr:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Relationship attribute not found",
+            )
+        if attr.attribute_type != CRMAttributeType.RECORD_REFERENCE.value:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Attribute is not a relationship attribute",
+            )
+
+        target_object_id = (attr.config or {}).get("targetObjectId")
+        target_table = (
+            await self.dts.get_table(target_object_id, workspace_id) if target_object_id else None
+        )
+        if not target_object_id or not target_table:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Relationship attribute's target object is not configured for this workspace",
+            )
+        allow_multiple = bool((attr.config or {}).get("allowMultiple"))
+
+        self.dts.auth.validate_write({attr.slug: requested_value}, access)
+
+        result = normalize_relationship_value(
+            record.values.get(attr.slug), requested_value, allow_multiple=allow_multiple,
+        )
+        if result.errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=_serialize_issues(result),
+            )
+
+        if result.is_noop:
+            return await self._group_for_attribute(object_id, record, workspace_id, user_id, attr)
+
+        resolved = await self._resolve_target_ids(
+            target_object_id, result.normalized_requested or [], workspace_id, user_id,
+        )
+        if any(v is None for v in resolved.values()):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="One or more selected records are invalid or inaccessible",
+            )
+
+        persisted_value: str | list[str] | None
+        if allow_multiple:
+            persisted_value = result.normalized_requested or []
+        else:
+            persisted_value = result.normalized_requested[0] if result.normalized_requested else None
+
+        record_service = CRMRecordService(self.db)
+        updated = await record_service.update_record(
+            record_id=record_id,
+            values={attr.slug: persisted_value},
+            updated_by_id=user_id,
+            workspace_id=workspace_id,
+            object_id=object_id,
+        )
+        await self.db.commit()
+        assert updated is not None  # already confirmed to exist above
+
+        return await self._group_for_attribute(object_id, updated, workspace_id, user_id, attr)
+
+    async def _group_for_attribute(
+        self,
+        object_id: str,
+        record: CRMRecord,
+        workspace_id: str,
+        user_id: str,
+        attr: CRMAttribute,
+    ) -> RelationshipGroup:
+        response = await self.get_relationships(object_id, record, workspace_id, user_id)
+        for group in response.groups:
+            if group.attribute_id == attr.id:
+                return group
+        # Defensive fallback -- unreachable since `attr` is itself a
+        # record_reference attribute on `object_id`.
+        return RelationshipGroup(
+            attribute_id=attr.id,
+            attribute_name=attr.name,
+            target_object_id=(attr.config or {}).get("targetObjectId") or "",
+            allow_multiple=bool((attr.config or {}).get("allowMultiple")),
+            total=0,
+            items=[],
+        )

@@ -1,7 +1,13 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { crmApi, RelationshipsResponse, BacklinksResponse, CandidateSearchResponse } from "@/lib/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  crmApi,
+  RelationshipsResponse,
+  BacklinksResponse,
+  CandidateSearchResponse,
+  RelationshipGroup,
+} from "@/lib/api";
 
 /** Outgoing `record_reference` relationships resolved into authorized
  * summaries, grouped by attribute. Read-only -- no mutation. */
@@ -83,5 +89,40 @@ export function useRelationshipCandidates(
     offset: data?.offset ?? params.offset ?? 0,
     isLoading,
     error,
+  };
+}
+
+/** Set a `record_reference` attribute to its desired final value (full
+ * replace). No optimistic update -- the relationships query is invalidated
+ * and refetched only after the server confirms success, so a failed
+ * mutation never shows as though it succeeded. */
+export function useMutateRelationship(
+  workspaceId: string | null,
+  objectId: string | null,
+  recordId: string | null
+) {
+  const queryClient = useQueryClient();
+
+  const mutation = useMutation<
+    RelationshipGroup,
+    unknown,
+    { attributeId: string; value: string | string[] | null }
+  >({
+    mutationFn: ({ attributeId, value }) =>
+      crmApi.relationships.mutate(workspaceId!, objectId!, recordId!, attributeId, value),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["crmRecordRelationships", workspaceId, objectId, recordId],
+      });
+    },
+  });
+
+  return {
+    mutate: mutation.mutate,
+    mutateAsync: mutation.mutateAsync,
+    isPending: mutation.isPending,
+    error: mutation.error,
+    reset: mutation.reset,
+    variables: mutation.variables,
   };
 }

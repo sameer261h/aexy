@@ -68,9 +68,10 @@ describe("RelationshipCandidatePicker", () => {
       expect.objectContaining({ record_id: "r1", record_label: "Acme Corp" })
     );
     // The picker clears its own search after a selection -- it never keeps
-    // a "selected" list of its own.
+    // a "selected" list of its own, and never claims persistence either way
+    // (that's the caller's responsibility).
     expect((screen.getByPlaceholderText("Search records…") as HTMLInputElement).value).toBe("");
-    expect(screen.getByText(/not saved/i)).toBeInTheDocument();
+    expect(screen.getByText('Selected "Acme Corp".')).toBeInTheDocument();
   }, 2000);
 
   it("shows a loading state while searching", () => {

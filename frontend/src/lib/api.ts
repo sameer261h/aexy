@@ -10103,6 +10103,19 @@ export interface CandidateSearchResponse {
   offset: number;
 }
 
+export interface RelationshipMutationError {
+  code: string;
+  message: string;
+  identifier: string | null;
+  position: number | null;
+  cardinality: "single" | "multi" | null;
+}
+
+export interface RelationshipMutationErrorDetail {
+  errors: RelationshipMutationError[];
+  warnings: { code: string; message: string; identifier: string | null }[];
+}
+
 // ============================================================================
 // CRM API
 // ============================================================================
@@ -10340,6 +10353,24 @@ export const crmApi = {
           // repeated `key=` params instead.
           paramsSerializer: { indexes: null },
         }
+      );
+      return response.data;
+    },
+
+    // Set a `record_reference` attribute to its desired final value (a full
+    // replace, not an incremental add/remove -- compute the after-state and
+    // submit it here). Throws on validation/authorization failure; the
+    // stored value is guaranteed unchanged on any thrown error.
+    mutate: async (
+      workspaceId: string,
+      objectId: string,
+      recordId: string,
+      attributeId: string,
+      value: string | string[] | null
+    ): Promise<RelationshipGroup> => {
+      const response = await api.patch(
+        `/workspaces/${workspaceId}/crm/objects/${objectId}/records/${recordId}/relationships/${attributeId}`,
+        { value }
       );
       return response.data;
     },
