@@ -381,6 +381,15 @@ class SortCondition(BaseModel):
     nulls: NullsPosition = "last"
 
 
+class CRMRecordQuery(BaseModel):
+    """Query body for POST-based CRM record filtering and sorting."""
+    filters: list[FilterCondition] | None = None
+    sorts: list[SortCondition] | None = None
+    include_archived: bool = False
+    limit: int = Field(default=50, le=100)
+    offset: int = Field(default=0, ge=0)
+
+
 class KanbanSettings(BaseModel):
     """Kanban-specific settings."""
     show_empty_columns: bool = True

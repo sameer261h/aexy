@@ -44,6 +44,7 @@ from aexy.schemas.crm import (
     # Filter/sort
     FilterCondition,
     SortCondition,
+    CRMRecordQuery,
 )
 from aexy.services.crm_service import (
     CRMObjectService,
@@ -1433,6 +1434,62 @@ async def list_records(
         "total": total,
         "limit": limit,
         "offset": offset,
+    }
+
+
+@router.post("/objects/{object_id}/records/query")
+async def query_records(
+    workspace_id: str,
+    object_id: str,
+    data: CRMRecordQuery,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Query CRM records with server-side filtering and sorting."""
+    await check_workspace_permission(workspace_id, current_user, db)
+
+    filters_dicts: list[dict] | None = None
+    if data.filters:
+        filters_dicts = [
+            {"attribute": f.attribute, "operator": f.operator, "value": f.value}
+            for f in data.filters
+        ]
+
+    sorts_dicts: list[dict] | None = None
+    if data.sorts:
+        sorts_dicts = [
+            {"attribute": s.attribute, "direction": s.direction}
+            for s in data.sorts
+        ]
+
+    service = CRMRecordService(db)
+    records, total = await service.list_records(
+        workspace_id=workspace_id,
+        object_id=object_id,
+        filters=filters_dicts,
+        sorts=sorts_dicts,
+        include_archived=data.include_archived,
+        limit=data.limit,
+        offset=data.offset,
+    )
+
+    return {
+        "records": [
+            CRMRecordListResponse(
+                id=str(r.id),
+                object_id=str(r.object_id),
+                values=r.values,
+                display_name=r.display_name,
+                owner_id=str(r.owner_id) if r.owner_id else None,
+                is_archived=r.is_archived,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+            )
+            for r in records
+        ],
+        "total": total,
+        "limit": data.limit,
+        "offset": data.offset,
     }
 
 
