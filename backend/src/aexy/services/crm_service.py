@@ -802,9 +802,14 @@ class CRMRecordService:
 
         return record
 
-    async def get_record(self, record_id: str) -> CRMRecord | None:
+    async def get_record(
+        self,
+        record_id: str,
+        object_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> CRMRecord | None:
         """Get a record by ID."""
-        return await self.dts.get_record(record_id)
+        return await self.dts.get_record(record_id, object_id, workspace_id)
 
     async def list_records(
         self,
@@ -833,10 +838,12 @@ class CRMRecordService:
         values: dict[str, Any] | None = None,
         owner_id: str | None = None,
         updated_by_id: str | None = None,
+        workspace_id: str | None = None,
+        object_id: str | None = None,
     ) -> CRMRecord | None:
         """Update a record with CRM activity logging and events."""
         # Get old values before update for change tracking
-        record = await self.dts.get_record(record_id)
+        record = await self.dts.get_record(record_id, object_id, workspace_id)
         if not record:
             return None
         old_values = record.values.copy()
@@ -845,6 +852,8 @@ class CRMRecordService:
             record_id=record_id,
             values=values,
             owner_id=owner_id,
+            table_id=object_id,
+            workspace_id=workspace_id,
         )
         if not record:
             return None
@@ -1061,9 +1070,11 @@ class CRMRecordService:
         record_id: str,
         permanent: bool = False,
         deleted_by_id: str | None = None,
+        workspace_id: str | None = None,
+        object_id: str | None = None,
     ) -> bool:
         """Delete a record with CRM activity logging and events."""
-        record = await self.dts.get_record(record_id)
+        record = await self.dts.get_record(record_id, object_id, workspace_id)
         if not record:
             return False
 
@@ -1089,7 +1100,9 @@ class CRMRecordService:
                 title="Deleted CRM record",
             )
 
-        result = await self.dts.delete_record(record_id, permanent)
+        result = await self.dts.delete_record(
+            record_id, permanent, table_id=object_id, workspace_id=workspace_id
+        )
         if not result:
             return False
 

@@ -208,6 +208,8 @@ async def update_stage(
     await _owned_pipeline(db, workspace_id, pipeline_id)
     stage = await StageService(db).update_stage(
         stage_id,
+        pipeline_id=pipeline_id,
+        workspace_id=workspace_id,
         name=data.name,
         color=data.color,
         stage_type=data.stage_type,
@@ -233,7 +235,11 @@ async def delete_stage(
     await _owned_pipeline(db, workspace_id, pipeline_id)
     try:
         ok = await StageService(db).delete_stage(
-            stage_id, reassign_to, actor_id=str(current_user.id)
+            stage_id,
+            reassign_to,
+            actor_id=str(current_user.id),
+            pipeline_id=pipeline_id,
+            workspace_id=workspace_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -274,7 +280,11 @@ async def move_record(
     await _owned_pipeline(db, workspace_id, pipeline_id)
     try:
         record = await StageMovementService(db).move_record_to_stage(
-            pipeline_id, record_id, data.to_stage_key, actor_id=str(current_user.id)
+            pipeline_id,
+            record_id,
+            data.to_stage_key,
+            actor_id=str(current_user.id),
+            workspace_id=workspace_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -296,9 +306,15 @@ async def bulk_move(
     await _owned_pipeline(db, workspace_id, pipeline_id)
     try:
         moved = await StageMovementService(db).bulk_move(
-            pipeline_id, data.record_ids, data.to_stage_key, actor_id=str(current_user.id)
+            pipeline_id,
+            data.record_ids,
+            data.to_stage_key,
+            actor_id=str(current_user.id),
+            workspace_id=workspace_id,
         )
     except ValueError as e:
+        if "records not found" in str(e):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     await db.commit()
     return {"moved": moved}
@@ -317,7 +333,7 @@ async def analytics_summary(
 ):
     await check_workspace_permission(workspace_id, current_user, db)
     await _owned_pipeline(db, workspace_id, pipeline_id)
-    return await PipelineAnalyticsService(db).stage_summary(pipeline_id)
+    return await PipelineAnalyticsService(db).stage_summary(pipeline_id, workspace_id)
 
 
 @router.get("/pipelines/{pipeline_id}/analytics/forecast")
@@ -329,7 +345,7 @@ async def analytics_forecast(
 ):
     await check_workspace_permission(workspace_id, current_user, db)
     await _owned_pipeline(db, workspace_id, pipeline_id)
-    return await PipelineAnalyticsService(db).forecast(pipeline_id)
+    return await PipelineAnalyticsService(db).forecast(pipeline_id, workspace_id)
 
 
 @router.get("/pipelines/{pipeline_id}/analytics/conversion")
@@ -342,7 +358,9 @@ async def analytics_conversion(
 ):
     await check_workspace_permission(workspace_id, current_user, db)
     await _owned_pipeline(db, workspace_id, pipeline_id)
-    return await PipelineAnalyticsService(db).conversion_rates(pipeline_id, window_days=window)
+    return await PipelineAnalyticsService(db).conversion_rates(
+        pipeline_id, window_days=window, workspace_id=workspace_id
+    )
 
 
 @router.get("/pipelines/{pipeline_id}/analytics/velocity")
@@ -354,7 +372,7 @@ async def analytics_velocity(
 ):
     await check_workspace_permission(workspace_id, current_user, db)
     await _owned_pipeline(db, workspace_id, pipeline_id)
-    return await PipelineAnalyticsService(db).stage_velocity(pipeline_id)
+    return await PipelineAnalyticsService(db).stage_velocity(pipeline_id, workspace_id)
 
 
 @router.get("/records/{record_id}/stage-history")

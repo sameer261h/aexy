@@ -452,7 +452,9 @@ class AgentService:
         if record_id:
             from aexy.services.crm_service import CRMRecordService
             record_service = CRMRecordService(self.db)
-            record = await record_service.get_record(record_id)
+            record = await record_service.get_record(
+                record_id, workspace_id=agent.workspace_id
+            )
             if record:
                 record_data = {
                     "id": record.id,
@@ -1130,7 +1132,9 @@ class AgentService:
         if record_id:
             from aexy.services.crm_service import CRMRecordService
             record_service = CRMRecordService(self.db)
-            record = await record_service.get_record(record_id)
+            record = await record_service.get_record(
+                record_id, workspace_id=agent.workspace_id
+            )
             if record:
                 record_data = {
                     "id": record.id,
@@ -1454,7 +1458,9 @@ class AgentService:
         if record_id and not record_data:
             from aexy.services.crm_service import CRMRecordService
             record_service = CRMRecordService(self.db)
-            record = await record_service.get_record(record_id)
+            record = await record_service.get_record(
+                record_id, workspace_id=workspace_id
+            )
             if record:
                 record_data = {
                     "id": record.id,

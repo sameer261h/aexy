@@ -370,11 +370,20 @@ class StageService:
         stmt = stmt.order_by(CRMPipelineStage.position)
         return list((await self.db.execute(stmt)).scalars().all())
 
-    async def get_stage(self, stage_id: str) -> CRMPipelineStage | None:
+    async def get_stage(
+        self,
+        stage_id: str,
+        pipeline_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> CRMPipelineStage | None:
+        """Load a stage, optionally bound to its route pipeline/workspace."""
+        stmt = select(CRMPipelineStage).where(CRMPipelineStage.id == stage_id)
+        if pipeline_id is not None:
+            stmt = stmt.where(CRMPipelineStage.pipeline_id == pipeline_id)
+        if workspace_id is not None:
+            stmt = stmt.where(CRMPipelineStage.workspace_id == workspace_id)
         return (
-            await self.db.execute(
-                select(CRMPipelineStage).where(CRMPipelineStage.id == stage_id)
-            )
+            await self.db.execute(stmt)
         ).scalar_one_or_none()
 
     async def create_stage(
@@ -422,6 +431,8 @@ class StageService:
     async def update_stage(
         self,
         stage_id: str,
+        pipeline_id: str | None = None,
+        workspace_id: str | None = None,
         name: str | None = None,
         color: str | None = None,
         stage_type: str | None = None,
@@ -429,7 +440,7 @@ class StageService:
         rotting_days: int | None = None,
     ) -> CRMPipelineStage | None:
         """Update stage metadata. ``value_key`` is immutable (records reference it)."""
-        stage = await self.get_stage(stage_id)
+        stage = await self.get_stage(stage_id, pipeline_id, workspace_id)
         if not stage:
             return None
         if name is not None:
@@ -464,13 +475,15 @@ class StageService:
         stage_id: str,
         reassign_to_stage_key: str | None,
         actor_id: str | None = None,
+        pipeline_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> bool:
         """Delete a stage, first moving any occupying records off it.
 
         ``reassign_to_stage_key`` receives those records (or ``None`` clears the
         field). Refuses to delete the last active stage.
         """
-        stage = await self.get_stage(stage_id)
+        stage = await self.get_stage(stage_id, pipeline_id, workspace_id)
         if not stage:
             return False
         pipeline = await self._get_pipeline(stage.pipeline_id)
@@ -482,6 +495,12 @@ class StageService:
             raise ValueError("Cannot delete the last remaining stage")
         if reassign_to_stage_key and reassign_to_stage_key == stage.value_key:
             raise ValueError("Cannot reassign records to the stage being deleted")
+        if reassign_to_stage_key and not any(
+            candidate.value_key == reassign_to_stage_key
+            for candidate in active
+            if candidate.id != stage_id
+        ):
+            raise ValueError("Reassignment stage not found in this pipeline")
 
         # Move occupying records so history + events fire.
         attr = (
@@ -501,6 +520,7 @@ class StageService:
                     await self.db.execute(
                         select(CRMRecord).where(
                             CRMRecord.object_id == pipeline.object_id,
+                            CRMRecord.workspace_id == pipeline.workspace_id,
                             CRMRecord.is_archived == False,  # noqa: E712
                         )
                     )
@@ -514,6 +534,8 @@ class StageService:
                     record_id=rec.id,
                     values={attr.slug: reassign_to_stage_key},
                     updated_by_id=actor_id,
+                    workspace_id=pipeline.workspace_id,
+                    object_id=pipeline.object_id,
                 )
 
         await self.db.delete(stage)
@@ -547,10 +569,12 @@ class StageMovementService:
         record_id: str,
         to_stage_key: str,
         actor_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> CRMRecord | None:
-        pipeline = (
-            await self.db.execute(select(CRMPipeline).where(CRMPipeline.id == pipeline_id))
-        ).scalar_one_or_none()
+        pipeline_stmt = select(CRMPipeline).where(CRMPipeline.id == pipeline_id)
+        if workspace_id is not None:
+            pipeline_stmt = pipeline_stmt.where(CRMPipeline.workspace_id == workspace_id)
+        pipeline = (await self.db.execute(pipeline_stmt)).scalar_one_or_none()
         if not pipeline:
             raise ValueError("Pipeline not found")
         slug = await _pipeline_status_slug(self.db, pipeline)
@@ -562,6 +586,7 @@ class StageMovementService:
                 await self.db.execute(
                     select(CRMPipelineStage).where(
                         CRMPipelineStage.pipeline_id == pipeline_id,
+                        CRMPipelineStage.workspace_id == pipeline.workspace_id,
                         CRMPipelineStage.is_active == True,  # noqa: E712
                     )
                 )
@@ -569,10 +594,20 @@ class StageMovementService:
         }
         if to_stage_key not in valid:
             raise ValueError(f"Unknown stage '{to_stage_key}' for this pipeline")
+        record_stmt = select(CRMRecord).where(
+            CRMRecord.id == record_id,
+            CRMRecord.workspace_id == pipeline.workspace_id,
+            CRMRecord.object_id == pipeline.object_id,
+        )
+        record = (await self.db.execute(record_stmt)).scalar_one_or_none()
+        if not record:
+            return None
         return await self.record_service.update_record(
             record_id=record_id,
             values={slug: to_stage_key},
             updated_by_id=actor_id,
+            workspace_id=pipeline.workspace_id,
+            object_id=pipeline.object_id,
         )
 
     async def bulk_move(
@@ -581,10 +616,31 @@ class StageMovementService:
         record_ids: list[str],
         to_stage_key: str,
         actor_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> int:
+        # Validate the full set before changing any record.  This makes a
+        # mixed-tenant or wrong-object request all-or-nothing.
+        pipeline_stmt = select(CRMPipeline).where(CRMPipeline.id == pipeline_id)
+        if workspace_id is not None:
+            pipeline_stmt = pipeline_stmt.where(CRMPipeline.workspace_id == workspace_id)
+        pipeline = (await self.db.execute(pipeline_stmt)).scalar_one_or_none()
+        if not pipeline:
+            raise ValueError("Pipeline not found")
+        matching_ids = set((await self.db.execute(
+            select(CRMRecord.id).where(
+                CRMRecord.id.in_(record_ids),
+                CRMRecord.workspace_id == pipeline.workspace_id,
+                CRMRecord.object_id == pipeline.object_id,
+            )
+        )).scalars().all())
+        if matching_ids != set(record_ids):
+            raise ValueError("One or more records not found in this pipeline")
+
         moved = 0
         for rid in record_ids:
-            rec = await self.move_record_to_stage(pipeline_id, rid, to_stage_key, actor_id)
+            rec = await self.move_record_to_stage(
+                pipeline_id, rid, to_stage_key, actor_id, workspace_id
+            )
             if rec:
                 moved += 1
         return moved
@@ -622,9 +678,11 @@ class PipelineAnalyticsService:
         except (TypeError, ValueError):
             return 0.0
 
-    async def stage_summary(self, pipeline_id: str) -> dict:
+    async def stage_summary(self, pipeline_id: str, workspace_id: str | None = None) -> dict:
         pipeline = await self._pipeline(pipeline_id)
         if not pipeline:
+            raise ValueError("Pipeline not found")
+        if workspace_id is not None and pipeline.workspace_id != workspace_id:
             raise ValueError("Pipeline not found")
         slug = await _pipeline_status_slug(self.db, pipeline)
         value_slug = await self._value_slug(pipeline.object_id)
@@ -634,6 +692,7 @@ class PipelineAnalyticsService:
                     select(CRMPipelineStage)
                     .where(
                         CRMPipelineStage.pipeline_id == pipeline_id,
+                        CRMPipelineStage.workspace_id == pipeline.workspace_id,
                         CRMPipelineStage.is_active == True,  # noqa: E712
                     )
                     .order_by(CRMPipelineStage.position)
@@ -645,6 +704,7 @@ class PipelineAnalyticsService:
                 await self.db.execute(
                     select(CRMRecord).where(
                         CRMRecord.object_id == pipeline.object_id,
+                        CRMRecord.workspace_id == pipeline.workspace_id,
                         CRMRecord.is_archived == False,  # noqa: E712
                     )
                 )
@@ -671,8 +731,8 @@ class PipelineAnalyticsService:
             )
         return {"pipeline_id": pipeline_id, "stages": out}
 
-    async def forecast(self, pipeline_id: str) -> dict:
-        summary = await self.stage_summary(pipeline_id)
+    async def forecast(self, pipeline_id: str, workspace_id: str | None = None) -> dict:
+        summary = await self.stage_summary(pipeline_id, workspace_id)
         open_stages = [s for s in summary["stages"] if s["stage_type"] == CRMStageType.OPEN.value]
         won = [s for s in summary["stages"] if s["stage_type"] == CRMStageType.WON.value]
         return {
@@ -683,16 +743,23 @@ class PipelineAnalyticsService:
             "open_count": sum(s["count"] for s in open_stages),
         }
 
-    async def conversion_rates(self, pipeline_id: str, window_days: int = 90) -> dict:
+    async def conversion_rates(
+        self, pipeline_id: str, window_days: int = 90, workspace_id: str | None = None
+    ) -> dict:
         pipeline = await self._pipeline(pipeline_id)
         if not pipeline:
+            raise ValueError("Pipeline not found")
+        if workspace_id is not None and pipeline.workspace_id != workspace_id:
             raise ValueError("Pipeline not found")
         since = datetime.now(timezone.utc) - timedelta(days=window_days)
         stages = list(
             (
                 await self.db.execute(
                     select(CRMPipelineStage)
-                    .where(CRMPipelineStage.pipeline_id == pipeline_id)
+                    .where(
+                        CRMPipelineStage.pipeline_id == pipeline_id,
+                        CRMPipelineStage.workspace_id == pipeline.workspace_id,
+                    )
                     .order_by(CRMPipelineStage.position)
                 )
             ).scalars().all()
@@ -704,6 +771,7 @@ class PipelineAnalyticsService:
                 await self.db.execute(
                     select(func.count(func.distinct(CRMStageHistory.record_id))).where(
                         CRMStageHistory.pipeline_id == pipeline_id,
+                        CRMStageHistory.workspace_id == pipeline.workspace_id,
                         CRMStageHistory.to_stage_key == s.value_key,
                         CRMStageHistory.entered_at >= since,
                     )
@@ -728,8 +796,11 @@ class PipelineAnalyticsService:
             )
         return {"pipeline_id": pipeline_id, "window_days": window_days, "stages": rates}
 
-    async def stage_velocity(self, pipeline_id: str) -> dict:
+    async def stage_velocity(self, pipeline_id: str, workspace_id: str | None = None) -> dict:
         """Average time (seconds) records spend in a stage before leaving it."""
+        pipeline = await self._pipeline(pipeline_id)
+        if not pipeline or (workspace_id is not None and pipeline.workspace_id != workspace_id):
+            raise ValueError("Pipeline not found")
         rows = (
             await self.db.execute(
                 select(
@@ -738,6 +809,7 @@ class PipelineAnalyticsService:
                 )
                 .where(
                     CRMStageHistory.pipeline_id == pipeline_id,
+                    CRMStageHistory.workspace_id == pipeline.workspace_id,
                     CRMStageHistory.duration_in_previous_seconds.isnot(None),
                 )
                 .group_by(CRMStageHistory.from_stage_key)
@@ -801,7 +873,9 @@ class LeadConversionService:
         archive_after_convert: bool = False,
         actor_id: str | None = None,
     ) -> dict:
-        lead = await self.record_service.get_record(lead_record_id)
+        lead = await self.record_service.get_record(
+            lead_record_id, workspace_id=workspace_id
+        )
         if not lead:
             raise ValueError("Lead not found")
         v = dict(lead.values or {})
@@ -863,7 +937,10 @@ class LeadConversionService:
             if deal_pipeline_id:
                 pipeline = (
                     await self.db.execute(
-                        select(CRMPipeline).where(CRMPipeline.id == deal_pipeline_id)
+                        select(CRMPipeline).where(
+                            CRMPipeline.id == deal_pipeline_id,
+                            CRMPipeline.workspace_id == workspace_id,
+                        )
                     )
                 ).scalar_one_or_none()
             if pipeline is None:
@@ -871,6 +948,7 @@ class LeadConversionService:
                     await self.db.execute(
                         select(CRMPipeline).where(
                             CRMPipeline.object_id == deal_obj.id,
+                            CRMPipeline.workspace_id == workspace_id,
                             CRMPipeline.is_default == True,  # noqa: E712
                         )
                     )
@@ -905,6 +983,8 @@ class LeadConversionService:
             record_id=lead_record_id,
             values=merged,
             updated_by_id=actor_id,
+            workspace_id=workspace_id,
+            object_id=lead.object_id,
         )
 
         # 6. Activity log on the lead.
@@ -922,6 +1002,8 @@ class LeadConversionService:
                 record_id=lead_record_id,
                 permanent=False,
                 deleted_by_id=actor_id,
+                workspace_id=workspace_id,
+                object_id=lead.object_id,
             )
 
         return {"lead_id": lead_record_id, **result}

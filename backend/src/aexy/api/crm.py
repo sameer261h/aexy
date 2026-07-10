@@ -1492,9 +1492,9 @@ async def get_record(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMRecordService(db)
-    record = await service.get_record(record_id)
+    record = await service.get_record(record_id, object_id, workspace_id)
 
-    if not record or str(record.workspace_id) != workspace_id or str(record.object_id) != object_id:
+    if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Record not found",
@@ -1528,9 +1528,9 @@ async def get_record_by_id(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMRecordService(db)
-    record = await service.get_record(record_id)
+    record = await service.get_record(record_id, workspace_id=workspace_id)
 
-    if not record or str(record.workspace_id) != workspace_id:
+    if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Record not found",
@@ -1565,9 +1565,9 @@ async def update_record_by_id(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMRecordService(db)
-    record = await service.get_record(record_id)
+    record = await service.get_record(record_id, workspace_id=workspace_id)
 
-    if not record or str(record.workspace_id) != workspace_id:
+    if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Record not found",
@@ -1578,6 +1578,8 @@ async def update_record_by_id(
         values=data.values,
         owner_id=data.owner_id,
         updated_by_id=str(current_user.id),
+        workspace_id=workspace_id,
+        object_id=record.object_id,
     )
 
     await db.commit()
@@ -1610,9 +1612,9 @@ async def update_record(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMRecordService(db)
-    record = await service.get_record(record_id)
+    record = await service.get_record(record_id, object_id, workspace_id)
 
-    if not record or str(record.workspace_id) != workspace_id or str(record.object_id) != object_id:
+    if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Record not found",
@@ -1623,6 +1625,8 @@ async def update_record(
         values=data.values,
         owner_id=data.owner_id,
         updated_by_id=str(current_user.id),
+        workspace_id=workspace_id,
+        object_id=object_id,
     )
 
     await db.commit()
@@ -1654,15 +1658,21 @@ async def delete_record_by_id(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMRecordService(db)
-    record = await service.get_record(record_id)
+    record = await service.get_record(record_id, workspace_id=workspace_id)
 
-    if not record or str(record.workspace_id) != workspace_id:
+    if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Record not found",
         )
 
-    await service.delete_record(record_id, permanent, str(current_user.id))
+    await service.delete_record(
+        record_id,
+        permanent,
+        str(current_user.id),
+        workspace_id=workspace_id,
+        object_id=record.object_id,
+    )
     await db.commit()
 
 
@@ -1679,15 +1689,21 @@ async def delete_record(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMRecordService(db)
-    record = await service.get_record(record_id)
+    record = await service.get_record(record_id, object_id, workspace_id)
 
-    if not record or str(record.workspace_id) != workspace_id or str(record.object_id) != object_id:
+    if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Record not found",
         )
 
-    await service.delete_record(record_id, permanent, str(current_user.id))
+    await service.delete_record(
+        record_id,
+        permanent,
+        str(current_user.id),
+        workspace_id=workspace_id,
+        object_id=object_id,
+    )
     await db.commit()
 
 

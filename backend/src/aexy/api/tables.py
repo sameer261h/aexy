@@ -291,7 +291,9 @@ async def update_table(
     service = DataTableService(db)
     await service.auth.check_access(table_id, str(current_user.id), "manage", workspace_id)
 
-    table = await service.update_table(table_id, **data.model_dump(exclude_unset=True))
+    table = await service.update_table(
+        table_id, workspace_id=workspace_id, **data.model_dump(exclude_unset=True)
+    )
     if not table:
         raise HTTPException(status_code=404, detail="Table not found")
 
@@ -312,7 +314,7 @@ async def delete_table(
     service = DataTableService(db)
     await service.auth.check_access(table_id, str(current_user.id), "admin", workspace_id)
 
-    if not await service.delete_table(table_id):
+    if not await service.delete_table(table_id, workspace_id=workspace_id):
         raise HTTPException(status_code=404, detail="Table not found")
 
     await db.commit()
@@ -378,22 +380,26 @@ async def add_field(
     service = DataTableService(db)
     await service.auth.check_access(table_id, str(current_user.id), "manage", workspace_id)
 
-    field = await service.add_field(
-        table_id=table_id,
-        name=data.name,
-        field_type=data.attribute_type,
-        slug=data.slug,
-        description=data.description,
-        config=data.config.model_dump() if data.config else None,
-        is_required=data.is_required,
-        is_unique=data.is_unique,
-        default_value=data.default_value,
-        position=data.position,
-        is_visible=data.is_visible,
-        is_filterable=data.is_filterable,
-        is_sortable=data.is_sortable,
-        column_width=data.column_width,
-    )
+    try:
+        field = await service.add_field(
+            table_id=table_id,
+            workspace_id=workspace_id,
+            name=data.name,
+            field_type=data.attribute_type,
+            slug=data.slug,
+            description=data.description,
+            config=data.config.model_dump() if data.config else None,
+            is_required=data.is_required,
+            is_unique=data.is_unique,
+            default_value=data.default_value,
+            position=data.position,
+            is_visible=data.is_visible,
+            is_filterable=data.is_filterable,
+            is_sortable=data.is_sortable,
+            column_width=data.column_width,
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Table not found")
 
     await db.commit()
     return field
@@ -418,7 +424,9 @@ async def update_field(
     if "config" in update_data and update_data["config"] is not None:
         update_data["config"] = update_data["config"]
 
-    field = await service.update_field(field_id, **update_data)
+    field = await service.update_field(
+        field_id, table_id=table_id, workspace_id=workspace_id, **update_data
+    )
     if not field:
         raise HTTPException(status_code=404, detail="Field not found")
 
@@ -440,7 +448,9 @@ async def delete_field(
     service = DataTableService(db)
     await service.auth.check_access(table_id, str(current_user.id), "manage", workspace_id)
 
-    if not await service.delete_field(field_id):
+    if not await service.delete_field(
+        field_id, table_id=table_id, workspace_id=workspace_id
+    ):
         raise HTTPException(status_code=404, detail="Field not found")
 
     await db.commit()
@@ -518,13 +528,16 @@ async def create_record(
     )
     service.auth.validate_write(data.values, access)
 
-    record = await service.create_record(
-        table_id=table_id,
-        workspace_id=workspace_id,
-        values=data.values,
-        owner_id=data.owner_id or str(current_user.id),
-        created_by_id=str(current_user.id),
-    )
+    try:
+        record = await service.create_record(
+            table_id=table_id,
+            workspace_id=workspace_id,
+            values=data.values,
+            owner_id=data.owner_id or str(current_user.id),
+            created_by_id=str(current_user.id),
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Table not found")
 
     await db.commit()
     return CRMRecordResponse(
@@ -562,14 +575,16 @@ async def update_record(
         service.auth.validate_write(data.values, access)
 
     # Validate the record belongs to this table before modifying
-    existing = await service.get_record(record_id)
-    if not existing or str(existing.object_id) != table_id:
+    existing = await service.get_record(record_id, table_id, workspace_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="Record not found in this table")
 
     record = await service.update_record(
         record_id=record_id,
         values=data.values,
         owner_id=data.owner_id,
+        table_id=table_id,
+        workspace_id=workspace_id,
     )
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
@@ -608,11 +623,13 @@ async def delete_record(
     )
 
     # Validate the record belongs to this table
-    existing = await service.get_record(record_id)
-    if not existing or str(existing.object_id) != table_id:
+    existing = await service.get_record(record_id, table_id, workspace_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="Record not found in this table")
 
-    if not await service.delete_record(record_id, permanent):
+    if not await service.delete_record(
+        record_id, permanent, table_id=table_id, workspace_id=workspace_id
+    ):
         raise HTTPException(status_code=404, detail="Record not found")
 
     await db.commit()
@@ -634,7 +651,15 @@ async def bulk_delete_records(
         table_id, str(current_user.id), "manage", workspace_id
     )
 
-    deleted = await service.bulk_delete_records(data.record_ids, data.permanent, table_id=table_id)
+    try:
+        deleted = await service.bulk_delete_records(
+            data.record_ids,
+            data.permanent,
+            table_id=table_id,
+            workspace_id=workspace_id,
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Record not found in this table")
     await db.commit()
     return {"deleted": deleted}
 
