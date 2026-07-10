@@ -125,4 +125,40 @@ describe("useTableRecords", () => {
     await waitFor(() => expect(queryMock).toHaveBeenCalledTimes(1));
     expect(queryMock).toHaveBeenCalledWith(WORKSPACE, TABLE, {});
   });
+
+  it("includes q in query identity and sends the newest search", async () => {
+    queryMock.mockResolvedValue({ records: [], total: 0, limit: 50, offset: 0 });
+
+    const { rerender } = renderHook(
+      ({ q }: { q?: string }) => useTableRecords(WORKSPACE, TABLE, { q }),
+      { wrapper: makeWrapper(), initialProps: { q: "Acme" } }
+    );
+
+    await waitFor(() => expect(queryMock).toHaveBeenCalledTimes(1));
+    rerender({ q: "Beta" });
+    await waitFor(() => expect(queryMock).toHaveBeenCalledTimes(2));
+
+    expect(queryMock).toHaveBeenLastCalledWith(WORKSPACE, TABLE, { q: "Beta" });
+  });
+
+  it("keeps filters and sorts alongside server search", async () => {
+    queryMock.mockResolvedValue({ records: [], total: 0, limit: 50, offset: 0 });
+
+    renderHook(
+      () =>
+        useTableRecords(WORKSPACE, TABLE, {
+          q: "Acme",
+          filters: [{ attribute: "status", operator: "equals", value: "open" }],
+          sorts: [{ attribute: "name", direction: "asc" }],
+        }),
+      { wrapper: makeWrapper() }
+    );
+
+    await waitFor(() => expect(queryMock).toHaveBeenCalledTimes(1));
+    expect(queryMock).toHaveBeenCalledWith(WORKSPACE, TABLE, {
+      q: "Acme",
+      filters: [{ attribute: "status", operator: "equals", value: "open" }],
+      sorts: [{ attribute: "name", direction: "asc" }],
+    });
+  });
 });

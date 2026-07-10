@@ -432,3 +432,140 @@ async def test_15_crm_query_endpoint_unchanged(client: AsyncClient, db_session: 
     resp = await client.get(crm_url, headers=headers)
     assert resp.status_code == 200
     assert resp.json()["total"] == 1
+
+
+# -- Server-side free-text search ---------------------------------------------
+
+@pytest.mark.asyncio
+async def test_16_search_finds_match_beyond_first_page_and_reports_complete_total(
+    client: AsyncClient, table_query_fixture: dict, db_session: AsyncSession,
+):
+    data = table_query_fixture
+    tables = DataTableService(db_session)
+    for index in range(60):
+        await tables.create_record(
+            data["table"].id,
+            data["ws"].id,
+            {"name": f"Row {index}", "status": "open"},
+            owner_id=data["user"].id,
+        )
+    await db_session.commit()
+
+    response = await client.post(
+        _query_url(data["ws"].id, data["table"].id),
+        headers=_auth(data["user"].id),
+        json={"q": "Row 59", "limit": 1, "offset": 0},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert [record["values"]["name"] for record in body["records"]] == ["Row 59"]
+
+
+@pytest.mark.asyncio
+async def test_17_search_combines_with_filter_sort_and_pagination(
+    client: AsyncClient, table_query_fixture: dict,
+):
+    data = table_query_fixture
+    response = await client.post(
+        _query_url(data["ws"].id, data["table"].id),
+        headers=_auth(data["user"].id),
+        json={
+            "q": "a",
+            "filters": [{"attribute": "status", "operator": "equals", "value": "open"}],
+            "sorts": [{"attribute": "name", "direction": "desc"}],
+            "limit": 1,
+            "offset": 1,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert [record["values"]["name"] for record in body["records"]] == ["Alpha"]
+
+
+@pytest.mark.asyncio
+async def test_18_empty_and_whitespace_search_preserve_unfiltered_total(
+    client: AsyncClient, table_query_fixture: dict,
+):
+    data = table_query_fixture
+    url = _query_url(data["ws"].id, data["table"].id)
+    headers = _auth(data["user"].id)
+    empty = await client.post(url, headers=headers, json={"q": ""})
+    whitespace = await client.post(url, headers=headers, json={"q": "   "})
+    plain = await client.post(url, headers=headers, json={})
+
+    assert empty.json()["total"] == whitespace.json()["total"] == plain.json()["total"] == 4
+
+
+@pytest.mark.asyncio
+async def test_19_search_is_case_insensitive_and_excludes_unsupported_types(
+    client: AsyncClient, table_query_fixture: dict, db_session: AsyncSession,
+):
+    data = table_query_fixture
+    tables = DataTableService(db_session)
+    await tables.add_field(data["table"].id, "score", workspace_id=data["ws"].id, field_type="number")
+    record = await tables.create_record(
+        data["table"].id,
+        data["ws"].id,
+        {"name": "Case Target", "status": "open", "score": 12345},
+        owner_id=data["user"].id,
+    )
+    await db_session.commit()
+
+    url = _query_url(data["ws"].id, data["table"].id)
+    headers = _auth(data["user"].id)
+    display_name = await client.post(url, headers=headers, json={"q": "case target"})
+    numeric_only = await client.post(url, headers=headers, json={"q": "12345"})
+
+    assert display_name.json()["total"] == 1
+    assert display_name.json()["records"][0]["id"] == str(record.id)
+    assert numeric_only.json()["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_20_search_keeps_row_security_and_hidden_columns(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    ws, owner = await _setup_workspace(db_session, "search-owner")
+    viewer_ws, viewer = await _setup_workspace(db_session, "search-viewer")
+    del viewer_ws
+    owner_membership = (
+        await db_session.execute(
+            select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == ws.id,
+                WorkspaceMember.developer_id == owner.id,
+            )
+        )
+    ).scalar_one()
+    owner_membership.role = "admin"
+    db_session.add(
+        WorkspaceMember(workspace_id=ws.id, developer_id=viewer.id, role="member", status="active")
+    )
+    tables = DataTableService(db_session)
+    table = await tables.create_table(ws.id, "Secure", "Secures", created_by_id=owner.id)
+    await tables.add_field(table.id, "name", workspace_id=ws.id)
+    await tables.add_field(table.id, "secret", workspace_id=ws.id)
+    table.row_access_mode = "owner_only"
+    db_session.add(TableCollaborator(
+        id=str(uuid4()), table_id=table.id, developer_id=viewer.id,
+        permission="view", hidden_columns=["secret"], created_by_id=owner.id,
+    ))
+    owner_record = await tables.create_record(
+        table.id, ws.id, {"name": "owner match", "secret": "hidden"}, owner_id=owner.id
+    )
+    await tables.create_record(
+        table.id, ws.id, {"name": "viewer match", "secret": "also hidden"}, owner_id=viewer.id
+    )
+    await db_session.commit()
+
+    headers = _auth(viewer.id)
+    response = await client.post(
+        _query_url(ws.id, table.id), headers=headers, json={"q": "match"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["records"][0]["values"]["name"] == "viewer match"
+    assert "secret" not in body["records"][0]["values"]
+    assert body["records"][0]["id"] != str(owner_record.id)
