@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@postgres:5432/aexy"
+    schema_create_all: bool = False
 
     # Redis
     redis_url: str = "redis://redis:6379/0"

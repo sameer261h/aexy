@@ -34,8 +34,13 @@ async def lifespan(app: FastAPI):
     # Startup
     settings = get_settings()
 
-    # Create tables (in production, use migrations)
-    if settings.environment == "development":
+    # SQL migrations are authoritative. This escape hatch is only for
+    # disposable local bootstrap databases.
+    if settings.schema_create_all:
+        logger.warning(
+            "SCHEMA_CREATE_ALL is enabled for mailagent. Use only for "
+            "disposable local bootstrap databases; migrations are authoritative."
+        )
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 

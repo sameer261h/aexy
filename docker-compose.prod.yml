@@ -4,6 +4,8 @@ services:
     image: aexy-postgres:18-alpine-pgvector
     container_name: aexy-postgres
     restart: unless-stopped
+    mem_limit: 4g
+    cpus: "2.0"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-aexy}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.prod}
@@ -19,9 +21,11 @@ services:
       - aexy-network
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     container_name: aexy-redis
     restart: unless-stopped
+    mem_limit: 1g
+    cpus: "0.5"
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
@@ -37,9 +41,11 @@ services:
   # compliance docs, etc. Reached only via the internal docker network;
   # public access is brokered by nginx at /storage/.
   rustfs:
-    image: rustfs/rustfs:latest
+    image: rustfs/rustfs:latest@sha256:fa19210ac4697c79d7ccca1ec9b0eb91aebacc6691991ffb14014bb3c67e6cc3
     container_name: aexy-rustfs
     restart: unless-stopped
+    mem_limit: 1g
+    cpus: "1.0"
     environment:
       - RUSTFS_ROOT_USER=${RUSTFS_ROOT_USER:?Set RUSTFS_ROOT_USER in .env.prod}
       - RUSTFS_ROOT_PASSWORD=${RUSTFS_ROOT_PASSWORD:?Set RUSTFS_ROOT_PASSWORD in .env.prod}
@@ -58,9 +64,11 @@ services:
       - aexy-network
 
   temporal:
-    image: temporalio/auto-setup:latest
+    image: temporalio/auto-setup:latest@sha256:9be7b8d98f60d00f4f2ff74731c071a17848d8182bbc8429e314a24c94ea105b
     container_name: aexy-temporal
     restart: unless-stopped
+    mem_limit: 2g
+    cpus: "1.0"
     environment:
       - DB=postgres12
       - DB_PORT=5432
@@ -74,9 +82,11 @@ services:
       - aexy-network
 
   temporal-ui:
-    image: temporalio/ui:latest
+    image: temporalio/ui:latest@sha256:fc47cd8202c98ed868745fd9f2f011585232676d08da621b9a6d7bc4653c17aa
     container_name: aexy-temporal-ui
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: "0.5"
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
       - TEMPORAL_NAMESPACE=default
@@ -93,9 +103,12 @@ services:
       dockerfile: Dockerfile
     container_name: aexy-backend
     restart: unless-stopped
+    mem_limit: 4g
+    cpus: "2.0"
     environment:
       # Core
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-aexy}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aexy}
+      - SCHEMA_CREATE_ALL=false
       - REDIS_URL=redis://redis:6379/0
       - TEMPORAL_ADDRESS=temporal:7233
       - TEMPORAL_NAMESPACE=default
@@ -168,6 +181,9 @@ services:
       - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
       - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
       - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER}
+      # Mailagent internal service
+      - MAILAGENT_URL=http://mailagent:8001
+      - MAILAGENT_SIGNING_SECRET=${MAILAGENT_INTERNAL_SECRET:?Set MAILAGENT_INTERNAL_SECRET in .env.prod}
       # Platform
       - PLATFORM_ORG_ID=${PLATFORM_ORG_ID:-}
       # Object storage (RustFS, internal)
@@ -197,6 +213,12 @@ services:
       temporal:
         condition: service_started
     command: uvicorn aexy.main:app --host 0.0.0.0 --port 8000 --workers 4 --proxy-headers --forwarded-allow-ips=*
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/ready', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - aexy-network
     expose:
@@ -208,6 +230,8 @@ services:
       dockerfile: Dockerfile
     container_name: aexy-temporal-worker
     restart: unless-stopped
+    mem_limit: 3g
+    cpus: "2.0"
     environment:
       # Core
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-aexy}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aexy}
@@ -277,6 +301,9 @@ services:
       - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
       - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
       - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER}
+      # Mailagent internal service
+      - MAILAGENT_URL=http://mailagent:8001
+      - MAILAGENT_SIGNING_SECRET=${MAILAGENT_INTERNAL_SECRET:?Set MAILAGENT_INTERNAL_SECRET in .env.prod}
       # Platform
       - PLATFORM_ORG_ID=${PLATFORM_ORG_ID:-}
       # Object storage (RustFS, internal)
@@ -296,6 +323,12 @@ services:
       temporal:
         condition: service_started
     command: python -m aexy.temporal.worker
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket, sys; s=socket.create_connection(('temporal', 7233), 5); s.close(); sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - aexy-network
 
@@ -308,21 +341,72 @@ services:
         - NEXT_PUBLIC_STRIPE_ENABLED=${NEXT_PUBLIC_STRIPE_ENABLED:-false}
     container_name: aexy-frontend
     restart: unless-stopped
+    mem_limit: 2g
+    cpus: "1.0"
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
       - NEXT_PUBLIC_STRIPE_ENABLED=${NEXT_PUBLIC_STRIPE_ENABLED:-false}
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     networks:
       - aexy-network
     expose:
       - "3000"
 
+  mailagent:
+    build:
+      context: ./mailagent
+      dockerfile: Dockerfile
+    container_name: aexy-mailagent
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: "1.0"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-aexy}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aexy}
+      - SCHEMA_CREATE_ALL=false
+      - REDIS_URL=redis://redis:6379/0
+      - DEBUG=false
+      - ENVIRONMENT=production
+      - BACKEND_URL=http://backend:8000
+      - INTERNAL_SECRET=${MAILAGENT_INTERNAL_SECRET:?Set MAILAGENT_INTERNAL_SECRET in .env.prod}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - POSTMARK_SERVER_TOKEN=${POSTMARK_SERVER_TOKEN}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aexy-network
+    expose:
+      - "8001"
+
   # Backup service - runs daily at 2 AM
   backup:
-    image: postgres:18-alpine
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
     container_name: aexy-backup
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: "0.5"
     environment:
       - PGUSER=${POSTGRES_USER:-aexy}
       - PGPASSWORD=${POSTGRES_PASSWORD}

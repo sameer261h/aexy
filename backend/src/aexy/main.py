@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,16 +12,22 @@ from aexy.core.database import engine, Base
 from aexy.middleware import UsageTrackingMiddleware
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan - create tables on startup."""
+    """Application lifespan."""
     # Import models to register them with Base
     from aexy import models  # noqa: F401
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    if settings.schema_create_all:
+        logger.warning(
+            "SCHEMA_CREATE_ALL is enabled. This is only for disposable local "
+            "bootstrap/test databases; SQL migrations are authoritative."
+        )
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
     # Ensure storage bucket exists
     try:
@@ -29,20 +36,18 @@ async def lifespan(app: FastAPI):
         if storage.is_configured():
             await storage.ensure_bucket_exists()
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning(f"Storage bucket bootstrap failed: {e}")
+        logger.warning(f"Storage bucket bootstrap failed: {e}")
 
     # Seed platform org (CRM objects, email templates, onboarding flow)
     if settings.platform_org_id:
         try:
-            import logging
             from aexy.core.database import async_session_maker
             from aexy.services.platform_service import PlatformService
             async with async_session_maker() as db:
                 await PlatformService(db).ensure_platform_setup()
                 await db.commit()
         except Exception as e:
-            logging.getLogger(__name__).warning(f"Platform org setup failed: {e}")
+            logger.warning(f"Platform org setup failed: {e}")
 
     # Keep each worker's app_settings cache fresh across processes: clear the
     # local entry whenever any worker toggles a workspace module. Best-effort —

@@ -48,6 +48,29 @@ To add a new migration:
 > Alembic is installed as a transitive dependency but is not used. Don't
 > create Alembic migrations.
 
+### Schema authority
+
+SQL migrations are the source of truth for every shared, staging, and
+production database. The FastAPI apps do not create tables on startup by
+default.
+
+`Base.metadata.create_all()` is allowed only for tests or a disposable local
+bootstrap database. To use that escape hatch intentionally, set:
+
+```bash
+SCHEMA_CREATE_ALL=true
+```
+
+Do not use that setting on a database that contains data or on any database
+where migration history matters. `create_all()` can create missing tables but
+does not apply the full migration contract: ordered changes, checksums,
+backfills, triggers, comments, and some indexes/constraints.
+
+The default and dev Compose stacks set this flag to `true` only so a brand-new,
+disposable local volume can bootstrap the model baseline. Production sets it
+to `false` explicitly. After local bootstrap, run the SQL migration runner for
+tracked schema changes; do not treat `create_all()` as a migration mechanism.
+
 ---
 
 ## Will rebuilding postgres delete my data?

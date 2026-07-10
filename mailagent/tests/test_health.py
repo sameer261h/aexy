@@ -38,13 +38,46 @@ class TestHealthAPI:
         assert len(version) > 0
 
     @pytest.mark.asyncio
-    async def test_readiness_check(self, client: AsyncClient):
+    async def test_readiness_check(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ):
         """Test Kubernetes readiness probe."""
+
+        async def available() -> bool:
+            return True
+
+        monkeypatch.setattr("mailagent.api.health.check_db_connection", available)
+        monkeypatch.setattr("mailagent.api.health.check_redis_connection", available)
+
         response = await client.get("/ready")
 
         assert response.status_code == 200
         data = response.json()
         assert "ready" in data
+
+    @pytest.mark.asyncio
+    async def test_readiness_check_returns_503_when_dependency_is_down(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Readiness must fail when a required dependency is unavailable."""
+
+        async def unavailable() -> bool:
+            return False
+
+        async def available() -> bool:
+            return True
+
+        monkeypatch.setattr("mailagent.api.health.check_db_connection", unavailable)
+        monkeypatch.setattr("mailagent.api.health.check_redis_connection", available)
+
+        response = await client.get("/ready")
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "ready": False,
+            "database": False,
+            "redis": True,
+        }
 
     @pytest.mark.asyncio
     async def test_liveness_check(self, client: AsyncClient):

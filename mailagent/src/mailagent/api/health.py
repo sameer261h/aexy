@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 
 from mailagent import __version__
 from mailagent.config import get_settings
@@ -40,7 +41,10 @@ async def readiness_check() -> dict:
     redis_healthy = await check_redis_connection()
 
     if not db_healthy or not redis_healthy:
-        return {"ready": False, "database": db_healthy, "redis": redis_healthy}
+        return JSONResponse(
+            status_code=503,
+            content={"ready": False, "database": db_healthy, "redis": redis_healthy},
+        )
 
     return {"ready": True}
 

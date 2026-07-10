@@ -18,7 +18,7 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     container_name: aexy-redis
     ports:
       - "6380:6379"
@@ -31,7 +31,7 @@ services:
       retries: 5
 
   rustfs:
-    image: rustfs/rustfs:latest
+    image: rustfs/rustfs:latest@sha256:fa19210ac4697c79d7ccca1ec9b0eb91aebacc6691991ffb14014bb3c67e6cc3
     container_name: aexy-rustfs
     ports:
       - "127.0.0.1:9002:9000"
@@ -50,7 +50,7 @@ services:
     command: server /data --console-address ":9001"
 
   temporal:
-    image: temporalio/auto-setup:latest
+    image: temporalio/auto-setup:latest@sha256:9be7b8d98f60d00f4f2ff74731c071a17848d8182bbc8429e314a24c94ea105b
     container_name: aexy-temporal
     ports:
       - "7233:7233"
@@ -65,7 +65,7 @@ services:
         condition: service_healthy
 
   temporal-ui:
-    image: temporalio/ui:latest
+    image: temporalio/ui:latest@sha256:fc47cd8202c98ed868745fd9f2f011585232676d08da621b9a6d7bc4653c17aa
     container_name: aexy-temporal-ui
     ports:
       - "8081:8080"
@@ -85,6 +85,9 @@ services:
       - ./backend/.env
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/aexy
+      # Fresh local volumes still need the model bootstrap; shared/prod
+      # databases use the tracked SQL migration runner instead.
+      - SCHEMA_CREATE_ALL=true
       - REDIS_URL=redis://redis:6379/0
       - TEMPORAL_ADDRESS=temporal:7233
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
@@ -107,6 +110,12 @@ services:
     volumes:
       - ./backend:/app
     command: uvicorn aexy.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/ready', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   temporal-worker:
     build:
@@ -135,6 +144,12 @@ services:
     volumes:
       - ./backend:/app
     command: python -m aexy.temporal.worker
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket, sys; s=socket.create_connection(('temporal', 7233), 5); s.close(); sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   frontend:
     build:
@@ -151,11 +166,18 @@ services:
       - NEXT_PUBLIC_GTM_API_URL=${NEXT_PUBLIC_GTM_API_URL:-http://localhost:8000/api/v1}
       - NEXT_PUBLIC_STRIPE_ENABLED=${NEXT_PUBLIC_STRIPE_ENABLED:-false}
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     volumes:
       - ./frontend:/app
       - /app/node_modules
     command: npm run dev -- -p 3000
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   mailagent:
     build:
@@ -166,6 +188,7 @@ services:
       - "8002:8001"
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/aexy
+      - SCHEMA_CREATE_ALL=true
       - REDIS_URL=redis://redis:6379/0
       - DEBUG=true
       - ENVIRONMENT=development
@@ -182,7 +205,7 @@ services:
     volumes:
       - ./mailagent:/app
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/ready"]
       interval: 30s
       timeout: 10s
       retries: 3
