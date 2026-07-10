@@ -86,6 +86,14 @@ def _is_valid_uuid(value: str) -> bool:
 
 
 def _normalize_raw_value(raw: Any) -> list[str] | None:
+    """Convert a raw relationship value into a list of items for validation.
+
+    Returns ``None`` for ``None`` and empty-string.
+    Non-string items are passed through to validation (not stringified or
+    coerced).  ``uuid.UUID`` objects and arbitrary types are rejected by
+    ``_validate_and_deduplicate``.
+    Raises ``ValueError`` when the top-level value type is unsupported.
+    """
     if raw is None or raw == "":
         return None
     if isinstance(raw, list):
@@ -93,10 +101,7 @@ def _normalize_raw_value(raw: Any) -> list[str] | None:
         for item in raw:
             if item is None:
                 continue
-            if not isinstance(item, str):
-                result.append(str(item))
-            else:
-                result.append(item)
+            result.append(item)
         return result if result else None
     if isinstance(raw, str):
         return [raw]

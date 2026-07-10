@@ -195,6 +195,58 @@ def test_invalid_identifier_type_rejected():
     assert any(e.code == RelationshipErrorCode.INVALID_IDENTIFIER for e in result.errors)
 
 
+def test_uuid_object_rejected():
+    """uuid.UUID objects are not accepted — strings only per source contract."""
+    import uuid as _uuid_mod
+    uid = _uuid_mod.uuid4()
+    result = normalize_relationship_value(None, [uid])
+    assert any(e.code == RelationshipErrorCode.INVALID_IDENTIFIER for e in result.errors)
+
+
+def test_arbitrary_object_rejected():
+    """Arbitrary objects are rejected even when __str__ resembles a UUID."""
+    class FakeID:
+        def __str__(self):
+            return "12345678-1234-1234-1234-123456789abc"
+    result = normalize_relationship_value(None, [FakeID()])
+    assert any(e.code == RelationshipErrorCode.INVALID_IDENTIFIER for e in result.errors)
+
+
+def test_mixed_valid_and_invalid_requested():
+    """Mixed valid/invalid values: errors reported, valid IDs normalized but diff withheld."""
+    uid = _uid()
+    result = normalize_relationship_value(None, ["", uid, "bad"], allow_multiple=True)
+    codes = [e.code for e in result.errors]
+    assert RelationshipErrorCode.BLANK_IDENTIFIER in codes
+    assert RelationshipErrorCode.INVALID_IDENTIFIER in codes
+    assert uid in (result.normalized_requested or [])
+    assert result.to_add == []  # diff withheld when errors present
+
+
+def test_malformed_existing_value_flagged():
+    """Malformed existing value produces errors and no diff."""
+    uid = _uid()
+    result = normalize_relationship_value(["bad-id"], [uid])
+    assert any(e.code == RelationshipErrorCode.INVALID_IDENTIFIER for e in result.errors)
+    assert result.to_add == []
+    assert result.to_remove == []
+
+
+def test_malformed_requested_value_flagged():
+    """Malformed requested value produces errors and no diff."""
+    uid = _uid()
+    result = normalize_relationship_value([uid], ["bad-id"])
+    assert any(e.code == RelationshipErrorCode.INVALID_IDENTIFIER for e in result.errors)
+    assert result.to_add == []
+    assert result.to_remove == []
+
+
+def test_malformed_both_values_flagged():
+    """Malformed in both values produces errors for both."""
+    result = normalize_relationship_value(["bad"], ["also-bad"])
+    assert len(result.errors) == 2
+
+
 def test_non_uuid_string_rejected():
     result = normalize_relationship_value(None, "not-a-uuid")
     assert any(e.code == RelationshipErrorCode.INVALID_IDENTIFIER for e in result.errors)
