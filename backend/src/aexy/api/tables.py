@@ -683,7 +683,7 @@ async def get_my_access(
         table_id, str(current_user.id), workspace_id
     )
     if not access:
-        raise HTTPException(status_code=403, detail="No access to this table")
+        raise HTTPException(status_code=404, detail="Table not found")
 
     return TableAccessResponse(
         permission=access.permission,
