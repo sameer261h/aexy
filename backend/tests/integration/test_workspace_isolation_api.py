@@ -217,3 +217,67 @@ async def test_malformed_record_collaborator_and_public_share_routes_remain_safe
     assert public.status_code == 200
     created = await tables.get_record(public.json()["id"], data["table_b"].id, data["ws_b"].id)
     assert created is not None
+
+
+@pytest.mark.asyncio
+async def test_form_field_update_validates_ownership_before_mutation(
+    client: AsyncClient, db_session: AsyncSession,
+):
+    from aexy.models.forms import Form, FormField
+
+    ws_a, user_a = await _workspace(db_session, "form-a")
+    ws_b, user_b = await _workspace(db_session, "form-b")
+    membership = (
+        await db_session.execute(
+            select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == ws_a.id,
+                WorkspaceMember.developer_id == user_a.id,
+            )
+        )
+    ).scalar_one()
+    membership.role = "admin"
+
+    form_a1 = Form(id=str(uuid4()), workspace_id=ws_a.id, name="Form A1", slug=f"form-a1-{uuid4().hex[:8]}")
+    form_a2 = Form(id=str(uuid4()), workspace_id=ws_a.id, name="Form A2", slug=f"form-a2-{uuid4().hex[:8]}")
+    form_b = Form(id=str(uuid4()), workspace_id=ws_b.id, name="Form B", slug=f"form-b-{uuid4().hex[:8]}")
+    db_session.add_all([form_a1, form_a2, form_b])
+    await db_session.flush()
+
+    own_field = FormField(id=str(uuid4()), form_id=form_a1.id, name="Own", field_key="own")
+    other_form_field = FormField(id=str(uuid4()), form_id=form_a2.id, name="OtherForm", field_key="other_form")
+    foreign_field = FormField(id=str(uuid4()), form_id=form_b.id, name="Foreign", field_key="foreign")
+    db_session.add_all([own_field, other_form_field, foreign_field])
+    await db_session.commit()
+
+    headers = _auth(user_a.id)
+
+    # A legitimate same-form update succeeds.
+    ok = await client.patch(
+        f"{API}/workspaces/{ws_a.id}/forms/{form_a1.id}/fields/{own_field.id}",
+        headers=headers, json={"name": "Renamed"},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["name"] == "Renamed"
+
+    # A cross-form update (same workspace, wrong form) fails before mutation.
+    cross_form = await client.patch(
+        f"{API}/workspaces/{ws_a.id}/forms/{form_a1.id}/fields/{other_form_field.id}",
+        headers=headers, json={"name": "Hijacked"},
+    )
+    assert cross_form.status_code == 404
+
+    # A cross-workspace update fails before mutation.
+    cross_workspace = await client.patch(
+        f"{API}/workspaces/{ws_a.id}/forms/{form_a1.id}/fields/{foreign_field.id}",
+        headers=headers, json={"name": "Hijacked"},
+    )
+    assert cross_workspace.status_code == 404
+
+    persisted_other_form = (
+        await db_session.execute(select(FormField).where(FormField.id == other_form_field.id))
+    ).scalar_one()
+    persisted_foreign = (
+        await db_session.execute(select(FormField).where(FormField.id == foreign_field.id))
+    ).scalar_one()
+    assert persisted_other_form.name == "OtherForm"
+    assert persisted_foreign.name == "Foreign"
