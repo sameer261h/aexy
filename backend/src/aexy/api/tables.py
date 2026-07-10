@@ -796,6 +796,7 @@ async def update_collaborator(
 
     collab = await service.update_collaborator(
         collaborator_id=collaborator_id,
+        table_id=table_id,
         permission=data.permission,
         hidden_columns=data.hidden_columns,
         readonly_columns=data.readonly_columns,
@@ -836,7 +837,7 @@ async def remove_collaborator(
         table_id, str(current_user.id), "admin", workspace_id
     )
 
-    if not await service.remove_collaborator(collaborator_id):
+    if not await service.remove_collaborator(collaborator_id, table_id):
         raise HTTPException(status_code=404, detail="Collaborator not found")
 
     await db.commit()

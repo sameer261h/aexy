@@ -926,13 +926,22 @@ class DataTableService:
     async def update_collaborator(
         self,
         collaborator_id: str,
+        table_id: str,
         permission: str | None = None,
         hidden_columns: list[str] | None = None,
         readonly_columns: list[str] | None = None,
         row_filter: list[dict] | None = None,
     ) -> TableCollaborator | None:
-        """Update a collaborator's permission/restrictions."""
-        stmt = select(TableCollaborator).where(TableCollaborator.id == collaborator_id)
+        """Update a collaborator's permission/restrictions.
+
+        ``table_id`` must be the caller's already-authorized table (proven by
+        ``check_access`` against the URL workspace) so a collaborator row
+        belonging to a different table can't be mutated by guessing its ID.
+        """
+        stmt = select(TableCollaborator).where(
+            TableCollaborator.id == collaborator_id,
+            TableCollaborator.table_id == table_id,
+        )
         result = await self.db.execute(stmt)
         collab = result.scalar_one_or_none()
         if not collab:
@@ -951,9 +960,12 @@ class DataTableService:
         await self.db.refresh(collab)
         return collab
 
-    async def remove_collaborator(self, collaborator_id: str) -> bool:
-        """Remove a collaborator."""
-        stmt = select(TableCollaborator).where(TableCollaborator.id == collaborator_id)
+    async def remove_collaborator(self, collaborator_id: str, table_id: str) -> bool:
+        """Remove a collaborator. ``table_id`` scopes the row as in ``update_collaborator``."""
+        stmt = select(TableCollaborator).where(
+            TableCollaborator.id == collaborator_id,
+            TableCollaborator.table_id == table_id,
+        )
         result = await self.db.execute(stmt)
         collab = result.scalar_one_or_none()
         if not collab:

@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from aexy.models.crm import CRMAttribute, CRMRecord
+from aexy.models.crm import CRMAttribute, CRMRecord, TableCollaborator
 from aexy.models.developer import Developer
 from aexy.models.workspace import Workspace, WorkspaceMember
 from aexy.services.crm_pipeline_service import (
@@ -194,3 +194,40 @@ async def test_pipeline_stages_moves_and_analytics_are_workspace_bound(db_sessio
     summary = await PipelineAnalyticsService(db_session).stage_summary(pipeline_a.id, ws_a.id)
     assert sum(stage["count"] for stage in summary["stages"]) == 1
     assert local.id
+
+
+@pytest.mark.asyncio
+async def test_table_collaborator_mutations_are_table_bound(db_session):
+    ws_a, user_a = await _workspace(db_session, "a")
+    ws_b, user_b = await _workspace(db_session, "b")
+    table_a = await _table(db_session, ws_a, "Local")
+    table_b = await _table(db_session, ws_b, "Foreign")
+    service = DataTableService(db_session)
+
+    own_collab = await service.add_collaborator(
+        table_id=table_a.id, developer_id=user_a.id, permission="view",
+    )
+    foreign_collab = await service.add_collaborator(
+        table_id=table_b.id, developer_id=user_b.id, permission="view",
+    )
+
+    # 1/2. A legitimate admin can update and remove a collaborator on their own table.
+    updated = await service.update_collaborator(
+        own_collab.id, table_id=table_a.id, permission="edit",
+    )
+    assert updated is not None
+    assert updated.permission == "edit"
+    assert await service.remove_collaborator(own_collab.id, table_id=table_a.id) is True
+
+    # 3/4/5. Cross-workspace attempts on the foreign collaborator fail closed and mutate nothing.
+    assert await service.update_collaborator(
+        foreign_collab.id, table_id=table_a.id, permission="edit",
+    ) is None
+    assert await service.remove_collaborator(foreign_collab.id, table_id=table_a.id) is False
+
+    persisted = (
+        await db_session.execute(
+            select(TableCollaborator).where(TableCollaborator.id == foreign_collab.id)
+        )
+    ).scalar_one()
+    assert persisted.permission == "view"
