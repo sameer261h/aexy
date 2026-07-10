@@ -2,13 +2,33 @@
 
 import csv
 import io
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from jose import jwt  # type: ignore[import-untyped]
 
+from aexy.core.config import get_settings
 from aexy.models.developer import Developer
 from aexy.models.workspace import Workspace, WorkspaceMember
 from aexy.services.data_table_service import DataTableService
+
+API = "/api/v1"
+settings = get_settings()
+
+
+def _auth(user_id: str) -> dict[str, str]:
+    token = jwt.encode(
+        {
+            "sub": user_id,
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
+            "type": "access",
+        },
+        settings.secret_key,
+        algorithm=settings.algorithm,
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 
 async def _workspace(db, suffix: str) -> tuple[Workspace, Developer]:
@@ -183,3 +203,33 @@ async def test_export_succeeds_when_accessible_count_exactly_matches_limit(db_se
     csv_text, _ = await service.export_table_csv(table.id, ws.id, access, user_id=user.id, max_records=3)
     rows = _parse_csv(csv_text)
     assert len(rows) == 4  # header + 3 records
+
+
+@pytest.mark.asyncio
+async def test_export_endpoint_returns_413_json_with_no_csv_on_overflow(client, db_session):
+    ws, user = await _workspace(db_session, "j")
+    service = DataTableService(db_session)
+    table = await service.create_table(
+        workspace_id=ws.id, name="Overflow", plural_name="Overflows", created_by_id=user.id,
+    )
+    await service.add_field(table.id, "Name", workspace_id=ws.id, field_type="text")
+    await service.create_record(table.id, ws.id, {"name": "Row 0"})
+    await db_session.commit()
+
+    with patch(
+        "aexy.services.data_table_service.DataTableService.export_table_csv",
+        side_effect=ValueError("too_large"),
+    ):
+        response = await client.get(
+            f"{API}/workspaces/{ws.id}/tables/{table.id}/export",
+            headers=_auth(user.id),
+        )
+
+    assert response.status_code == 413
+    assert response.headers["content-type"].startswith("application/json")
+    assert "content-disposition" not in response.headers
+    assert response.json() == {
+        "detail": "This table has too many records for a direct export. Contact support for a full export.",
+    }
+    assert "Name" not in response.text
+    assert "Row 0" not in response.text
