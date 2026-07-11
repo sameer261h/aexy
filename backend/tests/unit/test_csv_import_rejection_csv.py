@@ -1,7 +1,8 @@
 """Focused tests for the rejection-CSV serialization boundary: complete
-formula-neutralization coverage. Constructs `CsvImportDryRunPolicyResult`
-directly rather than going through the API/dry-run pipeline -- these are
-properties of the pure serialization function itself."""
+formula-neutralization coverage, and unambiguous, collision-safe column
+naming. Constructs `CsvImportDryRunPolicyResult` directly rather than
+going through the API/dry-run pipeline -- these are properties of the
+pure serialization function itself."""
 
 import csv
 import io
@@ -132,3 +133,75 @@ def test_source_values_are_never_silently_trimmed():
     header, data = rows[0], rows[1]
     values_by_header = dict(zip(header, data, strict=True))
     assert values_by_header["name"] == "  Ada Lovelace  "
+
+
+# -- Column naming: source headers preserved, Aexy columns reserved-prefixed --
+
+def test_metadata_columns_use_reserved_aexy_prefix():
+    row = _invalid_row(source_values={"Name": "Ada"})
+    raw = generate_rejection_csv(_result([row]))
+    header = _rows_from_csv(raw)[0]
+    assert "__aexy_row_number" in header
+    assert "__aexy_reason_codes" in header
+    assert "__aexy_remediation" in header
+
+
+def test_source_header_name_and_destination_slug_name_do_not_collide():
+    row = _invalid_row(source_values={"Name": "Ada"}, proposed_values={"name": "Ada"})
+    raw = generate_rejection_csv(_result([row]))
+    header = _rows_from_csv(raw)[0]
+    assert "Name" in header  # original source header, unchanged
+    assert "__aexy_proposed_name" in header  # prefixed destination column
+    assert header.count("Name") == 1
+    assert header.count("__aexy_proposed_name") == 1
+
+
+def test_source_header_row_number_is_preserved_unchanged():
+    row = _invalid_row(source_values={"row_number": "42"})
+    raw = generate_rejection_csv(_result([row]))
+    header = _rows_from_csv(raw)[0]
+    assert "row_number" in header
+    assert "__aexy_row_number" in header
+    assert header.index("row_number") != header.index("__aexy_row_number")
+
+
+def test_source_header_colliding_with_reserved_metadata_name_disambiguates_generated_column():
+    row = _invalid_row(source_values={"__aexy_row_number": "user-supplied"})
+    raw = generate_rejection_csv(_result([row]))
+    header = _rows_from_csv(raw)[0]
+    # The user's source header is preserved verbatim...
+    assert "__aexy_row_number" in header
+    # ...and the generated row-number column is deterministically renamed
+    # rather than colliding with it.
+    assert "__aexy_row_number__2" in header
+    data = _rows_from_csv(raw)[1]
+    values_by_header = dict(zip(header, data, strict=True))
+    assert values_by_header["__aexy_row_number"] == "user-supplied"
+    assert values_by_header["__aexy_row_number__2"] == "2"
+
+
+def test_destination_slugs_differing_only_by_case_produce_distinct_columns():
+    row = _invalid_row(source_values={}, proposed_values={"Name": "Ada", "name": "ada"})
+    raw = generate_rejection_csv(_result([row]))
+    header = _rows_from_csv(raw)[0]
+    assert "__aexy_proposed_Name" in header
+    assert "__aexy_proposed_name" in header
+    assert header.count("__aexy_proposed_Name") == 1
+    assert header.count("__aexy_proposed_name") == 1
+
+
+def test_column_generation_is_deterministic_across_repeated_calls():
+    row = _invalid_row(
+        source_values={"Name": "Ada", "__aexy_row_number": "collide"},
+        proposed_values={"name": "ada", "Name": "Ada"},
+    )
+    raw1 = generate_rejection_csv(_result([row]))
+    raw2 = generate_rejection_csv(_result([row]))
+    assert raw1 == raw2
+
+
+def test_formula_neutralization_applies_to_generated_and_original_headers():
+    row = _invalid_row(source_values={"=Name": "Ada"})
+    raw = generate_rejection_csv(_result([row]))
+    header = _rows_from_csv(raw)[0]
+    assert "'=Name" in header

@@ -9,6 +9,17 @@ convention (`=`/`+`/`-`/`@`/tab/carriage-return) also used by CRM table
 export elsewhere in this repository (that feature lives on a sibling
 branch not in this branch's history, so the technique is reimplemented
 here rather than imported).
+
+Column naming: original source headers are preserved byte-for-byte --
+users correct and re-upload those columns, so renaming them would break
+that workflow. Every Aexy-generated column (row number, reason codes,
+remediation, proposed destination values) is prefixed with the reserved
+`__aexy_` namespace instead, so a source header that happens to collide
+with a destination slug (e.g. a CSV column literally named `name`) can
+never become ambiguous with a generated column. If a source header
+happens to already use the reserved `__aexy_` namespace, the *generated*
+header is deterministically disambiguated -- the user's source header is
+never altered.
 """
 
 import csv
@@ -18,6 +29,11 @@ from typing import Any
 from aexy.schemas.csv_import_policy import CsvImportDryRunPolicyResult
 
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+_ROW_NUMBER_HEADER = "__aexy_row_number"
+_REASON_CODES_HEADER = "__aexy_reason_codes"
+_REMEDIATION_HEADER = "__aexy_remediation"
+_PROPOSED_VALUE_PREFIX = "__aexy_proposed_"
 
 
 def _neutralize(value: str) -> str:
@@ -34,12 +50,32 @@ def _stringify(value: Any) -> str:
     return str(value)
 
 
+def _proposed_value_header(target_key: str) -> str:
+    return f"{_PROPOSED_VALUE_PREFIX}{target_key}"
+
+
+def _disambiguate(preferred: str, taken: set[str]) -> str:
+    """Deterministically rename an Aexy-generated header if it collides
+    with a header already claimed by a source column or an earlier
+    Aexy-generated column. Only ever called for generated names -- source
+    headers are never passed through this function and are never
+    renamed."""
+    if preferred not in taken:
+        return preferred
+    suffix = 2
+    candidate = f"{preferred}__{suffix}"
+    while candidate in taken:
+        suffix += 1
+        candidate = f"{preferred}__{suffix}"
+    return candidate
+
+
 def generate_rejection_csv(result: CsvImportDryRunPolicyResult) -> bytes:
     """Build the downloadable rejection CSV. Column layout is stable for a
-    given result: row_number, reason_codes, remediation, then every source
-    header referenced by a rejected row (first-seen order), then every
-    destination attribute key referenced by a rejected row (first-seen
-    order)."""
+    given result: row-number/reason-codes/remediation metadata columns,
+    then every source header referenced by a rejected row (first-seen
+    order, unchanged), then every proposed-value column referenced by a
+    rejected row (first-seen order, `__aexy_proposed_`-prefixed)."""
     rejected = [row for row in result.rows if row.status == "invalid"]
 
     source_headers: list[str] = []
@@ -56,12 +92,29 @@ def generate_rejection_csv(result: CsvImportDryRunPolicyResult) -> bytes:
                 seen_targets.add(key)
                 target_keys.append(key)
 
+    taken: set[str] = set(source_headers)
+    row_number_header = _disambiguate(_ROW_NUMBER_HEADER, taken)
+    taken.add(row_number_header)
+    reason_codes_header = _disambiguate(_REASON_CODES_HEADER, taken)
+    taken.add(reason_codes_header)
+    remediation_header = _disambiguate(_REMEDIATION_HEADER, taken)
+    taken.add(remediation_header)
+
+    proposed_headers: dict[str, str] = {}
+    for key in target_keys:
+        final = _disambiguate(_proposed_value_header(key), taken)
+        taken.add(final)
+        proposed_headers[key] = final
+
+    header_row = [
+        row_number_header, reason_codes_header, remediation_header,
+        *source_headers,
+        *(proposed_headers[key] for key in target_keys),
+    ]
+
     buffer = io.StringIO(newline="")
     writer = csv.writer(buffer)
-    writer.writerow([
-        _neutralize(cell)
-        for cell in ["row_number", "reason_codes", "remediation", *source_headers, *target_keys]
-    ])
+    writer.writerow([_neutralize(cell) for cell in header_row])
     for row in rejected:
         cells = [
             str(row.source_row_number),
