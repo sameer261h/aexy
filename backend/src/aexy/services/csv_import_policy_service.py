@@ -35,7 +35,10 @@ from aexy.schemas.csv_import_policy import (
     RowOutcomeStatus,
 )
 from aexy.services.csv_import_duplicate_service import CsvImportDuplicateService
-from aexy.services.csv_import_mapping_service import validate_required_attributes_mapped
+from aexy.services.csv_import_mapping_service import (
+    validate_required_attributes_mapped,
+    validate_row_required_values,
+)
 from aexy.services.csv_import_materialization_service import CsvImportMaterializationService
 from aexy.services.csv_import_preflight_service import CsvImportPreflightService
 from aexy.services.csv_import_relationship_service import CsvImportRelationshipService
@@ -164,6 +167,11 @@ class CsvImportPolicyService:
                     record_values[key] = outcome.value if allow_multiple else (
                         outcome.value[0] if outcome.value else None
                     )
+
+            errored_target_ids = {issue.target_attribute_id for issue in errors if issue.target_attribute_id}
+            errors.extend(validate_row_required_values(
+                target_attributes, record_values, errored_target_ids, source_row_number,
+            ))
 
             source_values = {
                 header: value

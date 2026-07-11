@@ -796,3 +796,170 @@ def test_import_routes_registered_and_static():
     assert (("POST",), "/api/v1/workspaces/{workspace_id}/crm/objects/{object_id}/imports/preflight") in paths
     assert (("POST",), "/api/v1/workspaces/{workspace_id}/crm/objects/{object_id}/imports/dry-run") in paths
     assert (("POST",), "/api/v1/workspaces/{workspace_id}/crm/objects/{object_id}/imports/rejection-csv") in paths
+
+
+# -- Correction: per-row required-value validation -------------------------------
+
+@pytest_asyncio.fixture
+async def required_fields_fixture(db_session: AsyncSession):
+    """A Task object with one required attribute of each type that has a
+    legitimate falsy/zero-ish value, plus one optional attribute -- for
+    verifying that MISSING_REQUIRED_VALUE fires only on true absence."""
+    ws, admin = await _setup_workspace(db_session, "csv-required")
+    attr_service = CRMAttributeService(db_session)
+    obj_service = CRMObjectService(db_session)
+
+    task = await obj_service.create_object(workspace_id=ws.id, name="Task", plural_name="Tasks")
+    name_attr = await attr_service.create_attribute(object_id=task.id, name="Name", attribute_type="text", is_required=True)
+    score_attr = await attr_service.create_attribute(object_id=task.id, name="Score", attribute_type="number", is_required=True)
+    active_attr = await attr_service.create_attribute(object_id=task.id, name="Active", attribute_type="checkbox", is_required=True)
+    status_attr = await attr_service.create_attribute(
+        object_id=task.id, name="Status", attribute_type="select", is_required=True,
+        config={"options": ["Open", "Closed"]},
+    )
+    tags_attr = await attr_service.create_attribute(
+        object_id=task.id, name="Tags", attribute_type="multi_select", is_required=True,
+        config={"options": ["a", "b"]},
+    )
+    notes_attr = await attr_service.create_attribute(object_id=task.id, name="Notes", attribute_type="text", is_required=False)
+
+    await db_session.commit()
+    return {
+        "ws": ws, "admin": admin, "task": task,
+        "name_attr": name_attr, "score_attr": score_attr, "active_attr": active_attr,
+        "status_attr": status_attr, "tags_attr": tags_attr, "notes_attr": notes_attr,
+    }
+
+
+def _required_fields_mapping(data: dict) -> list[dict]:
+    return [
+        {"source_header": "name", "target_attribute_id": data["name_attr"].id},
+        {"source_header": "score", "target_attribute_id": data["score_attr"].id},
+        {"source_header": "active", "target_attribute_id": data["active_attr"].id},
+        {"source_header": "status", "target_attribute_id": data["status_attr"].id},
+        {"source_header": "tags", "target_attribute_id": data["tags_attr"].id},
+        {"source_header": "notes", "target_attribute_id": data["notes_attr"].id},
+    ]
+
+
+async def _required_fields_dry_run(client: AsyncClient, data: dict, csv_content: str, invalid_row_policy: str = "all_or_nothing"):
+    headers = _auth(data["admin"].id)
+    return await client.post(
+        _dry_run_url(data["ws"].id, data["task"].id), headers=headers,
+        files=_csv_file(csv_content),
+        data={
+            "mapping_json": __import__("json").dumps(_required_fields_mapping(data)),
+            "invalid_row_policy": invalid_row_policy,
+            "unique_match_attribute_id": data["name_attr"].id,
+            "duplicate_action": "create_anyway",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_required_value_legitimate_falsy_values_are_not_missing(client: AsyncClient, required_fields_fixture: dict):
+    data = required_fields_fixture
+    csv_content = "name,score,active,status,tags,notes\nAda,0,false,Open,a|b,\n"
+    resp = await _required_fields_dry_run(client, data, csv_content)
+    body = resp.json()
+    assert body["summary"]["invalid_row_count"] == 0
+    assert body["summary"]["valid_row_count"] == 1
+    assert body["rows"][0]["status"] == "create"
+    assert body["rows"][0]["proposed_values"][data["score_attr"].slug] == 0
+    assert body["rows"][0]["proposed_values"][data["active_attr"].slug] is False
+
+
+@pytest.mark.asyncio
+async def test_required_text_empty_produces_missing_required_value(client: AsyncClient, required_fields_fixture: dict):
+    data = required_fields_fixture
+    csv_content = "name,score,active,status,tags,notes\n,5,true,Open,a,note\n"
+    resp = await _required_fields_dry_run(client, data, csv_content)
+    body = resp.json()
+    assert body["summary"]["invalid_row_count"] == 1
+    row = body["rows"][0]
+    assert row["status"] == "invalid"
+    assert "MISSING_REQUIRED_VALUE" in row["reason_codes"]
+
+
+@pytest.mark.asyncio
+async def test_required_numeric_empty_produces_missing_required_value(client: AsyncClient, required_fields_fixture: dict):
+    data = required_fields_fixture
+    csv_content = "name,score,active,status,tags,notes\nAda,,true,Open,a,\n"
+    resp = await _required_fields_dry_run(client, data, csv_content)
+    body = resp.json()
+    row = body["rows"][0]
+    assert row["status"] == "invalid"
+    assert "MISSING_REQUIRED_VALUE" in row["reason_codes"]
+
+
+@pytest.mark.asyncio
+async def test_required_checkbox_empty_produces_missing_required_value(client: AsyncClient, required_fields_fixture: dict):
+    data = required_fields_fixture
+    csv_content = "name,score,active,status,tags,notes\nAda,5,,Open,a,\n"
+    resp = await _required_fields_dry_run(client, data, csv_content)
+    row = resp.json()["rows"][0]
+    assert row["status"] == "invalid"
+    assert "MISSING_REQUIRED_VALUE" in row["reason_codes"]
+
+
+@pytest.mark.asyncio
+async def test_required_select_empty_produces_missing_required_value(client: AsyncClient, required_fields_fixture: dict):
+    data = required_fields_fixture
+    csv_content = "name,score,active,status,tags,notes\nAda,5,true,,a,\n"
+    resp = await _required_fields_dry_run(client, data, csv_content)
+    row = resp.json()["rows"][0]
+    assert row["status"] == "invalid"
+    assert "MISSING_REQUIRED_VALUE" in row["reason_codes"]
+
+
+@pytest.mark.asyncio
+async def test_required_multiselect_empty_produces_missing_required_value(client: AsyncClient, required_fields_fixture: dict):
+    data = required_fields_fixture
+    csv_content = "name,score,active,status,tags,notes\nAda,5,true,Open,,\n"
+    resp = await _required_fields_dry_run(client, data, csv_content)
+    row = resp.json()["rows"][0]
+    assert row["status"] == "invalid"
+    assert "MISSING_REQUIRED_VALUE" in row["reason_codes"]
+
+
+@pytest.mark.asyncio
+async def test_optional_field_empty_produces_no_error(client: AsyncClient, required_fields_fixture: dict):
+    data = required_fields_fixture
+    csv_content = "name,score,active,status,tags,notes\nAda,5,true,Open,a,\n"
+    resp = await _required_fields_dry_run(client, data, csv_content)
+    body = resp.json()
+    assert body["summary"]["invalid_row_count"] == 0
+    assert body["rows"][0]["proposed_values"][data["notes_attr"].slug] == ""
+
+
+@pytest.mark.asyncio
+async def test_all_or_nothing_blocks_every_row_when_one_required_value_missing(client: AsyncClient, required_fields_fixture: dict):
+    data = required_fields_fixture
+    csv_content = (
+        "name,score,active,status,tags,notes\n"
+        "Valid,5,true,Open,a,\n"
+        ",5,true,Open,a,\n"  # missing name
+    )
+    resp = await _required_fields_dry_run(client, data, csv_content, invalid_row_policy="all_or_nothing")
+    body = resp.json()
+    assert body["summary"]["valid_row_count"] == 1
+    assert body["summary"]["invalid_row_count"] == 1
+    assert body["summary"]["execution_blocked"] is True
+
+
+@pytest.mark.asyncio
+async def test_partial_policy_preserves_valid_rows_and_rejects_only_missing_required_value(client: AsyncClient, required_fields_fixture: dict):
+    data = required_fields_fixture
+    csv_content = (
+        "name,score,active,status,tags,notes\n"
+        "Valid,5,true,Open,a,\n"
+        ",5,true,Open,a,\n"  # missing name
+    )
+    resp = await _required_fields_dry_run(client, data, csv_content, invalid_row_policy="partial")
+    body = resp.json()
+    assert body["summary"]["valid_row_count"] == 1
+    assert body["summary"]["invalid_row_count"] == 1
+    assert body["summary"]["execution_blocked"] is False
+    statuses = {row["source_row_number"]: row["status"] for row in body["rows"]}
+    assert statuses[2] == "create"
+    assert statuses[3] == "invalid"
