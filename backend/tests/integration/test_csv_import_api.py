@@ -1,9 +1,9 @@
 """Integration tests for the authorized CSV import upload/preflight/mapping/
 dry-run/rejection-csv API. Focused on scenarios the inherited pure-service
-unit tests (test_csv_import_preflight.py, test_csv_import_materialization.py,
-test_csv_import_dry_run.py) cannot cover: authorization, hidden/readonly
-attribute filtering, workspace isolation, relationship resolution, duplicate
-matching, policy selection, rejection CSV, and proof of no persistence.
+unit tests (test_csv_import_preflight.py, test_csv_import_materialization.py)
+cannot cover: authorization, hidden/readonly attribute filtering, workspace
+isolation, relationship resolution, duplicate matching, policy selection,
+rejection CSV, and proof of no persistence.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -1092,6 +1092,17 @@ async def test_duplicate_mixed_accessible_and_inaccessible_reports_match_not_amb
 async def test_duplicate_archived_accessible_match_is_not_counted(
     client: AsyncClient, contact_fixture: dict, db_session: AsyncSession,
 ):
+    """Archived records are intentionally excluded from duplicate matching,
+    for the same reason `DataTableService.list_records` defaults to
+    `include_archived=False`: an archived record is not part of the
+    active dataset a user is working against, so it should not be treated
+    as "already exists" for import purposes. This is a deliberate design
+    choice (see `CsvImportDuplicateService`'s module docstring), not an
+    accidental gap -- an accessible-but-archived record with the exact
+    same unique-match value must behave identically to no record existing
+    at all: `matched_existing=False`, `duplicate_match_count == 0`, and
+    the row becomes a create candidate regardless of which duplicate
+    action was selected."""
     data = contact_fixture
     tables = DataTableService(db_session)
     archived = await tables.create_record(
@@ -1104,16 +1115,18 @@ async def test_duplicate_archived_accessible_match_is_not_counted(
     await db_session.commit()
 
     headers = _auth(data["admin"].id)
-    resp = await client.post(
-        _dry_run_url(data["ws"].id, data["contact"].id), headers=headers,
-        files=_csv_file("name,email\nNew Row,archived@example.com\n"),
-        data={
-            "mapping_json": __import__("json").dumps(_full_mapping(data)),
-            "unique_match_attribute_id": data["email_attr"].id,
-            "duplicate_action": "skip",
-        },
-    )
-    body = resp.json()
-    row = body["rows"][0]
-    assert row["status"] == "create"
-    assert row["matched_existing"] is False
+    for action in ("skip", "update_existing", "create_anyway"):
+        resp = await client.post(
+            _dry_run_url(data["ws"].id, data["contact"].id), headers=headers,
+            files=_csv_file("name,email\nNew Row,archived@example.com\n"),
+            data={
+                "mapping_json": __import__("json").dumps(_full_mapping(data)),
+                "unique_match_attribute_id": data["email_attr"].id,
+                "duplicate_action": action,
+            },
+        )
+        body = resp.json()
+        row = body["rows"][0]
+        assert row["status"] == "create", f"duplicate_action={action} unexpectedly matched an archived record"
+        assert row["matched_existing"] is False
+        assert body["summary"]["duplicate_match_count"] == 0
