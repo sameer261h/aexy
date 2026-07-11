@@ -963,3 +963,157 @@ async def test_partial_policy_preserves_valid_rows_and_rejects_only_missing_requ
     statuses = {row["source_row_number"]: row["status"] for row in body["rows"]}
     assert statuses[2] == "create"
     assert statuses[3] == "invalid"
+
+
+# -- Correction: ambiguous duplicate matching -------------------------------------
+
+@pytest.mark.asyncio
+async def test_duplicate_two_accessible_matches_is_ambiguous_and_non_executable(
+    client: AsyncClient, contact_fixture: dict, db_session: AsyncSession,
+):
+    data = contact_fixture
+    tables = DataTableService(db_session)
+    await tables.create_record(
+        data["contact"].id, data["ws"].id,
+        {"name": "Alice Second", data["email_attr"].slug: "alice@example.com"},
+        owner_id=data["admin"].id,
+    )
+    await db_session.commit()
+
+    headers = _auth(data["admin"].id)
+    for action in ("skip", "update_existing", "create_anyway"):
+        resp = await client.post(
+            _dry_run_url(data["ws"].id, data["contact"].id), headers=headers,
+            files=_csv_file("name,email\nAlice New,alice@example.com\n"),
+            data={
+                "mapping_json": __import__("json").dumps(_full_mapping(data)),
+                "unique_match_attribute_id": data["email_attr"].id,
+                "duplicate_action": action,
+            },
+        )
+        body = resp.json()
+        row = body["rows"][0]
+        assert row["status"] == "invalid", f"duplicate_action={action} did not remain non-executable"
+        assert "AMBIGUOUS_DUPLICATE_MATCH" in row["reason_codes"]
+        assert row["matched_existing"] is False
+        # Never discloses a record identifier or a match count.
+        assert not any("id" in code.lower() for code in row["reason_codes"])
+
+
+@pytest.mark.asyncio
+async def test_duplicate_exactly_one_accessible_match_is_truthful_for_every_action(
+    client: AsyncClient, contact_fixture: dict,
+):
+    data = contact_fixture
+    headers = _auth(data["admin"].id)
+    expected_status = {"skip": "skipped_duplicate", "update_existing": "update", "create_anyway": "create"}
+    for action, expected in expected_status.items():
+        resp = await client.post(
+            _dry_run_url(data["ws"].id, data["contact"].id), headers=headers,
+            files=_csv_file("name,email\nAlice New,alice@example.com\n"),
+            data={
+                "mapping_json": __import__("json").dumps(_full_mapping(data)),
+                "unique_match_attribute_id": data["email_attr"].id,
+                "duplicate_action": action,
+            },
+        )
+        body = resp.json()
+        row = body["rows"][0]
+        assert row["status"] == expected
+        assert row["matched_existing"] is True
+
+
+@pytest.mark.asyncio
+async def test_duplicate_only_inaccessible_matches_reports_none(
+    client: AsyncClient, contact_fixture: dict, db_session: AsyncSession,
+):
+    data = contact_fixture
+    data["contact"].row_access_mode = "owner_only"
+    db_session.add(data["contact"])
+    await db_session.commit()
+
+    headers = _auth(data["member"].id)
+    resp = await client.post(
+        _dry_run_url(data["ws"].id, data["contact"].id), headers=headers,
+        files=_csv_file("name,email\nAlice New,alice@example.com\n"),
+        data={
+            "mapping_json": __import__("json").dumps(_full_mapping(data)),
+            "unique_match_attribute_id": data["email_attr"].id,
+            "duplicate_action": "skip",
+        },
+    )
+    body = resp.json()
+    row = body["rows"][0]
+    assert row["status"] == "create"
+    assert row["matched_existing"] is False
+
+
+@pytest.mark.asyncio
+async def test_duplicate_mixed_accessible_and_inaccessible_reports_match_not_ambiguous(
+    client: AsyncClient, contact_fixture: dict, db_session: AsyncSession,
+):
+    """One accessible + one inaccessible record sharing the same value must
+    report `match`, not `ambiguous` -- inaccessible records are filtered by
+    row-security before match-count classification, never counted."""
+    data = contact_fixture
+    data["contact"].row_access_mode = "owner_only"
+    db_session.add(data["contact"])
+    await db_session.flush()
+
+    tables = DataTableService(db_session)
+    await tables.create_record(
+        data["contact"].id, data["ws"].id,
+        {"name": "Member Owned", data["email_attr"].slug: "shared@example.com"},
+        owner_id=data["member"].id,
+    )
+    # existing_contact (alice@example.com, owned by admin) is a different
+    # value -- give it the same shared value to create the mixed scenario.
+    data["existing_contact"].values[data["email_attr"].slug] = "shared@example.com"
+    db_session.add(data["existing_contact"])
+    await db_session.commit()
+
+    headers = _auth(data["member"].id)
+    resp = await client.post(
+        _dry_run_url(data["ws"].id, data["contact"].id), headers=headers,
+        files=_csv_file("name,email\nNew Row,shared@example.com\n"),
+        data={
+            "mapping_json": __import__("json").dumps(_full_mapping(data)),
+            "unique_match_attribute_id": data["email_attr"].id,
+            "duplicate_action": "skip",
+        },
+    )
+    body = resp.json()
+    row = body["rows"][0]
+    assert row["status"] == "skipped_duplicate"
+    assert row["matched_existing"] is True
+
+
+@pytest.mark.asyncio
+async def test_duplicate_archived_accessible_match_is_not_counted(
+    client: AsyncClient, contact_fixture: dict, db_session: AsyncSession,
+):
+    data = contact_fixture
+    tables = DataTableService(db_session)
+    archived = await tables.create_record(
+        data["contact"].id, data["ws"].id,
+        {"name": "Archived", data["email_attr"].slug: "archived@example.com"},
+        owner_id=data["admin"].id,
+    )
+    archived.is_archived = True
+    db_session.add(archived)
+    await db_session.commit()
+
+    headers = _auth(data["admin"].id)
+    resp = await client.post(
+        _dry_run_url(data["ws"].id, data["contact"].id), headers=headers,
+        files=_csv_file("name,email\nNew Row,archived@example.com\n"),
+        data={
+            "mapping_json": __import__("json").dumps(_full_mapping(data)),
+            "unique_match_attribute_id": data["email_attr"].id,
+            "duplicate_action": "skip",
+        },
+    )
+    body = resp.json()
+    row = body["rows"][0]
+    assert row["status"] == "create"
+    assert row["matched_existing"] is False

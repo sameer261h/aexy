@@ -12,7 +12,7 @@ this module is a read.
 """
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from aexy.schemas.csv_import import (
@@ -210,13 +210,29 @@ class CsvImportPolicyService:
                 ))
                 continue
 
-            valid_count += 1
             candidate_value = state["record_values"].get(unique_target_key)
-            matched = (
-                candidate_value is not None
-                and not isinstance(candidate_value, list)
-                and match_results.get(str(candidate_value), False)
-            )
+            match_status: Literal["none", "match", "ambiguous"] = "none"
+            if candidate_value is not None and not isinstance(candidate_value, list):
+                match_status = match_results.get(str(candidate_value), "none")
+
+            if match_status == "ambiguous":
+                invalid_count += 1
+                outcomes.append(CsvRowDryRunOutcome(
+                    source_row_number=state["source_row_number"],
+                    status="invalid",
+                    reason_codes=["AMBIGUOUS_DUPLICATE_MATCH"],
+                    remediation=[
+                        "The selected matching value corresponds to multiple accessible "
+                        "records and must be resolved before importing."
+                    ],
+                    source_values=state["source_values"],
+                    proposed_values=state["record_values"],
+                    matched_existing=False,
+                ))
+                continue
+
+            valid_count += 1
+            matched = match_status == "match"
             row_status: RowOutcomeStatus
             if matched:
                 duplicate_count += 1
