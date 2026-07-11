@@ -97,17 +97,46 @@ def test_proposed_value_zero_and_false_are_not_treated_as_dangerous():
     assert values_by_header[[h for h in header if h.endswith("active")][0]] == "False"
 
 
-def test_negative_numeric_value_is_still_neutralized_at_export_boundary():
-    # A literal leading "-" is one of the six dangerous prefixes -- this is
-    # a deliberate, spec-mandated tradeoff (formula neutralization applies
-    # uniformly to every exported cell; it does not special-case "looks
-    # like a negative number").
+def test_negative_source_string_value_is_still_neutralized_at_export_boundary():
+    # A source value is always raw CSV text (a string), even when it looks
+    # numeric -- a literal leading "-" is one of the six dangerous
+    # prefixes, so it is neutralized like any other string cell. This is
+    # distinct from a *typed* proposed numeric value (see
+    # test_typed_negative_numeric_proposed_value_is_never_neutralized),
+    # which is not text and must never be apostrophe-prefixed.
     row = _invalid_row(source_values={"balance": "-42"})
     raw = generate_rejection_csv(_result([row]))
     rows = _rows_from_csv(raw)
     header, data = rows[0], rows[1]
     values_by_header = dict(zip(header, data, strict=True))
     assert values_by_header["balance"] == "'-42"
+
+
+def test_typed_negative_numeric_proposed_value_is_never_neutralized():
+    # A typed int/float proposed value is not text -- it must be written
+    # verbatim. Apostrophe-prefixing -123 would corrupt it into a
+    # different string for anyone re-importing this file; the "-" here is
+    # the number's sign, not a spreadsheet formula.
+    row = _invalid_row(
+        source_values={"name": "Ada"},
+        proposed_values={"balance": -123, "ratio": -0.5},
+    )
+    raw = generate_rejection_csv(_result([row]))
+    rows = _rows_from_csv(raw)
+    header, data = rows[0], rows[1]
+    values_by_header = dict(zip(header, data, strict=True))
+    assert values_by_header[[h for h in header if h.endswith("balance")][0]] == "-123"
+    assert values_by_header[[h for h in header if h.endswith("ratio")][0]] == "-0.5"
+
+
+def test_typed_negative_numeric_proposed_value_survives_round_trip_reparse():
+    row = _invalid_row(source_values={}, proposed_values={"balance": -123})
+    raw = generate_rejection_csv(_result([row]))
+    header, data = _rows_from_csv(raw)[0], _rows_from_csv(raw)[1]
+    values_by_header = dict(zip(header, data, strict=True))
+    cell = values_by_header[[h for h in header if h.endswith("balance")][0]]
+    assert cell == "-123"
+    assert int(cell) == -123
 
 
 def test_metadata_columns_and_diagnostics_are_neutralized():
@@ -180,14 +209,36 @@ def test_source_header_colliding_with_reserved_metadata_name_disambiguates_gener
     assert values_by_header["__aexy_row_number__2"] == "2"
 
 
-def test_destination_slugs_differing_only_by_case_produce_distinct_columns():
+def test_destination_slugs_differing_only_by_case_are_deterministically_disambiguated():
+    # Collision detection is case-insensitive: "Name" and "name" would be
+    # the same column under a case-insensitive spreadsheet re-import, so
+    # the second one seen is deterministically suffixed rather than
+    # colliding. The first-seen header keeps its natural, unsuffixed
+    # casing.
     row = _invalid_row(source_values={}, proposed_values={"Name": "Ada", "name": "ada"})
     raw = generate_rejection_csv(_result([row]))
     header = _rows_from_csv(raw)[0]
     assert "__aexy_proposed_Name" in header
-    assert "__aexy_proposed_name" in header
+    assert "__aexy_proposed_name__2" in header
+    assert "__aexy_proposed_name" not in header
     assert header.count("__aexy_proposed_Name") == 1
-    assert header.count("__aexy_proposed_name") == 1
+    assert header.count("__aexy_proposed_name__2") == 1
+    data = _rows_from_csv(raw)[1]
+    values_by_header = dict(zip(header, data, strict=True))
+    assert values_by_header["__aexy_proposed_Name"] == "Ada"
+    assert values_by_header["__aexy_proposed_name__2"] == "ada"
+
+
+def test_source_header_colliding_only_by_case_with_reserved_metadata_name_disambiguates():
+    row = _invalid_row(source_values={"__AEXY_ROW_NUMBER": "user-supplied"})
+    raw = generate_rejection_csv(_result([row]))
+    header = _rows_from_csv(raw)[0]
+    # The user's source header is preserved verbatim, including its casing...
+    assert "__AEXY_ROW_NUMBER" in header
+    # ...and the generated row-number column is deterministically renamed
+    # rather than colliding case-insensitively with it.
+    assert "__aexy_row_number__2" in header
+    assert "__aexy_row_number" not in header
 
 
 def test_column_generation_is_deterministic_across_repeated_calls():

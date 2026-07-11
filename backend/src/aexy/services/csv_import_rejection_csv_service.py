@@ -19,7 +19,19 @@ with a destination slug (e.g. a CSV column literally named `name`) can
 never become ambiguous with a generated column. If a source header
 happens to already use the reserved `__aexy_` namespace, the *generated*
 header is deterministically disambiguated -- the user's source header is
-never altered.
+never altered. Collision detection is case-insensitive (casefolded), so
+two destination slugs differing only by case still both get distinct,
+deterministic columns without silently colliding under a
+case-insensitive spreadsheet import elsewhere -- but the header text
+itself keeps its original, human-chosen casing.
+
+Formula neutralization applies only to string-shaped cells (original CSV
+source strings, joined reason-code/remediation text, and string/list-
+typed proposed values). A typed numeric or boolean proposed value (e.g.
+`-123`, `False`) is written as-is: apostrophe-prefixing `-123` would
+silently turn a valid negative number into a different, corrupted string
+for anyone re-importing this file, and the "-" there is not a formula,
+it's the number's sign.
 """
 
 import csv
@@ -50,23 +62,42 @@ def _stringify(value: Any) -> str:
     return str(value)
 
 
+def _neutralize_proposed_value(value: Any) -> str:
+    """Stringify a proposed destination value, neutralizing it only if it
+    is string-shaped. `int`/`float` (which also covers `bool`, a `int`
+    subclass in Python) are typed scalars, not text -- they are written
+    verbatim, preserving e.g. a negative number's sign."""
+    stringified = _stringify(value)
+    if isinstance(value, (int, float)):
+        return stringified
+    return _neutralize(stringified)
+
+
 def _proposed_value_header(target_key: str) -> str:
     return f"{_PROPOSED_VALUE_PREFIX}{target_key}"
 
 
-def _disambiguate(preferred: str, taken: set[str]) -> str:
+def _disambiguate(preferred: str, taken: dict[str, str]) -> str:
     """Deterministically rename an Aexy-generated header if it collides
-    with a header already claimed by a source column or an earlier
-    Aexy-generated column. Only ever called for generated names -- source
-    headers are never passed through this function and are never
-    renamed."""
-    if preferred not in taken:
+    (case-insensitively) with a header already claimed by a source column
+    or an earlier Aexy-generated column. Only ever called for generated
+    names -- source headers are never passed through this function and
+    are never renamed. `taken` maps casefolded keys to the exact string
+    already claiming that key, purely so collisions are detected without
+    regard to case while every returned header keeps its original,
+    human-chosen casing."""
+    key = preferred.casefold()
+    if key not in taken:
+        taken[key] = preferred
         return preferred
     suffix = 2
     candidate = f"{preferred}__{suffix}"
-    while candidate in taken:
+    candidate_key = candidate.casefold()
+    while candidate_key in taken:
         suffix += 1
         candidate = f"{preferred}__{suffix}"
+        candidate_key = candidate.casefold()
+    taken[candidate_key] = candidate
     return candidate
 
 
@@ -92,19 +123,14 @@ def generate_rejection_csv(result: CsvImportDryRunPolicyResult) -> bytes:
                 seen_targets.add(key)
                 target_keys.append(key)
 
-    taken: set[str] = set(source_headers)
+    taken: dict[str, str] = {header.casefold(): header for header in source_headers}
     row_number_header = _disambiguate(_ROW_NUMBER_HEADER, taken)
-    taken.add(row_number_header)
     reason_codes_header = _disambiguate(_REASON_CODES_HEADER, taken)
-    taken.add(reason_codes_header)
     remediation_header = _disambiguate(_REMEDIATION_HEADER, taken)
-    taken.add(remediation_header)
 
-    proposed_headers: dict[str, str] = {}
-    for key in target_keys:
-        final = _disambiguate(_proposed_value_header(key), taken)
-        taken.add(final)
-        proposed_headers[key] = final
+    proposed_headers: dict[str, str] = {
+        key: _disambiguate(_proposed_value_header(key), taken) for key in target_keys
+    }
 
     header_row = [
         row_number_header, reason_codes_header, remediation_header,
@@ -117,13 +143,13 @@ def generate_rejection_csv(result: CsvImportDryRunPolicyResult) -> bytes:
     writer.writerow([_neutralize(cell) for cell in header_row])
     for row in rejected:
         cells = [
-            str(row.source_row_number),
-            ";".join(row.reason_codes),
-            ";".join(row.remediation),
-            *(_stringify(row.source_values.get(header, "")) for header in source_headers),
-            *(_stringify(row.proposed_values.get(key)) for key in target_keys),
+            _neutralize(str(row.source_row_number)),
+            _neutralize(";".join(row.reason_codes)),
+            _neutralize(";".join(row.remediation)),
+            *(_neutralize(_stringify(row.source_values.get(header, ""))) for header in source_headers),
+            *(_neutralize_proposed_value(row.proposed_values.get(key)) for key in target_keys),
         ]
-        writer.writerow([_neutralize(cell) for cell in cells])
+        writer.writerow(cells)
 
     return buffer.getvalue().encode("utf-8-sig")
 
