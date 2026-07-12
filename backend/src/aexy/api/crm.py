@@ -1417,6 +1417,15 @@ async def list_records(
         offset=offset,
     )
 
+    computed_by_record: dict[str, dict] = {}
+    if records:
+        crm_object = await CRMObjectService(db).get_object(object_id)
+        if crm_object is not None and crm_object.object_type == "person":
+            computed_by_record = await service.compute_person_interaction_fields(
+                workspace_id=workspace_id,
+                record_ids=[str(r.id) for r in records],
+            )
+
     return {
         "records": [
             CRMRecordListResponse(
@@ -1428,6 +1437,7 @@ async def list_records(
                 is_archived=r.is_archived,
                 created_at=r.created_at,
                 updated_at=r.updated_at,
+                computed=computed_by_record.get(str(r.id)),
             )
             for r in records
         ],
@@ -1474,6 +1484,15 @@ async def query_records(
         offset=data.offset,
     )
 
+    computed_by_record: dict[str, dict] = {}
+    if records:
+        crm_object = await CRMObjectService(db).get_object(object_id)
+        if crm_object is not None and crm_object.object_type == "person":
+            computed_by_record = await service.compute_person_interaction_fields(
+                workspace_id=workspace_id,
+                record_ids=[str(r.id) for r in records],
+            )
+
     return {
         "records": [
             CRMRecordListResponse(
@@ -1485,6 +1504,7 @@ async def query_records(
                 is_archived=r.is_archived,
                 created_at=r.created_at,
                 updated_at=r.updated_at,
+                computed=computed_by_record.get(str(r.id)),
             )
             for r in records
         ],

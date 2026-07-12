@@ -286,6 +286,11 @@ class CRMRecordListResponse(BaseModel):
     is_archived: bool
     created_at: datetime
     updated_at: datetime
+    # Derived fields not stored as CRMAttribute values -- currently only
+    # populated for Person records: last_email_interaction,
+    # last_calendar_interaction, connection_strength. None for other object
+    # types.
+    computed: dict[str, Any] | None = None
 
 
 class CRMRecordBulkCreate(BaseModel):

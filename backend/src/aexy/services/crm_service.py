@@ -5,7 +5,7 @@ Core table/record/field CRUD is delegated to the shared DataTableService.
 """
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -836,6 +836,83 @@ class CRMRecordService:
             limit=limit,
             offset=offset,
         )
+
+    async def compute_person_interaction_fields(
+        self, workspace_id: str, record_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Last email interaction / last calendar interaction / connection
+        strength for a batch of Person records, derived from CRMActivity
+        rows the existing Gmail/Calendar sync already logs -- no new sync
+        subsystem needed, just aggregation.
+
+        Connection strength buckets email+meeting activity in the trailing
+        90 days by count. This is a placeholder heuristic, not Attio's
+        (proprietary, unknown) formula.
+        # ponytail: fixed count thresholds, revisit once there's real usage
+        # data to calibrate against instead of guessed cutoffs.
+        """
+        if not record_ids:
+            return {}
+
+        email_types = ("email.sent", "email.received")
+        meeting_types = ("meeting.scheduled", "meeting.completed")
+        window_start = datetime.now(timezone.utc) - timedelta(days=90)
+
+        last_email_rows = await self.db.execute(
+            select(CRMActivity.record_id, func.max(CRMActivity.occurred_at))
+            .where(
+                CRMActivity.workspace_id == workspace_id,
+                CRMActivity.record_id.in_(record_ids),
+                CRMActivity.activity_type.in_(email_types),
+            )
+            .group_by(CRMActivity.record_id)
+        )
+        last_email = dict(last_email_rows.all())
+
+        last_meeting_rows = await self.db.execute(
+            select(CRMActivity.record_id, func.max(CRMActivity.occurred_at))
+            .where(
+                CRMActivity.workspace_id == workspace_id,
+                CRMActivity.record_id.in_(record_ids),
+                CRMActivity.activity_type.in_(meeting_types),
+            )
+            .group_by(CRMActivity.record_id)
+        )
+        last_meeting = dict(last_meeting_rows.all())
+
+        recent_count_rows = await self.db.execute(
+            select(CRMActivity.record_id, func.count(CRMActivity.id))
+            .where(
+                CRMActivity.workspace_id == workspace_id,
+                CRMActivity.record_id.in_(record_ids),
+                CRMActivity.activity_type.in_(email_types + meeting_types),
+                CRMActivity.occurred_at >= window_start,
+            )
+            .group_by(CRMActivity.record_id)
+        )
+        recent_counts = dict(recent_count_rows.all())
+
+        def bucket(count: int) -> str:
+            if count == 0:
+                return "weak"
+            if count <= 3:
+                return "good"
+            if count <= 8:
+                return "strong"
+            return "very_strong"
+
+        return {
+            record_id: {
+                "last_email_interaction": (
+                    last_email[record_id].isoformat() if last_email.get(record_id) else None
+                ),
+                "last_calendar_interaction": (
+                    last_meeting[record_id].isoformat() if last_meeting.get(record_id) else None
+                ),
+                "connection_strength": bucket(recent_counts.get(record_id, 0)),
+            }
+            for record_id in record_ids
+        }
 
     async def update_record(
         self,
