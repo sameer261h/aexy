@@ -94,7 +94,7 @@ class TableAuthService:
         self,
         table_id: str,
         user_id: str,
-        workspace_id: str | None = None,
+        workspace_id: str,
     ) -> TableAccess | None:
         """Resolve a user's effective access on a table.
 
@@ -107,24 +107,28 @@ class TableAuthService:
         6. Visibility='workspace' → view for all workspace members
         7. None → no access
         """
-        # Fetch the table
-        stmt = select(CRMObject).where(CRMObject.id == table_id)
+        # The table must be bound to the workspace in the same lookup as
+        # authorization.  Checking only that the caller belongs to the URL
+        # workspace would let a member of workspace A operate on a table ID
+        # from workspace B.
+        stmt = select(CRMObject).where(
+            CRMObject.id == table_id,
+            CRMObject.workspace_id == workspace_id,
+        )
         result = await self.db.execute(stmt)
         table = result.scalar_one_or_none()
         if not table:
             return None
 
         # Fetch workspace member once (reused for steps 1, 4, 6)
-        member = None
-        if workspace_id:
-            from aexy.models.workspace import WorkspaceMember
-            member_stmt = select(WorkspaceMember).where(
-                WorkspaceMember.workspace_id == workspace_id,
-                WorkspaceMember.developer_id == user_id,
-                WorkspaceMember.status == "active",
-            )
-            member_result = await self.db.execute(member_stmt)
-            member = member_result.scalar_one_or_none()
+        from aexy.models.workspace import WorkspaceMember
+        member_stmt = select(WorkspaceMember).where(
+            WorkspaceMember.workspace_id == workspace_id,
+            WorkspaceMember.developer_id == user_id,
+            WorkspaceMember.status == "active",
+        )
+        member_result = await self.db.execute(member_stmt)
+        member = member_result.scalar_one_or_none()
 
         # 1. Check if workspace admin/owner
         if member and member.role in ("owner", "admin"):
@@ -161,24 +165,23 @@ class TableAuthService:
                     best_access = access
 
         # Team-based match
-        if workspace_id:
-            from aexy.models.team import TeamMember
-            team_stmt = select(TeamMember.team_id).where(
-                TeamMember.developer_id == user_id,
-            )
-            team_result = await self.db.execute(team_stmt)
-            user_team_ids = [row[0] for row in team_result.all()]
+        from aexy.models.team import TeamMember
+        team_stmt = select(TeamMember.team_id).where(
+            TeamMember.developer_id == user_id,
+        )
+        team_result = await self.db.execute(team_stmt)
+        user_team_ids = [row[0] for row in team_result.all()]
 
-            if user_team_ids:
-                team_collab_stmt = select(TableCollaborator).where(
-                    TableCollaborator.table_id == table_id,
-                    TableCollaborator.team_id.in_(user_team_ids),
-                )
-                team_collabs_result = await self.db.execute(team_collab_stmt)
-                for team_collab in team_collabs_result.scalars().all():
-                    access = self._collab_to_access(team_collab)
-                    if not best_access or access.level > best_access.level:
-                        best_access = access
+        if user_team_ids:
+            team_collab_stmt = select(TableCollaborator).where(
+                TableCollaborator.table_id == table_id,
+                TableCollaborator.team_id.in_(user_team_ids),
+            )
+            team_collabs_result = await self.db.execute(team_collab_stmt)
+            for team_collab in team_collabs_result.scalars().all():
+                access = self._collab_to_access(team_collab)
+                if not best_access or access.level > best_access.level:
+                    best_access = access
 
         if best_access:
             return best_access
@@ -195,11 +198,17 @@ class TableAuthService:
         table_id: str,
         user_id: str,
         min_perm: str,
-        workspace_id: str | None = None,
+        workspace_id: str,
     ) -> TableAccess:
         """Check access and raise if insufficient. Returns the resolved access."""
         access = await self.resolve_access(table_id, user_id, workspace_id)
-        if not access or not access.can(min_perm):
+        if not access:
+            from fastapi import HTTPException, status
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Table not found",
+            )
+        if not access.can(min_perm):
             from fastapi import HTTPException, status
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -307,13 +316,12 @@ class DataTableService:
         await self.db.refresh(table)
         return table
 
-    async def get_table(self, table_id: str) -> CRMObject | None:
+    async def get_table(self, table_id: str, workspace_id: str | None = None) -> CRMObject | None:
         """Get a table by ID with attributes eagerly loaded."""
-        stmt = (
-            select(CRMObject)
-            .where(CRMObject.id == table_id)
-            .options(selectinload(CRMObject.attributes))
-        )
+        stmt = select(CRMObject).where(CRMObject.id == table_id)
+        if workspace_id is not None:
+            stmt = stmt.where(CRMObject.workspace_id == workspace_id)
+        stmt = stmt.options(selectinload(CRMObject.attributes))
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -357,10 +365,10 @@ class DataTableService:
         return list(result.scalars().all())
 
     async def update_table(
-        self, table_id: str, **kwargs: Any,
+        self, table_id: str, workspace_id: str | None = None, **kwargs: Any,
     ) -> CRMObject | None:
         """Update table properties."""
-        table = await self.get_table(table_id)
+        table = await self.get_table(table_id, workspace_id)
         if not table:
             return None
 
@@ -377,9 +385,9 @@ class DataTableService:
         await self.db.refresh(table)
         return table
 
-    async def delete_table(self, table_id: str) -> bool:
+    async def delete_table(self, table_id: str, workspace_id: str | None = None) -> bool:
         """Soft-delete a table."""
-        table = await self.get_table(table_id)
+        table = await self.get_table(table_id, workspace_id)
         if not table:
             return False
         if table.is_system:
@@ -397,6 +405,7 @@ class DataTableService:
         self,
         table_id: str,
         name: str,
+        workspace_id: str | None = None,
         field_type: str = "text",
         slug: str | None = None,
         description: str | None = None,
@@ -412,6 +421,8 @@ class DataTableService:
         is_system: bool = False,
     ) -> CRMAttribute:
         """Add a field to a table."""
+        if not await self.get_table(table_id, workspace_id):
+            raise ValueError("Table not found")
         if not slug:
             base_slug = _generate_attribute_slug(name)
             slug = base_slug
@@ -460,10 +471,17 @@ class DataTableService:
         return attr
 
     async def update_field(
-        self, field_id: str, **kwargs: Any,
+        self, field_id: str, table_id: str | None = None,
+        workspace_id: str | None = None, **kwargs: Any,
     ) -> CRMAttribute | None:
         """Update a field's properties."""
         stmt = select(CRMAttribute).where(CRMAttribute.id == field_id)
+        if table_id is not None:
+            stmt = stmt.where(CRMAttribute.object_id == table_id)
+        if workspace_id is not None:
+            stmt = stmt.join(CRMObject, CRMObject.id == CRMAttribute.object_id).where(
+                CRMObject.workspace_id == workspace_id
+            )
         result = await self.db.execute(stmt)
         attr = result.scalar_one_or_none()
         if not attr:
@@ -506,9 +524,18 @@ class DataTableService:
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    async def delete_field(self, field_id: str) -> bool:
+    async def delete_field(
+        self, field_id: str, table_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> bool:
         """Delete a field."""
         stmt = select(CRMAttribute).where(CRMAttribute.id == field_id)
+        if table_id is not None:
+            stmt = stmt.where(CRMAttribute.object_id == table_id)
+        if workspace_id is not None:
+            stmt = stmt.join(CRMObject, CRMObject.id == CRMAttribute.object_id).where(
+                CRMObject.workspace_id == workspace_id
+            )
         result = await self.db.execute(stmt)
         attr = result.scalar_one_or_none()
         if not attr:
@@ -533,7 +560,7 @@ class DataTableService:
         created_by_id: str | None = None,
     ) -> CRMRecord:
         """Create a record in a table."""
-        table = await self.get_table(table_id)
+        table = await self.get_table(table_id, workspace_id)
         if not table:
             raise ValueError("Table not found")
 
@@ -556,7 +583,10 @@ class DataTableService:
         await self.db.refresh(record)
         return record
 
-    async def get_record(self, record_id: str) -> CRMRecord | None:
+    async def get_record(
+        self, record_id: str, table_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> CRMRecord | None:
         """Get a record by ID."""
         stmt = (
             select(CRMRecord)
@@ -567,6 +597,10 @@ class DataTableService:
                 selectinload(CRMRecord.created_by),
             )
         )
+        if table_id is not None:
+            stmt = stmt.where(CRMRecord.object_id == table_id)
+        if workspace_id is not None:
+            stmt = stmt.where(CRMRecord.workspace_id == workspace_id)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -576,13 +610,14 @@ class DataTableService:
         workspace_id: str,
         filters: list[dict] | None = None,
         sorts: list[dict] | None = None,
+        search: str | None = None,
         include_archived: bool = False,
         limit: int = 50,
         offset: int = 0,
         access: TableAccess | None = None,
         user_id: str | None = None,
     ) -> tuple[list[CRMRecord], int]:
-        """List records with filtering, sorting, pagination, and row security."""
+        """List records with filtering, free-text search, sorting, pagination, and row security."""
         table = await self.get_table(table_id)
 
         stmt = (
@@ -602,6 +637,11 @@ class DataTableService:
         # Apply filters
         if filters:
             stmt = self._apply_filters(stmt, filters)
+
+        # Apply free-text search (further narrows the already-scoped query;
+        # never widens it beyond the workspace/object/security predicates above)
+        if search:
+            stmt = await self._apply_search(stmt, table_id, search)
 
         # Count
         count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -624,9 +664,11 @@ class DataTableService:
         record_id: str,
         values: dict[str, Any] | None = None,
         owner_id: str | None = None,
+        table_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> CRMRecord | None:
         """Update a record's values."""
-        record = await self.get_record(record_id)
+        record = await self.get_record(record_id, table_id, workspace_id)
         if not record:
             return None
 
@@ -663,9 +705,11 @@ class DataTableService:
         self,
         record_id: str,
         permanent: bool = False,
+        table_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> bool:
         """Delete or archive a record."""
-        record = await self.get_record(record_id)
+        record = await self.get_record(record_id, table_id, workspace_id)
         if not record:
             return False
 
@@ -686,25 +730,29 @@ class DataTableService:
         record_ids: list[str],
         permanent: bool = False,
         table_id: str | None = None,
+        workspace_id: str | None = None,
         max_batch: int = 100,
     ) -> int:
         """Bulk delete records. Validates table ownership if table_id provided."""
         if len(record_ids) > max_batch:
             raise ValueError(f"Bulk delete limited to {max_batch} records at a time")
 
-        # If table_id given, validate all records belong to it in one query
-        if table_id:
+        # Validate the complete batch before mutating anything.  A mixed-tenant
+        # request is rejected atomically rather than deleting the matching rows.
+        if table_id and workspace_id:
             stmt = select(CRMRecord.id).where(
                 CRMRecord.id.in_(record_ids),
                 CRMRecord.object_id == table_id,
+                CRMRecord.workspace_id == workspace_id,
             )
             result = await self.db.execute(stmt)
             valid_ids = {str(row[0]) for row in result.all()}
-            record_ids = [rid for rid in record_ids if rid in valid_ids]
+            if valid_ids != set(record_ids):
+                raise ValueError("One or more records not found in this table")
 
         deleted = 0
         for record_id in record_ids:
-            if await self.delete_record(record_id, permanent):
+            if await self.delete_record(record_id, permanent, table_id, workspace_id):
                 deleted += 1
         return deleted
 
@@ -884,13 +932,22 @@ class DataTableService:
     async def update_collaborator(
         self,
         collaborator_id: str,
+        table_id: str,
         permission: str | None = None,
         hidden_columns: list[str] | None = None,
         readonly_columns: list[str] | None = None,
         row_filter: list[dict] | None = None,
     ) -> TableCollaborator | None:
-        """Update a collaborator's permission/restrictions."""
-        stmt = select(TableCollaborator).where(TableCollaborator.id == collaborator_id)
+        """Update a collaborator's permission/restrictions.
+
+        ``table_id`` must be the caller's already-authorized table (proven by
+        ``check_access`` against the URL workspace) so a collaborator row
+        belonging to a different table can't be mutated by guessing its ID.
+        """
+        stmt = select(TableCollaborator).where(
+            TableCollaborator.id == collaborator_id,
+            TableCollaborator.table_id == table_id,
+        )
         result = await self.db.execute(stmt)
         collab = result.scalar_one_or_none()
         if not collab:
@@ -909,9 +966,12 @@ class DataTableService:
         await self.db.refresh(collab)
         return collab
 
-    async def remove_collaborator(self, collaborator_id: str) -> bool:
-        """Remove a collaborator."""
-        stmt = select(TableCollaborator).where(TableCollaborator.id == collaborator_id)
+    async def remove_collaborator(self, collaborator_id: str, table_id: str) -> bool:
+        """Remove a collaborator. ``table_id`` scopes the row as in ``update_collaborator``."""
+        stmt = select(TableCollaborator).where(
+            TableCollaborator.id == collaborator_id,
+            TableCollaborator.table_id == table_id,
+        )
         result = await self.db.execute(stmt)
         collab = result.scalar_one_or_none()
         if not collab:
@@ -1027,6 +1087,41 @@ class DataTableService:
 
         return stmt
 
+    # Attribute types whose stored value is a plain, directly-searchable
+    # string. Select/multi_select/status store a value slug (not the
+    # display label) and location's shape isn't guaranteed scalar, so they
+    # are excluded rather than searched unsafely.
+    TEXT_SEARCHABLE_ATTRIBUTE_TYPES = {
+        CRMAttributeType.TEXT.value,
+        CRMAttributeType.TEXTAREA.value,
+        CRMAttributeType.EMAIL.value,
+        CRMAttributeType.PHONE.value,
+        CRMAttributeType.PERSON_NAME.value,
+        CRMAttributeType.URL.value,
+    }
+
+    async def _apply_search(self, stmt, table_id: str, search: str):
+        """Apply free-text search across display_name and textual attributes.
+
+        Only narrows the query passed in (adds an AND'd predicate) — never
+        widens the workspace/object/security scope already applied by the
+        caller.
+        """
+        attrs_result = await self.db.execute(
+            select(CRMAttribute.slug).where(
+                CRMAttribute.object_id == table_id,
+                CRMAttribute.attribute_type.in_(self.TEXT_SEARCHABLE_ATTRIBUTE_TYPES),
+            )
+        )
+        slugs = [row[0] for row in attrs_result.all()]
+
+        pattern = f"%{self._escape_like(search)}%"
+        conditions = [CRMRecord.display_name.ilike(pattern)]
+        for slug in slugs:
+            conditions.append(CRMRecord.values[slug].astext.ilike(pattern))
+
+        return stmt.where(or_(*conditions))
+
     def _apply_sorts(self, stmt, sorts: list[dict] | None):
         """Apply sort conditions to a query."""
         if sorts:
@@ -1072,4 +1167,3 @@ class DataTableService:
             stmt = self._apply_filters(stmt, access.row_filter)
 
         return stmt
-

@@ -4,7 +4,6 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 import {
   Plus,
-  Filter,
   ChevronLeft,
   Trash2,
   Building2,
@@ -27,6 +26,43 @@ import { KanbanBoard } from "@/components/crm/KanbanBoard";
 import { PipelineBoard } from "@/components/crm/PipelineBoard";
 import { ColumnVisibilityMenu } from "@/components/crm/ColumnSelector";
 import { FieldEditor } from "@/components/fields";
+import { TableFilterPanel, FilterRule } from "@/components/tables";
+
+const PAGE_LIMIT = 50;
+const SEARCH_DEBOUNCE_MS = 300;
+
+// FilterRule uses a UI-only checkbox shorthand (is_true/is_false) that the
+// backend query contract doesn't have; equals/"true"|"false" round-trips it.
+function toQueryFilters(rules: FilterRule[]): Record<string, unknown>[] {
+  return rules
+    .filter((r) => r.field && (r.value !== "" || r.operator === "is_empty" || r.operator === "is_not_empty" || r.operator === "is_true" || r.operator === "is_false"))
+    .map((r) => {
+      if (r.operator === "is_true") return { attribute: r.field, operator: "equals", value: "true" };
+      if (r.operator === "is_false") return { attribute: r.field, operator: "equals", value: "false" };
+      return { attribute: r.field, operator: r.operator, value: r.value };
+    });
+}
+
+function fromQueryFilters(saved: Record<string, unknown>[] | undefined): FilterRule[] {
+  if (!saved?.length) return [];
+  return saved.map((f, idx) => {
+    const attribute = String(f.attribute ?? "");
+    const operator = String(f.operator ?? "equals");
+    const value = f.value;
+    if (operator === "equals" && value === "true") {
+      return { id: `restored_${idx}_${Date.now()}`, field: attribute, operator: "is_true", value: "" };
+    }
+    if (operator === "equals" && value === "false") {
+      return { id: `restored_${idx}_${Date.now()}`, field: attribute, operator: "is_false", value: "" };
+    }
+    return {
+      id: `restored_${idx}_${Date.now()}`,
+      field: attribute,
+      operator: operator as FilterRule["operator"],
+      value: value == null ? "" : String(value),
+    };
+  });
+}
 
 const objectTypeIcons: Record<CRMObjectType, React.ReactNode> = {
   company: <Building2 className="h-5 w-5" />,
@@ -147,10 +183,25 @@ export default function RecordsPage() {
     return "table";
   });
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [filters, setFilters] = useState<FilterRule[]>([]);
+  const [offset, setOffset] = useState(0);
   const [selectedRecords, setSelectedRecords] = useState<string[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createDefaultValues, setCreateDefaultValues] = useState<Record<string, unknown>>({});
   const [sortConfig, setSortConfig] = useState<{ attribute: string; direction: "asc" | "desc" } | null>(null);
+
+  // Debounce free-text search before it reaches the server query.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  // Reset pagination whenever the query-defining state changes, so an old
+  // offset never gets applied to a different result set.
+  useEffect(() => {
+    setOffset(0);
+  }, [debouncedSearch, filters, sortConfig, activeViewId]);
 
   // Column management state
   const [visibleColumns, setVisibleColumns] = useState<string[]>([]);
@@ -181,6 +232,7 @@ export default function RecordsPage() {
         setColumnOrder(columns.map((a) => a.slug));
       }
       setSortConfig(null);
+      setFilters([]);
       return;
     }
     setActiveViewId(view.id);
@@ -195,6 +247,7 @@ export default function RecordsPage() {
     } else {
       setSortConfig(null);
     }
+    setFilters(fromQueryFilters(view.filters));
     if (view.view_type === "board" || view.view_type === "table") {
       setViewMode(view.view_type as ViewMode);
     }
@@ -214,6 +267,8 @@ export default function RecordsPage() {
     if (activeViewId === viewId) setActiveViewId(null);
   }, [deleteView, activeViewId]);
 
+  const queryFilters = useMemo(() => toQueryFilters(filters), [filters]);
+
   const {
     records,
     total,
@@ -226,19 +281,11 @@ export default function RecordsPage() {
     isDeleting,
   } = useCRMRecords(workspaceId, currentObject?.id || null, {
     sorts: sortConfig ? [{ attribute: sortConfig.attribute, direction: sortConfig.direction }] : undefined,
+    filters: queryFilters.length ? queryFilters : undefined,
+    q: debouncedSearch.trim() || undefined,
+    limit: PAGE_LIMIT,
+    offset,
   });
-
-  // Filter records by search
-  const filteredRecords = useMemo(() => {
-    if (!searchQuery) return records;
-    const query = searchQuery.toLowerCase();
-    return records.filter((record) => {
-      if (record.display_name?.toLowerCase().includes(query)) return true;
-      return Object.values(record.values).some((val) =>
-        String(val).toLowerCase().includes(query)
-      );
-    });
-  }, [records, searchQuery]);
 
   // Check if object has status attribute (for board view)
   const hasStatusAttribute = useMemo(() => {
@@ -264,10 +311,10 @@ export default function RecordsPage() {
   };
 
   const handleSelectAll = () => {
-    if (selectedRecords.length === filteredRecords.length) {
+    if (selectedRecords.length === records.length) {
       setSelectedRecords([]);
     } else {
-      setSelectedRecords(filteredRecords.map((r) => r.id));
+      setSelectedRecords(records.map((r) => r.id));
     }
   };
 
@@ -380,6 +427,7 @@ export default function RecordsPage() {
                 currentConfig={{
                   visible_attributes: visibleColumns,
                   sorts: sortConfig ? [{ attribute: sortConfig.attribute, direction: sortConfig.direction }] : [],
+                  filters: queryFilters,
                   view_type: viewMode as "table" | "board",
                 }}
                 isCreating={isCreatingView}
@@ -414,10 +462,13 @@ export default function RecordsPage() {
               placeholder={`Search ${currentObject?.plural_name?.toLowerCase() || "records"}...`}
               wrapperClassName="flex-1"
             />
-            <button className="flex items-center gap-2 px-4 py-2 bg-muted hover:bg-accent border border-border text-foreground rounded-lg transition-colors">
-              <Filter className="h-4 w-4" />
-              Filter
-            </button>
+            {currentObject?.attributes && (
+              <TableFilterPanel
+                attributes={currentObject.attributes}
+                filters={filters}
+                onChange={setFilters}
+              />
+            )}
 
             {/* Column visibility (table view only) */}
             {viewMode === "table" && currentObject?.attributes && (
@@ -445,7 +496,7 @@ export default function RecordsPage() {
           {/* Content */}
           {viewMode === "table" ? (
             <DataTable
-              records={filteredRecords}
+              records={records}
               attributes={currentObject?.attributes || []}
               isLoading={isLoading}
               emptyMessage={searchQuery ? "No records match your search" : `No ${currentObject?.plural_name?.toLowerCase() || "records"} yet`}
@@ -470,7 +521,7 @@ export default function RecordsPage() {
               <PipelineBoard
                 workspaceId={workspaceId}
                 object={currentObject}
-                records={filteredRecords}
+                records={records}
                 onRecordClick={handleRecordClick}
                 onRecordUpdate={handleRecordUpdate}
                 onCreateInStage={handleCreateInStage}
@@ -479,7 +530,7 @@ export default function RecordsPage() {
               />
             ) : (
               <KanbanBoard
-                records={filteredRecords}
+                records={records}
                 attributes={currentObject?.attributes || []}
                 onRecordClick={handleRecordClick}
                 onRecordUpdate={handleRecordUpdate}
@@ -488,6 +539,30 @@ export default function RecordsPage() {
                 isLoading={isLoading}
               />
             )
+          )}
+
+          {viewMode === "table" && total > PAGE_LIMIT && (
+            <div className="flex items-center justify-between mt-4 text-sm text-muted-foreground">
+              <span>
+                Showing {Math.min(offset + 1, total)}–{Math.min(offset + PAGE_LIMIT, total)} of {total}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setOffset(Math.max(0, offset - PAGE_LIMIT))}
+                  disabled={offset === 0}
+                  className="px-3 py-1.5 border border-border rounded-lg text-foreground hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setOffset(offset + PAGE_LIMIT)}
+                  disabled={offset + PAGE_LIMIT >= total}
+                  className="px-3 py-1.5 border border-border rounded-lg text-foreground hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           )}
 
           {currentObject && (

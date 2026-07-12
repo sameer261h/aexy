@@ -22,6 +22,9 @@ from aexy.schemas.crm_pipeline import (
     StageUpdate,
 )
 from aexy.services.crm_pipeline_service import (
+    PipelineDomainError,
+    PipelineNotFoundError,
+    PipelineRecordsNotFoundError,
     LeadConversionService,
     PipelineAnalyticsService,
     PipelineService,
@@ -35,10 +38,28 @@ router = APIRouter(
 )
 
 
+def _movement_http_exception(error: PipelineDomainError) -> HTTPException:
+    """Map stable movement failures without depending on message wording."""
+    if isinstance(error, PipelineNotFoundError):
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pipeline not found",
+        )
+    if isinstance(error, PipelineRecordsNotFoundError):
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Record not found",
+        )
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=str(error),
+    )
+
+
 async def _owned_pipeline(db: AsyncSession, workspace_id: str, pipeline_id: str) -> CRMPipeline:
     service = PipelineService(db)
-    pipeline = await service.get_pipeline(pipeline_id)
-    if not pipeline or str(pipeline.workspace_id) != workspace_id:
+    pipeline = await service.get_pipeline(pipeline_id, workspace_id)
+    if not pipeline:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     return pipeline
 
@@ -133,6 +154,7 @@ async def update_pipeline(
     await _owned_pipeline(db, workspace_id, pipeline_id)
     pipeline = await PipelineService(db).update_pipeline(
         pipeline_id,
+        workspace_id=workspace_id,
         name=data.name,
         description=data.description,
         settings=data.settings,
@@ -151,7 +173,9 @@ async def delete_pipeline(
 ):
     await check_workspace_permission(workspace_id, current_user, db, "admin")
     await _owned_pipeline(db, workspace_id, pipeline_id)
-    await PipelineService(db).delete_pipeline(pipeline_id)
+    await PipelineService(db).delete_pipeline(
+        pipeline_id, workspace_id=workspace_id
+    )
     await db.commit()
 
 
@@ -164,7 +188,9 @@ async def set_default_pipeline(
 ):
     await check_workspace_permission(workspace_id, current_user, db, "admin")
     await _owned_pipeline(db, workspace_id, pipeline_id)
-    pipeline = await PipelineService(db).set_default(pipeline_id)
+    pipeline = await PipelineService(db).set_default(
+        pipeline_id, workspace_id=workspace_id
+    )
     await db.commit()
     return await _pipeline_response(db, pipeline)
 
@@ -186,6 +212,7 @@ async def create_stage(
     stage = await StageService(db).create_stage(
         pipeline_id,
         name=data.name,
+        workspace_id=workspace_id,
         color=data.color,
         stage_type=data.stage_type,
         probability=data.probability,
@@ -208,6 +235,8 @@ async def update_stage(
     await _owned_pipeline(db, workspace_id, pipeline_id)
     stage = await StageService(db).update_stage(
         stage_id,
+        pipeline_id=pipeline_id,
+        workspace_id=workspace_id,
         name=data.name,
         color=data.color,
         stage_type=data.stage_type,
@@ -233,7 +262,11 @@ async def delete_stage(
     await _owned_pipeline(db, workspace_id, pipeline_id)
     try:
         ok = await StageService(db).delete_stage(
-            stage_id, reassign_to, actor_id=str(current_user.id)
+            stage_id,
+            reassign_to,
+            actor_id=str(current_user.id),
+            pipeline_id=pipeline_id,
+            workspace_id=workspace_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -252,7 +285,9 @@ async def reorder_stages(
 ):
     await check_workspace_permission(workspace_id, current_user, db, "admin")
     await _owned_pipeline(db, workspace_id, pipeline_id)
-    stages = await StageService(db).reorder_stages(pipeline_id, data.stage_ids)
+    stages = await StageService(db).reorder_stages(
+        pipeline_id, data.stage_ids, workspace_id=workspace_id
+    )
     await db.commit()
     return [StageResponse.model_validate(s) for s in stages]
 
@@ -273,13 +308,15 @@ async def move_record(
     await check_workspace_permission(workspace_id, current_user, db)
     await _owned_pipeline(db, workspace_id, pipeline_id)
     try:
-        record = await StageMovementService(db).move_record_to_stage(
-            pipeline_id, record_id, data.to_stage_key, actor_id=str(current_user.id)
+        await StageMovementService(db).move_record_to_stage(
+            pipeline_id,
+            record_id,
+            data.to_stage_key,
+            actor_id=str(current_user.id),
+            workspace_id=workspace_id,
         )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    if not record:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")
+    except PipelineDomainError as e:
+        raise _movement_http_exception(e) from e
     await db.commit()
     return {"record_id": record_id, "to_stage_key": data.to_stage_key}
 
@@ -296,10 +333,14 @@ async def bulk_move(
     await _owned_pipeline(db, workspace_id, pipeline_id)
     try:
         moved = await StageMovementService(db).bulk_move(
-            pipeline_id, data.record_ids, data.to_stage_key, actor_id=str(current_user.id)
+            pipeline_id,
+            data.record_ids,
+            data.to_stage_key,
+            actor_id=str(current_user.id),
+            workspace_id=workspace_id,
         )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except PipelineDomainError as e:
+        raise _movement_http_exception(e) from e
     await db.commit()
     return {"moved": moved}
 
@@ -317,7 +358,7 @@ async def analytics_summary(
 ):
     await check_workspace_permission(workspace_id, current_user, db)
     await _owned_pipeline(db, workspace_id, pipeline_id)
-    return await PipelineAnalyticsService(db).stage_summary(pipeline_id)
+    return await PipelineAnalyticsService(db).stage_summary(pipeline_id, workspace_id)
 
 
 @router.get("/pipelines/{pipeline_id}/analytics/forecast")
@@ -329,7 +370,7 @@ async def analytics_forecast(
 ):
     await check_workspace_permission(workspace_id, current_user, db)
     await _owned_pipeline(db, workspace_id, pipeline_id)
-    return await PipelineAnalyticsService(db).forecast(pipeline_id)
+    return await PipelineAnalyticsService(db).forecast(pipeline_id, workspace_id)
 
 
 @router.get("/pipelines/{pipeline_id}/analytics/conversion")
@@ -342,7 +383,9 @@ async def analytics_conversion(
 ):
     await check_workspace_permission(workspace_id, current_user, db)
     await _owned_pipeline(db, workspace_id, pipeline_id)
-    return await PipelineAnalyticsService(db).conversion_rates(pipeline_id, window_days=window)
+    return await PipelineAnalyticsService(db).conversion_rates(
+        pipeline_id, window_days=window, workspace_id=workspace_id
+    )
 
 
 @router.get("/pipelines/{pipeline_id}/analytics/velocity")
@@ -354,7 +397,7 @@ async def analytics_velocity(
 ):
     await check_workspace_permission(workspace_id, current_user, db)
     await _owned_pipeline(db, workspace_id, pipeline_id)
-    return await PipelineAnalyticsService(db).stage_velocity(pipeline_id)
+    return await PipelineAnalyticsService(db).stage_velocity(pipeline_id, workspace_id)
 
 
 @router.get("/records/{record_id}/stage-history")

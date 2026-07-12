@@ -17,7 +17,6 @@ from aexy.models.crm import (
     CRMObject,
     CRMAttribute,
     CRMRecord,
-    CRMRecordRelation,
     CRMNote,
     CRMList,
     CRMListEntry,
@@ -145,7 +144,7 @@ class CRMObjectService:
         )
 
         if not include_inactive:
-            stmt = stmt.where(CRMObject.is_active == True)
+            stmt = stmt.where(CRMObject.is_active == True)  # noqa: E712
 
         stmt = stmt.order_by(CRMObject.name)
         result = await self.db.execute(stmt)
@@ -167,7 +166,7 @@ class CRMObjectService:
             count_stmt = select(func.count(CRMRecord.id)).where(
                 and_(
                     CRMRecord.object_id == obj.id,
-                    CRMRecord.is_archived == False,
+                    CRMRecord.is_archived == False,  # noqa: E712
                 )
             )
             count_result = await self.db.execute(count_stmt)
@@ -802,9 +801,18 @@ class CRMRecordService:
 
         return record
 
-    async def get_record(self, record_id: str) -> CRMRecord | None:
-        """Get a record by ID."""
-        return await self.dts.get_record(record_id)
+    async def get_record(
+        self,
+        record_id: str,
+        object_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> CRMRecord | None:
+        """Get a record by ID, optionally scoped to its object and workspace."""
+        return await self.dts.get_record(
+            record_id,
+            table_id=object_id,
+            workspace_id=workspace_id,
+        )
 
     async def list_records(
         self,
@@ -812,16 +820,18 @@ class CRMRecordService:
         object_id: str,
         filters: list[dict] | None = None,
         sorts: list[dict] | None = None,
+        search: str | None = None,
         include_archived: bool = False,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[CRMRecord], int]:
-        """List records with filtering and sorting."""
+        """List records with filtering, free-text search, and sorting."""
         return await self.dts.list_records(
             table_id=object_id,
             workspace_id=workspace_id,
             filters=filters,
             sorts=sorts,
+            search=search,
             include_archived=include_archived,
             limit=limit,
             offset=offset,
@@ -833,10 +843,13 @@ class CRMRecordService:
         values: dict[str, Any] | None = None,
         owner_id: str | None = None,
         updated_by_id: str | None = None,
+        *,
+        workspace_id: str,
+        object_id: str,
     ) -> CRMRecord | None:
         """Update a record with CRM activity logging and events."""
         # Get old values before update for change tracking
-        record = await self.dts.get_record(record_id)
+        record = await self.dts.get_record(record_id, object_id, workspace_id)
         if not record:
             return None
         old_values = record.values.copy()
@@ -845,6 +858,8 @@ class CRMRecordService:
             record_id=record_id,
             values=values,
             owner_id=owner_id,
+            table_id=object_id,
+            workspace_id=workspace_id,
         )
         if not record:
             return None
@@ -1061,9 +1076,12 @@ class CRMRecordService:
         record_id: str,
         permanent: bool = False,
         deleted_by_id: str | None = None,
+        *,
+        workspace_id: str,
+        object_id: str,
     ) -> bool:
         """Delete a record with CRM activity logging and events."""
-        record = await self.dts.get_record(record_id)
+        record = await self.dts.get_record(record_id, object_id, workspace_id)
         if not record:
             return False
 
@@ -1089,7 +1107,9 @@ class CRMRecordService:
                 title="Deleted CRM record",
             )
 
-        result = await self.dts.delete_record(record_id, permanent)
+        result = await self.dts.delete_record(
+            record_id, permanent, table_id=object_id, workspace_id=workspace_id
+        )
         if not result:
             return False
 
@@ -1133,15 +1153,35 @@ class CRMRecordService:
         self,
         record_ids: list[str],
         values: dict[str, Any],
+        *,
+        workspace_id: str,
+        object_id: str,
         updated_by_id: str | None = None,
     ) -> int:
-        """Bulk update records."""
+        """Bulk update a fully scoped record set, all-or-nothing."""
+        unique_ids = list(dict.fromkeys(record_ids))
+        matching_ids = set(
+            (
+                await self.db.execute(
+                    select(CRMRecord.id).where(
+                        CRMRecord.id.in_(unique_ids),
+                        CRMRecord.workspace_id == workspace_id,
+                        CRMRecord.object_id == object_id,
+                    )
+                )
+            ).scalars().all()
+        )
+        if matching_ids != set(unique_ids):
+            raise ValueError("One or more records not found")
+
         updated = 0
-        for record_id in record_ids:
+        for record_id in unique_ids:
             record = await self.update_record(
                 record_id=record_id,
                 values=values,
                 updated_by_id=updated_by_id,
+                workspace_id=workspace_id,
+                object_id=object_id,
             )
             if record:
                 updated += 1
@@ -1151,12 +1191,36 @@ class CRMRecordService:
         self,
         record_ids: list[str],
         permanent: bool = False,
+        *,
+        workspace_id: str,
+        object_id: str,
         deleted_by_id: str | None = None,
     ) -> int:
-        """Bulk delete records."""
+        """Bulk delete a fully scoped record set, all-or-nothing."""
+        unique_ids = list(dict.fromkeys(record_ids))
+        matching_ids = set(
+            (
+                await self.db.execute(
+                    select(CRMRecord.id).where(
+                        CRMRecord.id.in_(unique_ids),
+                        CRMRecord.workspace_id == workspace_id,
+                        CRMRecord.object_id == object_id,
+                    )
+                )
+            ).scalars().all()
+        )
+        if matching_ids != set(unique_ids):
+            raise ValueError("One or more records not found")
+
         deleted = 0
-        for record_id in record_ids:
-            if await self.delete_record(record_id, permanent, deleted_by_id):
+        for record_id in unique_ids:
+            if await self.delete_record(
+                record_id,
+                permanent,
+                deleted_by_id,
+                workspace_id=workspace_id,
+                object_id=object_id,
+            ):
                 deleted += 1
         return deleted
 
@@ -1274,7 +1338,7 @@ class CRMListService:
         if not include_private:
             stmt = stmt.where(
                 or_(
-                    CRMList.is_private == False,
+                    CRMList.is_private == False,  # noqa: E712
                     CRMList.owner_id == user_id,
                 )
             )

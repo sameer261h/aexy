@@ -282,7 +282,9 @@ class CRMAutomationService:
         record = None
         if record_id:
             record_service = CRMRecordService(self.db)
-            record = await record_service.get_record(record_id)
+            record = await record_service.get_record(
+                record_id, workspace_id=automation.workspace_id
+            )
 
         try:
             # Check conditions
@@ -532,7 +534,12 @@ class CRMAutomationService:
 
         fields = config.get("fields", {})
         record_service = CRMRecordService(self.db)
-        await record_service.update_record(record.id, values=fields)
+        await record_service.update_record(
+            record.id,
+            values=fields,
+            workspace_id=record.workspace_id,
+            object_id=record.object_id,
+        )
         return {"updated_fields": list(fields.keys())}
 
     async def _action_create_record(

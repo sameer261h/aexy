@@ -255,7 +255,7 @@ export function useCRMAttributes(workspaceId: string | null, objectId: string | 
 export function useCRMRecords(
   workspaceId: string | null,
   objectId: string | null,
-  params?: { filters?: Record<string, unknown>[]; sorts?: Record<string, unknown>[]; skip?: number; limit?: number; include_archived?: boolean }
+  params?: { filters?: Record<string, unknown>[]; sorts?: Record<string, unknown>[]; q?: string; offset?: number; limit?: number; include_archived?: boolean }
 ) {
   const queryClient = useQueryClient();
 
@@ -266,7 +266,7 @@ export function useCRMRecords(
     refetch,
   } = useQuery<{ records: CRMRecord[]; total: number }>({
     queryKey: ["crmRecords", workspaceId, objectId, params],
-    queryFn: () => crmApi.records.list(workspaceId!, objectId!, params),
+    queryFn: () => crmApi.records.query(workspaceId!, objectId!, params),
     enabled: !!workspaceId && !!objectId,
   });
 

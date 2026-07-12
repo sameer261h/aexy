@@ -3,20 +3,26 @@
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
+from aexy.api.crm_pipelines import _movement_http_exception
 from aexy.models.crm import (
     CRMAttribute,
     CRMObjectType,
     CRMPipeline,
-    CRMPipelineStage,
     CRMStageHistory,
 )
 from aexy.models.developer import Developer
 from aexy.models.workspace import Workspace
 from aexy.services.crm_pipeline_service import (
+    DuplicatePipelineRecordError,
     LeadConversionService,
     PipelineService,
+    PipelineConfigurationError,
+    PipelineNotFoundError,
+    PipelineRecordsNotFoundError,
+    PipelineStageNotFoundError,
+    PipelineAnalyticsService,
     StageMovementService,
     StageService,
 )
@@ -25,6 +31,7 @@ from aexy.services.crm_service import (
     CRMObjectService,
     CRMRecordService,
 )
+from aexy.services.data_table_service import DataTableService
 
 
 async def _make_workspace(db) -> Workspace:
@@ -72,8 +79,6 @@ async def _status_options(db, attr_id):
 async def test_seed_creates_default_pipelines(db_session):
     ws, by_type = await _seed(db_session)
     deal = by_type[CRMObjectType.DEAL.value]
-    lead = by_type[CRMObjectType.LEAD.value]
-
     pipelines = await PipelineService(db_session).list_pipelines(ws.id)
     names = {p.name for p in pipelines}
     assert "Sales Pipeline" in names
@@ -107,7 +112,12 @@ async def test_projection_marks_managed_and_mirrors_options(db_session):
 async def test_add_stage_reflected_in_options(db_session):
     ws, by_type = await _seed(db_session)
     sales = await _deal_pipeline(db_session, ws.id, by_type[CRMObjectType.DEAL.value].id)
-    await StageService(db_session).create_stage(sales.id, name="Contract Sent", color="#000000")
+    await StageService(db_session).create_stage(
+        sales.id,
+        name="Contract Sent",
+        color="#000000",
+        workspace_id=ws.id,
+    )
     options, _ = await _status_options(db_session, sales.status_attribute_id)
     assert any(o["label"] == "Contract Sent" for o in options)
 
@@ -119,7 +129,12 @@ async def test_rename_stage_keeps_value_key(db_session):
     stages = await StageService(db_session).list_stages(sales.id)
     qualified = next(s for s in stages if s.value_key == "qualified")
 
-    await StageService(db_session).update_stage(qualified.id, name="Sales Qualified")
+    await StageService(db_session).update_stage(
+        qualified.id,
+        pipeline_id=sales.id,
+        workspace_id=ws.id,
+        name="Sales Qualified",
+    )
     refreshed = await StageService(db_session).get_stage(qualified.id)
     assert refreshed.value_key == "qualified"  # immutable
     assert refreshed.name == "Sales Qualified"
@@ -135,7 +150,9 @@ async def test_reorder_stages_updates_option_order(db_session):
     sales = await _deal_pipeline(db_session, ws.id, by_type[CRMObjectType.DEAL.value].id)
     stages = await StageService(db_session).list_stages(sales.id)
     reversed_ids = [s.id for s in reversed(stages)]
-    await StageService(db_session).reorder_stages(sales.id, reversed_ids)
+    await StageService(db_session).reorder_stages(
+        sales.id, reversed_ids, workspace_id=ws.id
+    )
 
     options, _ = await _status_options(db_session, sales.status_attribute_id)
     assert [o["value"] for o in options] == ["lost", "won", "negotiation", "proposal", "qualified", "lead"]
@@ -166,7 +183,12 @@ async def test_delete_last_stage_guard(db_session):
     )
     stage = (await StageService(db_session).list_stages(pipeline.id))[0]
     with pytest.raises(ValueError):
-        await StageService(db_session).delete_stage(stage.id, reassign_to_stage_key=None)
+        await StageService(db_session).delete_stage(
+            stage.id,
+            reassign_to_stage_key=None,
+            pipeline_id=pipeline.id,
+            workspace_id=ws.id,
+        )
 
 
 @pytest.mark.asyncio
@@ -179,7 +201,7 @@ async def test_move_record_writes_stage_history(db_session):
         workspace_id=ws.id, object_id=deal.id, values={"name": "Acme deal", "stage": "lead"},
     )
     await StageMovementService(db_session).move_record_to_stage(
-        sales.id, record.id, "qualified",
+        sales.id, record.id, "qualified", workspace_id=ws.id,
     )
 
     hist = (
@@ -201,10 +223,150 @@ async def test_move_to_unknown_stage_rejected(db_session):
     record = await CRMRecordService(db_session).create_record(
         workspace_id=ws.id, object_id=deal.id, values={"name": "X"},
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(PipelineStageNotFoundError):
         await StageMovementService(db_session).move_record_to_stage(
-            sales.id, record.id, "nonexistent",
+            sales.id, record.id, "nonexistent", workspace_id=ws.id,
         )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_movement_uses_typed_domain_errors(db_session):
+    ws, by_type = await _seed(db_session)
+    deal = by_type[CRMObjectType.DEAL.value]
+    sales = await _deal_pipeline(db_session, ws.id, deal.id)
+    record = await CRMRecordService(db_session).create_record(
+        workspace_id=ws.id,
+        object_id=deal.id,
+        values={"name": "Typed errors", "stage": "lead"},
+    )
+    service = StageMovementService(db_session)
+
+    with pytest.raises(TypeError, match="workspace_id"):
+        await service.move_record_to_stage(sales.id, record.id, "qualified")
+    with pytest.raises(TypeError, match="workspace_id"):
+        await service.bulk_move(sales.id, [record.id], "qualified")
+    with pytest.raises(PipelineNotFoundError):
+        await service.move_record_to_stage(
+            str(uuid4()), record.id, "qualified", workspace_id=ws.id,
+        )
+    with pytest.raises(PipelineRecordsNotFoundError):
+        await service.move_record_to_stage(
+            sales.id, str(uuid4()), "qualified", workspace_id=ws.id,
+        )
+    with pytest.raises(DuplicatePipelineRecordError):
+        await service.bulk_move(
+            sales.id,
+            [record.id, record.id],
+            "qualified",
+            workspace_id=ws.id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_mutations_reject_missing_workspace_scope(db_session):
+    ws, by_type = await _seed(db_session)
+    sales = await _deal_pipeline(
+        db_session, ws.id, by_type[CRMObjectType.DEAL.value].id,
+    )
+    stage = (await StageService(db_session).list_stages(sales.id))[0]
+
+    operations = (
+        lambda: PipelineService(db_session).set_default(sales.id),
+        lambda: PipelineService(db_session).update_pipeline(sales.id, name="No scope"),
+        lambda: PipelineService(db_session).delete_pipeline(sales.id),
+        lambda: StageService(db_session).create_stage(sales.id, name="No scope"),
+        lambda: StageService(db_session).update_stage(
+            stage.id, pipeline_id=sales.id, name="No scope",
+        ),
+        lambda: StageService(db_session).reorder_stages(sales.id, [stage.id]),
+        lambda: StageService(db_session).delete_stage(
+            stage.id, None, pipeline_id=sales.id,
+        ),
+    )
+    for operation in operations:
+        with pytest.raises(TypeError, match="workspace_id"):
+            await operation()
+
+
+def test_pipeline_http_status_mapping_depends_on_exception_type_not_message():
+    assert _movement_http_exception(
+        PipelineNotFoundError("wording may change")
+    ).status_code == 404
+    assert _movement_http_exception(
+        PipelineRecordsNotFoundError("different wording")
+    ).status_code == 404
+    assert _movement_http_exception(
+        PipelineStageNotFoundError("record not found is only text here")
+    ).status_code == 400
+    assert _movement_http_exception(
+        PipelineConfigurationError("pipeline not found is only text here")
+    ).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_pipeline_analytics_share_scoped_lookup_semantics(db_session):
+    ws, by_type = await _seed(db_session)
+    foreign_ws = await _make_workspace(db_session)
+    sales = await _deal_pipeline(
+        db_session, ws.id, by_type[CRMObjectType.DEAL.value].id,
+    )
+    service = PipelineAnalyticsService(db_session)
+
+    assert (await service.stage_summary(sales.id, ws.id))["pipeline_id"] == sales.id
+    assert (await service.conversion_rates(
+        sales.id, workspace_id=ws.id,
+    ))["pipeline_id"] == sales.id
+    assert (await service.stage_velocity(sales.id, ws.id))["pipeline_id"] == sales.id
+
+    for operation in (
+        lambda: service.stage_summary(sales.id, foreign_ws.id),
+        lambda: service.conversion_rates(sales.id, workspace_id=foreign_ws.id),
+        lambda: service.stage_velocity(sales.id, foreign_ws.id),
+    ):
+        with pytest.raises(PipelineNotFoundError, match="Pipeline not found"):
+            await operation()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("record_count", [1, 10, 100])
+async def test_bulk_move_query_count(db_session, record_count):
+    ws, by_type = await _seed(db_session)
+    deal = by_type[CRMObjectType.DEAL.value]
+    sales = await _deal_pipeline(db_session, ws.id, deal.id)
+    tables = DataTableService(db_session)
+    records = [
+        await tables.create_record(
+            deal.id,
+            ws.id,
+            {"name": f"Deal {index}", "stage": "lead"},
+        )
+        for index in range(record_count)
+    ]
+
+    statements = 0
+
+    def count_statement(*_args):
+        nonlocal statements
+        statements += 1
+
+    engine = db_session.bind
+    event.listen(engine.sync_engine, "before_cursor_execute", count_statement)
+    try:
+        moved = await StageMovementService(db_session).bulk_move(
+            sales.id,
+            [record.id for record in records],
+            "qualified",
+            workspace_id=ws.id,
+        )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", count_statement)
+
+    print(f"bulk_move_query_count[{record_count}]={statements}")
+    assert moved == record_count
+    # The invariant pipeline/status-field/stage/record-set lookups are bounded;
+    # the remaining linear component is CRMRecordService's per-record audit,
+    # history, event, and ORM update behavior.
+    assert statements <= 25 + (47 * record_count)
 
 
 @pytest.mark.asyncio
