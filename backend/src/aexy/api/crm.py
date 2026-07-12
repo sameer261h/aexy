@@ -1423,6 +1423,15 @@ async def list_records(
     )
 
     primary_slug = await service.dts.get_primary_attribute_slug(object_id)
+    computed_by_record: dict[str, dict] = {}
+    if records:
+        crm_object = await CRMObjectService(db).get_object(object_id)
+        if crm_object is not None and crm_object.object_type == "person":
+            computed_by_record = await service.compute_person_interaction_fields(
+                workspace_id=workspace_id,
+                record_ids=[str(r.id) for r in records],
+            )
+
     record_responses = []
     for r in records:
         values, display_name = service.dts.redact_record_for_access(r.values, r.display_name, access, primary_slug)
@@ -1435,6 +1444,7 @@ async def list_records(
             is_archived=r.is_archived,
             created_at=r.created_at,
             updated_at=r.updated_at,
+            computed=computed_by_record.get(str(r.id)),
         ))
 
     return {
@@ -1502,6 +1512,15 @@ async def query_records(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     primary_slug = await service.dts.get_primary_attribute_slug(object_id)
+    computed_by_record: dict[str, dict] = {}
+    if records:
+        crm_object = await CRMObjectService(db).get_object(object_id)
+        if crm_object is not None and crm_object.object_type == "person":
+            computed_by_record = await service.compute_person_interaction_fields(
+                workspace_id=workspace_id,
+                record_ids=[str(r.id) for r in records],
+            )
+
     record_responses = []
     for r in records:
         values, display_name = service.dts.redact_record_for_access(r.values, r.display_name, access, primary_slug)
@@ -1514,6 +1533,7 @@ async def query_records(
             is_archived=r.is_archived,
             created_at=r.created_at,
             updated_at=r.updated_at,
+            computed=computed_by_record.get(str(r.id)),
         ))
 
     return {
