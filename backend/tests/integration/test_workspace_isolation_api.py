@@ -133,11 +133,62 @@ async def test_foreign_table_field_record_and_bulk_routes_are_non_disclosing(
     )
     assert bulk.status_code == 404
 
+    crm_record_url = (
+        f"{API}/workspaces/{ws_a.id}/crm/objects/{data['table_a'].id}"
+        f"/records/{data['record_b'].id}"
+    )
+    assert (await client.patch(
+        crm_record_url,
+        headers=headers,
+        json={"values": {"name": "cross"}},
+    )).status_code == 404
+    assert (await client.delete(crm_record_url, headers=headers)).status_code == 404
+
     tables = DataTableService(db_session)
     assert (await tables.get_table(table_b.id, data["ws_b"].id)).name == "Foreign"
     assert (await tables.get_record(data["record_a"].id, data["table_a"].id, ws_a.id)).is_archived is False
     assert (await tables.get_record(data["record_b"].id, table_b.id, data["ws_b"].id)).is_archived is False
     assert await tables.list_records(table_b.id, ws_a.id) == ([], 0)
+
+
+@pytest.mark.asyncio
+async def test_table_and_field_get_routes_pass_workspace_to_scoped_lookup(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    isolation_fixture: dict,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    data = isolation_fixture
+    await DataTableService(db_session).add_field(
+        data["table_a"].id,
+        "Local field",
+        workspace_id=data["ws_a"].id,
+    )
+    await db_session.commit()
+    headers = _auth(data["user_a"].id)
+    observed: list[tuple[str, str | None]] = []
+    original = DataTableService.get_table
+
+    async def scoped_get_table(self, table_id: str, workspace_id: str | None = None):
+        observed.append((table_id, workspace_id))
+        return await original(self, table_id, workspace_id)
+
+    monkeypatch.setattr(DataTableService, "get_table", scoped_get_table)
+
+    table_url = f"{API}/workspaces/{data['ws_a'].id}/tables/{data['table_a'].id}"
+    assert (await client.get(table_url, headers=headers)).status_code == 200
+    assert (await client.get(f"{table_url}/fields", headers=headers)).status_code == 200
+
+    foreign_url = f"{API}/workspaces/{data['ws_a'].id}/tables/{data['table_b'].id}"
+    assert (await client.get(foreign_url, headers=headers)).status_code == 404
+    assert (await client.get(f"{foreign_url}/fields", headers=headers)).status_code == 404
+
+    assert observed == [
+        (data["table_a"].id, data["ws_a"].id),
+        (data["table_a"].id, data["ws_a"].id),
+        (data["table_b"].id, data["ws_a"].id),
+        (data["table_b"].id, data["ws_a"].id),
+    ]
 
 
 @pytest.mark.asyncio
@@ -170,6 +221,64 @@ async def test_foreign_pipeline_stage_and_record_move_routes_do_not_mutate(
     assert move.status_code == 404
     assert (await StageService(db_session).get_stage(data["stage_b"].id)).name == "Open"
     assert (await DataTableService(db_session).get_record(data["record_b"].id)).values.get("stage") is None
+
+
+@pytest.mark.asyncio
+async def test_pipeline_move_routes_map_typed_failures_to_stable_statuses(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    isolation_fixture: dict,
+):
+    data = isolation_fixture
+    membership = (
+        await db_session.execute(
+            select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == data["ws_a"].id,
+                WorkspaceMember.developer_id == data["user_a"].id,
+            )
+        )
+    ).scalar_one()
+    membership.role = "admin"
+    record = await DataTableService(db_session).create_record(
+        data["object_a"].id,
+        data["ws_a"].id,
+        {"name": "Move me"},
+    )
+    await db_session.commit()
+    headers = _auth(data["user_a"].id)
+    pipeline_url = (
+        f"{API}/workspaces/{data['ws_a'].id}/crm/pipelines/{data['pipeline_a'].id}"
+    )
+
+    missing_record = await client.post(
+        f"{pipeline_url}/records/{uuid4()}/move",
+        headers=headers,
+        json={"to_stage_key": "won"},
+    )
+    assert missing_record.status_code == 404
+    assert missing_record.json()["detail"] == "Record not found"
+
+    invalid_stage = await client.post(
+        f"{pipeline_url}/records/{record.id}/move",
+        headers=headers,
+        json={"to_stage_key": "not-a-stage"},
+    )
+    assert invalid_stage.status_code == 400
+
+    missing_bulk_record = await client.post(
+        f"{pipeline_url}/bulk-move",
+        headers=headers,
+        json={"record_ids": [record.id, str(uuid4())], "to_stage_key": "won"},
+    )
+    assert missing_bulk_record.status_code == 404
+    assert missing_bulk_record.json()["detail"] == "Record not found"
+
+    duplicate_record = await client.post(
+        f"{pipeline_url}/bulk-move",
+        headers=headers,
+        json={"record_ids": [record.id, record.id], "to_stage_key": "won"},
+    )
+    assert duplicate_record.status_code == 400
 
 
 @pytest.mark.asyncio

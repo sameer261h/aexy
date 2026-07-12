@@ -11,6 +11,7 @@ from aexy.models.developer import Developer
 from aexy.models.workspace import Workspace, WorkspaceMember
 from aexy.services.crm_pipeline_service import (
     PipelineAnalyticsService,
+    PipelineRecordsNotFoundError,
     PipelineService,
     StageMovementService,
     StageService,
@@ -117,6 +118,62 @@ async def test_malformed_and_mixed_tenant_records_are_never_mutated(db_session):
 
 
 @pytest.mark.asyncio
+async def test_crm_bulk_mutations_require_scope_and_validate_full_record_set(db_session):
+    ws_a, _ = await _workspace(db_session, "crm-a")
+    ws_b, _ = await _workspace(db_session, "crm-b")
+    object_a = await _table(db_session, ws_a, "Local CRM")
+    object_b = await _table(db_session, ws_b, "Foreign CRM")
+    tables = DataTableService(db_session)
+    local_update = await tables.create_record(object_a.id, ws_a.id, {"name": "local"})
+    local_delete = await tables.create_record(object_a.id, ws_a.id, {"name": "delete"})
+    foreign = await tables.create_record(object_b.id, ws_b.id, {"name": "foreign"})
+    service = CRMRecordService(db_session)
+
+    with pytest.raises(TypeError, match="workspace_id"):
+        await service.bulk_update_records(
+            [local_update.id], {"name": "missing scope"}, object_id=object_a.id
+        )
+    with pytest.raises(TypeError, match="workspace_id"):
+        await service.bulk_delete_records(
+            [local_delete.id], object_id=object_a.id
+        )
+
+    with pytest.raises(ValueError, match="records not found"):
+        await service.bulk_update_records(
+            [local_update.id, foreign.id],
+            {"name": "cross"},
+            workspace_id=ws_a.id,
+            object_id=object_a.id,
+        )
+    assert (await tables.get_record(local_update.id, object_a.id, ws_a.id)).values["name"] == "local"
+    assert (await tables.get_record(foreign.id, object_b.id, ws_b.id)).values["name"] == "foreign"
+
+    assert await service.bulk_update_records(
+        [local_update.id],
+        {"name": "updated"},
+        workspace_id=ws_a.id,
+        object_id=object_a.id,
+    ) == 1
+    assert (await tables.get_record(local_update.id, object_a.id, ws_a.id)).values["name"] == "updated"
+
+    with pytest.raises(ValueError, match="records not found"):
+        await service.bulk_delete_records(
+            [local_delete.id, foreign.id],
+            workspace_id=ws_a.id,
+            object_id=object_a.id,
+        )
+    assert (await tables.get_record(local_delete.id, object_a.id, ws_a.id)).is_archived is False
+    assert (await tables.get_record(foreign.id, object_b.id, ws_b.id)).is_archived is False
+
+    assert await service.bulk_delete_records(
+        [local_delete.id],
+        workspace_id=ws_a.id,
+        object_id=object_a.id,
+    ) == 1
+    assert (await tables.get_record(local_delete.id, object_a.id, ws_a.id)).is_archived is True
+
+
+@pytest.mark.asyncio
 async def test_saved_views_remain_workspace_scoped_for_non_crm_consumers(db_session):
     ws_a, _ = await _workspace(db_session, "a")
     ws_b, _ = await _workspace(db_session, "b")
@@ -173,11 +230,12 @@ async def test_pipeline_stages_moves_and_analytics_are_workspace_bound(db_sessio
         workspace_id=ws_b.id, object_id=object_b.id, values={"name": "foreign"},
     )
     target_key = (await StageService(db_session).list_stages(pipeline_a.id))[1].value_key
-    assert await StageMovementService(db_session).move_record_to_stage(
-        pipeline_a.id, foreign.id, target_key, workspace_id=ws_a.id
-    ) is None
+    with pytest.raises(PipelineRecordsNotFoundError):
+        await StageMovementService(db_session).move_record_to_stage(
+            pipeline_a.id, foreign.id, target_key, workspace_id=ws_a.id
+        )
     assert (await CRMRecordService(db_session).get_record(foreign.id)).values.get("stage") is None
-    with pytest.raises(ValueError, match="records not found"):
+    with pytest.raises(PipelineRecordsNotFoundError):
         await StageMovementService(db_session).bulk_move(
             pipeline_a.id, [local.id, foreign.id], target_key, workspace_id=ws_a.id
         )
