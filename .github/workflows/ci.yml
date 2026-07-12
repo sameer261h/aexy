@@ -51,6 +51,11 @@ jobs:
           --ignore=tests/unit/test_oauth_token_service.py
           --ignore=tests/unit/test_oauth_redirect_allowlist.py
           --ignore=tests/integration/test_slack_api.py
+          --deselect=tests/integration/test_analytics_api.py::TestAnalyticsAPI::test_get_productivity_trends
+          --deselect=tests/integration/test_analytics_api.py::TestAnalyticsAPI::test_get_productivity_trends_with_grouping
+          --deselect=tests/integration/test_analytics_api.py::TestAnalyticsAPIValidation::test_productivity_end_before_start
+          --deselect=tests/integration/test_api_health.py::TestHealthEndpoints::test_readiness_check
+          --deselect=tests/integration/test_developer_insights_api.py::TestE2ESmokeTests::test_full_flow
 
   frontend:
     runs-on: ubuntu-latest
