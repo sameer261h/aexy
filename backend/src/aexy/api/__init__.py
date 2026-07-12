@@ -100,6 +100,7 @@ from aexy.api.question_bank import router as question_bank_router
 from aexy.api.crm import router as crm_router
 from aexy.api.crm_automation import router as crm_automation_router
 from aexy.api.crm_pipelines import router as crm_pipelines_router
+from aexy.api.csv_import import csv_import_router
 # Platform-wide Automations
 from aexy.api.automations import router as automations_router
 # Visual Workflow Builder
@@ -297,6 +298,7 @@ api_router.include_router(
 )
 api_router.include_router(crm_automation_router, tags=["crm-automation"], dependencies=[Depends(require_app_access("crm"))])
 api_router.include_router(crm_pipelines_router, tags=["crm-pipelines"], dependencies=[Depends(require_app_access("crm"))])
+api_router.include_router(csv_import_router, tags=["csv-import"], dependencies=[Depends(require_app_access("crm"))])
 # Platform-wide Automations
 api_router.include_router(automations_router, tags=["automations"], dependencies=[Depends(require_app_access("automations"))])
 # Visual Workflow Builder

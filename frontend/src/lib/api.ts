@@ -22921,3 +22921,175 @@ export const adminBackfillApi = {
     return response.data;
   },
 };
+
+// ============================================================================
+// CSV Import (pre-persistence: upload, preflight, mapping, dry-run, rejection)
+// ============================================================================
+
+export interface CsvFullTargetAttribute {
+  id: string;
+  display_name: string;
+  slug: string | null;
+  attribute_type: string;
+  importable: boolean | null;
+  is_required: boolean;
+  config: Record<string, unknown>;
+}
+
+export interface CsvImportSchemaResponse {
+  attributes: CsvFullTargetAttribute[];
+}
+
+export interface CsvColumnMapping {
+  source_header: string;
+  target_attribute_id: string;
+}
+
+export interface CsvPreflightIssue {
+  code: string;
+  message: string;
+  row_number: number | null;
+  column_number: number | null;
+  source_header: string | null;
+  target_attribute_id: string | null;
+  context: Record<string, unknown>;
+}
+
+export interface CsvMappingSuggestion {
+  source_header: string;
+  source_column_number: number;
+  target_attribute_id: string;
+  target_display_name: string;
+  match_reason: "display_name_exact" | "slug_exact";
+}
+
+export interface CsvPreviewRow {
+  source_row_number: number;
+  values: string[];
+}
+
+export interface CsvImportPreflightResult {
+  filename: string | null;
+  encoding: string | null;
+  original_headers: string[];
+  normalized_headers: string[];
+  total_data_row_count: number;
+  preview_rows: CsvPreviewRow[];
+  preview_truncated: boolean;
+  mapping_suggestions: CsvMappingSuggestion[];
+  validated_mapping: CsvColumnMapping[];
+  errors: CsvPreflightIssue[];
+  warnings: CsvPreflightIssue[];
+  eligible_to_proceed: boolean;
+}
+
+export type CsvInvalidRowPolicy = "all_or_nothing" | "partial";
+export type CsvDuplicateAction = "skip" | "update_existing" | "create_anyway";
+
+export interface CsvImportPolicies {
+  invalid_row_policy: CsvInvalidRowPolicy;
+  unique_match_attribute_id: string;
+  duplicate_action: CsvDuplicateAction;
+}
+
+export type CsvRowOutcomeStatus = "create" | "update" | "skipped_duplicate" | "invalid";
+
+export interface CsvRowDryRunOutcome {
+  source_row_number: number;
+  status: CsvRowOutcomeStatus;
+  reason_codes: string[];
+  remediation: string[];
+  source_values: Record<string, string>;
+  proposed_values: Record<string, unknown>;
+  matched_existing: boolean;
+}
+
+export interface CsvImportDryRunSummary {
+  total_logical_data_rows: number;
+  valid_row_count: number;
+  invalid_row_count: number;
+  duplicate_match_count: number;
+  create_candidate_count: number;
+  update_candidate_count: number;
+  skipped_row_count: number;
+  execution_blocked: boolean;
+  execution_blocked_reason: string | null;
+}
+
+export interface CsvImportDryRunPolicyResult {
+  filename: string | null;
+  dry_run_completed: boolean;
+  file_errors: CsvPreflightIssue[];
+  file_warnings: CsvPreflightIssue[];
+  policies: CsvImportPolicies | null;
+  summary: CsvImportDryRunSummary;
+  rows: CsvRowDryRunOutcome[];
+}
+
+export const csvImportApi = {
+  schema: async (workspaceId: string, objectId: string): Promise<CsvImportSchemaResponse> => {
+    const response = await api.get(
+      `/workspaces/${workspaceId}/crm/objects/${objectId}/imports/schema`
+    );
+    return response.data;
+  },
+
+  preflight: async (
+    workspaceId: string,
+    objectId: string,
+    file: File,
+    mapping?: CsvColumnMapping[]
+  ): Promise<CsvImportPreflightResult> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (mapping) formData.append("mapping_json", JSON.stringify(mapping));
+    const response = await api.post(
+      `/workspaces/${workspaceId}/crm/objects/${objectId}/imports/preflight`,
+      formData,
+      { headers: { "Content-Type": "multipart/form-data" } }
+    );
+    return response.data;
+  },
+
+  dryRun: async (
+    workspaceId: string,
+    objectId: string,
+    file: File,
+    mapping: CsvColumnMapping[],
+    policies: CsvImportPolicies
+  ): Promise<CsvImportDryRunPolicyResult> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("mapping_json", JSON.stringify(mapping));
+    formData.append("invalid_row_policy", policies.invalid_row_policy);
+    formData.append("unique_match_attribute_id", policies.unique_match_attribute_id);
+    formData.append("duplicate_action", policies.duplicate_action);
+    const response = await api.post(
+      `/workspaces/${workspaceId}/crm/objects/${objectId}/imports/dry-run`,
+      formData,
+      { headers: { "Content-Type": "multipart/form-data" } }
+    );
+    return response.data;
+  },
+
+  rejectionCsv: async (
+    workspaceId: string,
+    objectId: string,
+    file: File,
+    mapping: CsvColumnMapping[],
+    policies: CsvImportPolicies
+  ): Promise<Blob> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("mapping_json", JSON.stringify(mapping));
+    formData.append("invalid_row_policy", policies.invalid_row_policy);
+    formData.append("unique_match_attribute_id", policies.unique_match_attribute_id);
+    formData.append("duplicate_action", policies.duplicate_action);
+    const response = await api.post(
+      `/workspaces/${workspaceId}/crm/objects/${objectId}/imports/rejection-csv`,
+      formData,
+      { headers: { "Content-Type": "multipart/form-data" }, responseType: "blob" }
+    );
+    return response.data;
+  },
+};
