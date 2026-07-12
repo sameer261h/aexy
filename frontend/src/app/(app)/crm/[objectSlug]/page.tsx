@@ -18,7 +18,7 @@ import { useWorkspace } from "@/hooks/useWorkspace";
 import { useAuth } from "@/hooks/useAuth";
 import { useCRMObjects, useCRMRecords } from "@/hooks/useCRM";
 import { useSavedViews } from "@/hooks/useTables";
-import { CRMObject, CRMRecord, CRMAttribute, CRMObjectType, TableSavedView, ColumnDisplayConfig } from "@/lib/api";
+import { CRMObject, CRMRecord, CRMAttribute, CRMAttributeType, CRMObjectType, TableSavedView, ColumnDisplayConfig } from "@/lib/api";
 import { ViewSwitcher, ViewMode } from "@/components/crm/ViewSwitcher";
 import { SavedViewSwitcher } from "@/components/crm/SavedViewSwitcher";
 import { DataTable } from "@/components/crm/DataTable";
@@ -30,6 +30,87 @@ import { TableFilterPanel, FilterRule } from "@/components/tables";
 
 const PAGE_LIMIT = 50;
 const SEARCH_DEBOUNCE_MS = 300;
+
+const CONNECTION_STRENGTH_OPTIONS = [
+  { value: "weak", label: "Weak", color: "#f59e0b" },
+  { value: "good", label: "Good", color: "#3b82f6" },
+  { value: "strong", label: "Strong", color: "#3b82f6" },
+  { value: "very_strong", label: "Very Strong", color: "#22c55e" },
+];
+
+function synthesizeComputedAttributes(): CRMAttribute[] {
+  const base: Omit<CRMAttribute, "id" | "object_id"> = {
+    name: "",
+    slug: "",
+    attribute_type: "text",
+    description: null,
+    is_required: false,
+    is_unique: false,
+    is_searchable: false,
+    is_filterable: false,
+    is_sortable: false,
+    is_system: true,
+    config: {},
+    default_value: null,
+    order: 0,
+    created_at: "",
+    updated_at: "",
+  };
+  return [
+    {
+      ...base,
+      id: "__sys_last_email_interaction",
+      object_id: "",
+      name: "Last email interaction",
+      slug: "__last_email_interaction",
+      attribute_type: "timestamp" as CRMAttributeType,
+      config: {},
+    },
+    {
+      ...base,
+      id: "__sys_last_calendar_interaction",
+      object_id: "",
+      name: "Last calendar interaction",
+      slug: "__last_calendar_interaction",
+      attribute_type: "timestamp" as CRMAttributeType,
+      config: {},
+    },
+    {
+      ...base,
+      id: "__sys_connection_strength",
+      object_id: "",
+      name: "Connection strength",
+      slug: "__connection_strength",
+      attribute_type: "status",
+      config: { options: CONNECTION_STRENGTH_OPTIONS },
+    },
+  ];
+}
+
+export function applyPersonComputedColumns(
+  records: CRMRecord[],
+  attributes: CRMAttribute[],
+  objectType: string,
+): { records: CRMRecord[]; attributes: CRMAttribute[] } {
+  if (objectType !== "person") {
+    return { records, attributes };
+  }
+
+  const synthesizedAttrs = synthesizeComputedAttributes();
+
+  const updatedRecords = records.map((record) => {
+    const values = { ...record.values };
+    values.__last_email_interaction = record.computed?.last_email_interaction ?? null;
+    values.__last_calendar_interaction = record.computed?.last_calendar_interaction ?? null;
+    values.__connection_strength = record.computed?.connection_strength ?? null;
+    return { ...record, values };
+  });
+
+  return {
+    records: updatedRecords,
+    attributes: [...attributes, ...synthesizedAttrs],
+  };
+}
 
 // FilterRule uses a UI-only checkbox shorthand (is_true/is_false) that the
 // backend query contract doesn't have; equals/"true"|"false" round-trips it.
@@ -73,7 +154,9 @@ const objectTypeIcons: Record<CRMObjectType, React.ReactNode> = {
 };
 
 function tableAttributes(attributes: CRMAttribute[] = []) {
-  return attributes.filter((attr) => !attr.is_system && attr.slug !== "name");
+  return attributes.filter(
+    (attr) => attr.slug !== "name" && (attr.slug.startsWith("__") || !attr.is_system),
+  );
 }
 
 function CreateRecordModal({
@@ -221,38 +304,6 @@ export default function RecordsPage() {
     }
   }, [currentObject?.attributes, visibleColumns.length, columnOrder.length]);
 
-  // Apply saved view configuration
-  const handleSelectView = useCallback((view: TableSavedView | null) => {
-    if (!view) {
-      setActiveViewId(null);
-      // Reset to defaults
-      if (currentObject?.attributes) {
-        const columns = tableAttributes(currentObject.attributes);
-        setVisibleColumns(columns.slice(0, 5).map((a) => a.slug));
-        setColumnOrder(columns.map((a) => a.slug));
-      }
-      setSortConfig(null);
-      setFilters([]);
-      return;
-    }
-    setActiveViewId(view.id);
-    if (view.visible_attributes?.length) {
-      setVisibleColumns(view.visible_attributes);
-    }
-    if (view.sorts?.length) {
-      const first = view.sorts[0] as { attribute?: string; direction?: "asc" | "desc" };
-      if (first.attribute) {
-        setSortConfig({ attribute: first.attribute, direction: first.direction || "asc" });
-      }
-    } else {
-      setSortConfig(null);
-    }
-    setFilters(fromQueryFilters(view.filters));
-    if (view.view_type === "board" || view.view_type === "table") {
-      setViewMode(view.view_type as ViewMode);
-    }
-  }, [currentObject?.attributes]);
-
   const handleSaveView = useCallback(async (data: Parameters<typeof createView>[0]) => {
     const view = await createView(data);
     setActiveViewId(view.id);
@@ -291,6 +342,54 @@ export default function RecordsPage() {
   const hasStatusAttribute = useMemo(() => {
     return currentObject?.attributes?.some((a) => a.attribute_type === "status");
   }, [currentObject]);
+
+  // Synthesize computed columns for person object type
+  const synthesizedData = useMemo(() => {
+    if (!currentObject || !records.length) {
+      return { records: records as CRMRecord[], attributes: (currentObject?.attributes || []) as CRMAttribute[] };
+    }
+    return applyPersonComputedColumns(
+      records as CRMRecord[],
+      (currentObject?.attributes || []) as CRMAttribute[],
+      currentObject.object_type,
+    );
+  }, [currentObject, records]);
+
+  const displayAttributes = synthesizedData.attributes;
+  const displayRecords = synthesizedData.records;
+
+  // Apply saved view configuration
+  const handleSelectView = useCallback((view: TableSavedView | null) => {
+    if (!view) {
+      setActiveViewId(null);
+      // Reset to defaults
+      const attrs = displayAttributes.length ? displayAttributes : currentObject?.attributes;
+      if (attrs?.length) {
+        const columns = tableAttributes(attrs);
+        setVisibleColumns(columns.slice(0, 5).map((a) => a.slug));
+        setColumnOrder(columns.map((a) => a.slug));
+      }
+      setSortConfig(null);
+      setFilters([]);
+      return;
+    }
+    setActiveViewId(view.id);
+    if (view.visible_attributes?.length) {
+      setVisibleColumns(view.visible_attributes);
+    }
+    if (view.sorts?.length) {
+      const first = view.sorts[0] as { attribute?: string; direction?: "asc" | "desc" };
+      if (first.attribute) {
+        setSortConfig({ attribute: first.attribute, direction: first.direction || "asc" });
+      }
+    } else {
+      setSortConfig(null);
+    }
+    setFilters(fromQueryFilters(view.filters));
+    if (view.view_type === "board" || view.view_type === "table") {
+      setViewMode(view.view_type as ViewMode);
+    }
+  }, [currentObject?.attributes, displayAttributes]);
 
   // Get attributes that should be highlighted on kanban cards
   const kanbanHighlightAttributes = useMemo(() => {
@@ -473,10 +572,10 @@ export default function RecordsPage() {
             {/* Column visibility (table view only) */}
             {viewMode === "table" && currentObject?.attributes && (
               <ColumnVisibilityMenu
-                attributes={tableAttributes(currentObject.attributes)}
+                attributes={tableAttributes(displayAttributes)}
                 visibleColumns={visibleColumns}
                 onToggleColumn={handleToggleColumn}
-                onShowAll={() => setVisibleColumns(tableAttributes(currentObject.attributes).map((a) => a.slug))}
+                onShowAll={() => setVisibleColumns(tableAttributes(displayAttributes).map((a) => a.slug))}
                 onHideAll={() => setVisibleColumns([])}
               />
             )}
@@ -496,8 +595,8 @@ export default function RecordsPage() {
           {/* Content */}
           {viewMode === "table" ? (
             <DataTable
-              records={records}
-              attributes={currentObject?.attributes || []}
+              records={displayRecords}
+              attributes={displayAttributes}
               isLoading={isLoading}
               emptyMessage={searchQuery ? "No records match your search" : `No ${currentObject?.plural_name?.toLowerCase() || "records"} yet`}
               visibleColumns={visibleColumns}
