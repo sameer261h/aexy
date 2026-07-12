@@ -17,7 +17,6 @@ from aexy.models.crm import (
     CRMObject,
     CRMAttribute,
     CRMRecord,
-    CRMRecordRelation,
     CRMNote,
     CRMList,
     CRMListEntry,
@@ -145,7 +144,7 @@ class CRMObjectService:
         )
 
         if not include_inactive:
-            stmt = stmt.where(CRMObject.is_active == True)
+            stmt = stmt.where(CRMObject.is_active == True)  # noqa: E712
 
         stmt = stmt.order_by(CRMObject.name)
         result = await self.db.execute(stmt)
@@ -167,7 +166,7 @@ class CRMObjectService:
             count_stmt = select(func.count(CRMRecord.id)).where(
                 and_(
                     CRMRecord.object_id == obj.id,
-                    CRMRecord.is_archived == False,
+                    CRMRecord.is_archived == False,  # noqa: E712
                 )
             )
             count_result = await self.db.execute(count_stmt)
@@ -838,8 +837,9 @@ class CRMRecordService:
         values: dict[str, Any] | None = None,
         owner_id: str | None = None,
         updated_by_id: str | None = None,
-        workspace_id: str | None = None,
-        object_id: str | None = None,
+        *,
+        workspace_id: str,
+        object_id: str,
     ) -> CRMRecord | None:
         """Update a record with CRM activity logging and events."""
         # Get old values before update for change tracking
@@ -1070,8 +1070,9 @@ class CRMRecordService:
         record_id: str,
         permanent: bool = False,
         deleted_by_id: str | None = None,
-        workspace_id: str | None = None,
-        object_id: str | None = None,
+        *,
+        workspace_id: str,
+        object_id: str,
     ) -> bool:
         """Delete a record with CRM activity logging and events."""
         record = await self.dts.get_record(record_id, object_id, workspace_id)
@@ -1146,15 +1147,35 @@ class CRMRecordService:
         self,
         record_ids: list[str],
         values: dict[str, Any],
+        *,
+        workspace_id: str,
+        object_id: str,
         updated_by_id: str | None = None,
     ) -> int:
-        """Bulk update records."""
+        """Bulk update a fully scoped record set, all-or-nothing."""
+        unique_ids = list(dict.fromkeys(record_ids))
+        matching_ids = set(
+            (
+                await self.db.execute(
+                    select(CRMRecord.id).where(
+                        CRMRecord.id.in_(unique_ids),
+                        CRMRecord.workspace_id == workspace_id,
+                        CRMRecord.object_id == object_id,
+                    )
+                )
+            ).scalars().all()
+        )
+        if matching_ids != set(unique_ids):
+            raise ValueError("One or more records not found")
+
         updated = 0
-        for record_id in record_ids:
+        for record_id in unique_ids:
             record = await self.update_record(
                 record_id=record_id,
                 values=values,
                 updated_by_id=updated_by_id,
+                workspace_id=workspace_id,
+                object_id=object_id,
             )
             if record:
                 updated += 1
@@ -1164,12 +1185,36 @@ class CRMRecordService:
         self,
         record_ids: list[str],
         permanent: bool = False,
+        *,
+        workspace_id: str,
+        object_id: str,
         deleted_by_id: str | None = None,
     ) -> int:
-        """Bulk delete records."""
+        """Bulk delete a fully scoped record set, all-or-nothing."""
+        unique_ids = list(dict.fromkeys(record_ids))
+        matching_ids = set(
+            (
+                await self.db.execute(
+                    select(CRMRecord.id).where(
+                        CRMRecord.id.in_(unique_ids),
+                        CRMRecord.workspace_id == workspace_id,
+                        CRMRecord.object_id == object_id,
+                    )
+                )
+            ).scalars().all()
+        )
+        if matching_ids != set(unique_ids):
+            raise ValueError("One or more records not found")
+
         deleted = 0
-        for record_id in record_ids:
-            if await self.delete_record(record_id, permanent, deleted_by_id):
+        for record_id in unique_ids:
+            if await self.delete_record(
+                record_id,
+                permanent,
+                deleted_by_id,
+                workspace_id=workspace_id,
+                object_id=object_id,
+            ):
                 deleted += 1
         return deleted
 
@@ -1287,7 +1332,7 @@ class CRMListService:
         if not include_private:
             stmt = stmt.where(
                 or_(
-                    CRMList.is_private == False,
+                    CRMList.is_private == False,  # noqa: E712
                     CRMList.owner_id == user_id,
                 )
             )

@@ -13,7 +13,6 @@ from aexy.schemas.crm import (
     CRMAttributeCreate,
     CRMAttributeUpdate,
     CRMAttributeResponse,
-    AttributeReorder,
     CRMRecordCreate,
     CRMRecordUpdate,
     CRMRecordResponse,
@@ -226,8 +225,8 @@ async def get_table(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = DataTableService(db)
-    table = await service.get_table(table_id)
-    if not table or str(table.workspace_id) != workspace_id:
+    table = await service.get_table(table_id, workspace_id)
+    if not table:
         raise HTTPException(status_code=404, detail="Table not found")
 
     return CRMObjectWithAttributesResponse(
@@ -335,8 +334,8 @@ async def list_fields(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = DataTableService(db)
-    table = await service.get_table(table_id)
-    if not table or str(table.workspace_id) != workspace_id:
+    table = await service.get_table(table_id, workspace_id)
+    if not table:
         # 404 either way — cross-workspace probes get the same response as
         # a genuinely missing table.
         raise HTTPException(status_code=404, detail="Table not found")
