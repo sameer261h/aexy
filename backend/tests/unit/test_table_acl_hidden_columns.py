@@ -327,6 +327,29 @@ async def test_search_does_not_match_hidden_column_value(db_session):
     assert total_full >= 1, "full-access search should have found the record"
 
 
+@pytest.mark.asyncio
+async def test_search_does_not_match_hidden_primary_attribute_via_display_name(db_session):
+    ws, owner = await _workspace(db_session, "srch-primhid")
+    table = await _table(db_session, ws, "SearchPrimaryHidden")
+    service = DataTableService(db_session)
+    name_field = await service.add_field(table.id, "SecretName", workspace_id=ws.id, slug="secret_name")
+    await service.update_table(table.id, workspace_id=ws.id, primary_attribute_id=name_field.id)
+
+    await service.create_record(table.id, ws.id, {"secret_name": "S3CR3T-PRIMARY-VALUE"})
+
+    hidden_access = TableAccess(permission="view", hidden_columns=["secret_name"])
+    _, total = await service.list_records(
+        table.id, ws.id, search="S3CR3T-PRIMARY-VALUE", access=hidden_access,
+    )
+    assert total == 0, "hidden primary attribute leaked through display_name search"
+
+    full_access = TableAccess(permission="view")
+    _, total_full = await service.list_records(
+        table.id, ws.id, search="S3CR3T-PRIMARY-VALUE", access=full_access,
+    )
+    assert total_full >= 1, "full-access search should still find the record via display_name"
+
+
 # =============================================================================
 # create_record / update_record response filters hidden columns
 # =============================================================================

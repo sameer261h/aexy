@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select, func, and_, or_, cast, Numeric
+from sqlalchemy import select, func, and_, or_, cast, Numeric, false
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -1171,10 +1171,36 @@ class DataTableService:
         slugs = [row[0] for row in attrs_result.all() if row[0] not in exclude_slugs]
 
         pattern = f"%{self._escape_like(search)}%"
-        conditions = [CRMRecord.display_name.ilike(pattern)]
+        conditions = []
+
+        # display_name is derived from the primary attribute when one is
+        # set, otherwise from whichever text attribute happens to have a
+        # value first (see _compute_display_name) -- an unpredictable
+        # fallback. Only search it when that source is provably not
+        # hidden; if no primary attribute is set, any hidden text
+        # attribute could have been the source, so skip it conservatively.
+        primary_attribute_id = (
+            await self.db.execute(
+                select(CRMObject.primary_attribute_id).where(CRMObject.id == table_id)
+            )
+        ).scalar_one_or_none()
+        if primary_attribute_id:
+            primary_slug = (
+                await self.db.execute(
+                    select(CRMAttribute.slug).where(CRMAttribute.id == primary_attribute_id)
+                )
+            ).scalar_one_or_none()
+            display_name_safe = primary_slug is not None and primary_slug not in exclude_slugs
+        else:
+            display_name_safe = not exclude_slugs
+
+        if display_name_safe:
+            conditions.append(CRMRecord.display_name.ilike(pattern))
         for slug in slugs:
             conditions.append(CRMRecord.values[slug].astext.ilike(pattern))
 
+        if not conditions:
+            return stmt.where(false())
         return stmt.where(or_(*conditions))
 
     def _apply_sorts(self, stmt, sorts: list[dict] | None):
