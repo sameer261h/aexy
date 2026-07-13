@@ -15,6 +15,7 @@ import { RecordHeader } from "@/components/crm/RecordHeader";
 import { RecordHighlights } from "@/components/crm/RecordHighlights";
 import { RecordSidebar } from "@/components/crm/RecordSidebar";
 import { ConvertLeadDialog } from "@/components/crm/ConvertLeadDialog";
+import { RecordEmailComposer } from "@/components/crm/email/RecordEmailComposer";
 import { Button } from "@/components/ui/button";
 import {
   RecordTabs,
@@ -35,6 +36,7 @@ export default function RecordDetailPage() {
   const { currentWorkspace } = useWorkspace();
   const workspaceId = currentWorkspace?.id || null;
   const [showConvert, setShowConvert] = useState(false);
+  const [showEmailComposer, setShowEmailComposer] = useState(false);
 
   // Fetch data
   const { objects } = useCRMObjects(workspaceId);
@@ -172,6 +174,8 @@ export default function RecordDetailPage() {
 
   const attributes = currentObject?.attributes || [];
   const pinnedNotes = notes.filter((n) => n.is_pinned);
+  const emailAttribute = attributes.find((a) => a.attribute_type === "email");
+  const recipientEmail = emailAttribute ? (record.values?.[emailAttribute.slug] as string | undefined) : undefined;
 
   return (
     <div className="min-h-screen bg-background">
@@ -213,6 +217,20 @@ export default function RecordDetailPage() {
                 </div>
               </div>
             )}
+
+          {/* Send email */}
+          {recipientEmail && workspaceId && currentObject && (
+            <div className="px-8 pt-4">
+              <div className="flex items-center justify-between rounded-lg border border-border bg-muted/50 px-4 py-3">
+                <span className="text-sm text-muted-foreground">
+                  Send an email to {recipientEmail}
+                </span>
+                <Button size="sm" variant="outline" onClick={() => setShowEmailComposer(true)}>
+                  Send email
+                </Button>
+              </div>
+            </div>
+          )}
 
           {/* Highlights */}
           <div className="px-8 py-6">
@@ -302,6 +320,17 @@ export default function RecordDetailPage() {
           workspaceId={workspaceId}
           recordId={recordId}
           onConverted={() => refetchRecord?.()}
+        />
+      )}
+
+      {workspaceId && currentObject && recipientEmail && (
+        <RecordEmailComposer
+          isOpen={showEmailComposer}
+          onClose={() => setShowEmailComposer(false)}
+          workspaceId={workspaceId}
+          objectId={currentObject.id}
+          recordId={recordId}
+          recipientEmail={recipientEmail}
         />
       )}
     </div>
