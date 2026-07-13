@@ -604,6 +604,45 @@ class DataTableService:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def _assert_query_permission(
+        self,
+        table_id: str,
+        access: TableAccess,
+        filters: list[dict] | None,
+        sorts: list[dict] | None,
+    ) -> None:
+        """Reject any filter/sort naming an attribute this caller can't see
+        or isn't allowed to query by, rather than silently executing it.
+        Field-level query permission -- see list_records()."""
+        referenced = {f.get("attribute") for f in (filters or []) if f.get("attribute")}
+        referenced |= {s.get("attribute") for s in (sorts or []) if s.get("attribute")}
+        if not referenced:
+            return
+
+        hidden = set(access.hidden_columns)
+        named_in_hidden = referenced & hidden
+        if named_in_hidden:
+            raise ValueError(f"cannot query hidden attribute(s): {sorted(named_in_hidden)}")
+
+        attrs_result = await self.db.execute(
+            select(CRMAttribute.slug, CRMAttribute.is_filterable, CRMAttribute.is_sortable).where(
+                CRMAttribute.object_id == table_id, CRMAttribute.slug.in_(referenced)
+            )
+        )
+        by_slug = {row[0]: (row[1], row[2]) for row in attrs_result.all()}
+
+        filter_slugs = {f.get("attribute") for f in (filters or []) if f.get("attribute")}
+        for slug in filter_slugs:
+            is_filterable, _ = by_slug.get(slug, (True, True))
+            if not is_filterable:
+                raise ValueError(f"attribute {slug!r} is not filterable")
+
+        sort_slugs = {s.get("attribute") for s in (sorts or []) if s.get("attribute")}
+        for slug in sort_slugs:
+            _, is_sortable = by_slug.get(slug, (True, True))
+            if not is_sortable:
+                raise ValueError(f"attribute {slug!r} is not sortable")
+
     async def list_records(
         self,
         table_id: str,
@@ -619,6 +658,16 @@ class DataTableService:
     ) -> tuple[list[CRMRecord], int]:
         """List records with filtering, free-text search, sorting, pagination, and row security."""
         table = await self.get_table(table_id)
+
+        # Field-level query permission: a filter/sort naming a hidden or
+        # non-filterable/non-sortable attribute must be rejected outright,
+        # not silently executed -- otherwise a caller can use the returned
+        # total (0 vs >0) as an oracle to infer a hidden value they can't
+        # see directly (e.g. filter secret starts_with "a", check if total
+        # is nonzero). access.hidden_columns is already resolved per
+        # collaborator; it was never enforced here before this fix.
+        if access is not None:
+            await self._assert_query_permission(table_id, access, filters, sorts)
 
         stmt = (
             select(CRMRecord)
@@ -639,9 +688,12 @@ class DataTableService:
             stmt = self._apply_filters(stmt, filters)
 
         # Apply free-text search (further narrows the already-scoped query;
-        # never widens it beyond the workspace/object/security predicates above)
+        # never widens it beyond the workspace/object/security predicates above).
+        # Excludes hidden columns from the search set so their values can't be
+        # probed by "does searching for X return anything" either.
         if search:
-            stmt = await self._apply_search(stmt, table_id, search)
+            hidden = set(access.hidden_columns) if access else set()
+            stmt = await self._apply_search(stmt, table_id, search, exclude_slugs=hidden)
 
         # Count
         count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -1100,20 +1152,23 @@ class DataTableService:
         CRMAttributeType.URL.value,
     }
 
-    async def _apply_search(self, stmt, table_id: str, search: str):
+    async def _apply_search(self, stmt, table_id: str, search: str, exclude_slugs: set[str] | None = None):
         """Apply free-text search across display_name and textual attributes.
 
         Only narrows the query passed in (adds an AND'd predicate) — never
         widens the workspace/object/security scope already applied by the
-        caller.
+        caller. exclude_slugs (typically the caller's hidden columns) are
+        left out of the searched attribute set so their values can't be
+        probed via "does searching for X return any rows" either.
         """
+        exclude_slugs = exclude_slugs or set()
         attrs_result = await self.db.execute(
             select(CRMAttribute.slug).where(
                 CRMAttribute.object_id == table_id,
                 CRMAttribute.attribute_type.in_(self.TEXT_SEARCHABLE_ATTRIBUTE_TYPES),
             )
         )
-        slugs = [row[0] for row in attrs_result.all()]
+        slugs = [row[0] for row in attrs_result.all() if row[0] not in exclude_slugs]
 
         pattern = f"%{self._escape_like(search)}%"
         conditions = [CRMRecord.display_name.ilike(pattern)]

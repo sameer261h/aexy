@@ -270,6 +270,10 @@ async def get_table(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = DataTableService(db)
+    # Workspace membership is not table access -- a private table's schema
+    # (including which fields exist) must not be readable by every workspace
+    # member, only those with at least "view" access to this specific table.
+    await service.auth.check_access(table_id, str(current_user.id), "view", workspace_id)
     table = await service.get_table(table_id, workspace_id)
     if not table:
         raise HTTPException(status_code=404, detail="Table not found")
@@ -379,6 +383,8 @@ async def list_fields(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = DataTableService(db)
+    # See get_table() -- workspace membership alone isn't table access.
+    await service.auth.check_access(table_id, str(current_user.id), "view", workspace_id)
     table = await service.get_table(table_id, workspace_id)
     if not table:
         # 404 either way — cross-workspace probes get the same response as
@@ -654,7 +660,8 @@ async def create_record(
         id=str(record.id),
         workspace_id=str(record.workspace_id),
         object_id=str(record.object_id),
-        values=record.values,
+        # Same hidden-column filtering as the read path -- see update_record().
+        values={k: v for k, v in record.values.items() if k not in access.hidden_columns},
         display_name=record.display_name,
         owner_id=str(record.owner_id) if record.owner_id else None,
         created_by_id=str(record.created_by_id) if record.created_by_id else None,
@@ -704,7 +711,11 @@ async def update_record(
         id=str(record.id),
         workspace_id=str(record.workspace_id),
         object_id=str(record.object_id),
-        values=record.values,
+        # Same hidden-column filtering as the read path (list_records'
+        # response construction) -- an edit collaborator who can write a
+        # permitted field must not get every other hidden value back for
+        # free in the response to that same write.
+        values={k: v for k, v in record.values.items() if k not in access.hidden_columns},
         display_name=record.display_name,
         owner_id=str(record.owner_id) if record.owner_id else None,
         created_by_id=str(record.created_by_id) if record.created_by_id else None,
@@ -1116,6 +1127,9 @@ async def list_views(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = DataTableService(db)
+    # See get_table() -- workspace membership alone isn't table access; a
+    # saved view's filters/columns can reveal a private table's schema.
+    await service.auth.check_access(table_id, str(current_user.id), "view", workspace_id)
     views = await service.list_views(
         table_id=table_id,
         workspace_id=workspace_id,
@@ -1164,6 +1178,9 @@ async def create_view(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = DataTableService(db)
+    # See get_table() -- must be able to at least edit the table's data to
+    # create a view over it.
+    await service.auth.check_access(table_id, str(current_user.id), "edit", workspace_id)
     view = await service.create_view(
         table_id=table_id,
         workspace_id=workspace_id,
@@ -1221,6 +1238,11 @@ async def update_view(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = DataTableService(db)
+    # A non-private view is still scoped to a specific table -- editing it
+    # requires table access, not just workspace membership. Checked before
+    # the private-view lookup below so a foreign/inaccessible table_id can't
+    # be probed via this route either.
+    await service.auth.check_access(table_id, str(current_user.id), "edit", workspace_id)
     existing = await service.get_view(view_id, workspace_id=workspace_id)
     if not existing or str(existing.object_id) != table_id:
         raise HTTPException(status_code=404, detail="View not found")
@@ -1285,6 +1307,8 @@ async def delete_view(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = DataTableService(db)
+    # See update_view() -- table access required, checked before lookup.
+    await service.auth.check_access(table_id, str(current_user.id), "edit", workspace_id)
     existing = await service.get_view(view_id, workspace_id=workspace_id)
     if not existing or str(existing.object_id) != table_id:
         raise HTTPException(status_code=404, detail="View not found")

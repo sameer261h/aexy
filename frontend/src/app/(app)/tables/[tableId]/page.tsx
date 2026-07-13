@@ -876,15 +876,23 @@ export default function TableDetailPage() {
                 onCellSave={canEdit ? handleCellSave : undefined}
               />
             ) : (
-              <KanbanBoard
-                records={searchableRecords}
-                attributes={attributes}
-                onRecordClick={handleRecordClick}
-                onRecordUpdate={handleRecordUpdate}
-                onCreateInStage={handleCreateInStage}
-                highlightAttributes={kanbanHighlightAttributes}
-                isLoading={isLoading}
-              />
+              <>
+                {total > PAGE_LIMIT && (
+                  <div className="mb-3 px-4 py-2 text-sm rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                    Showing {PAGE_LIMIT} of {total} records. Board view does not
+                    yet paginate — switch to table view to see the rest.
+                  </div>
+                )}
+                <KanbanBoard
+                  records={searchableRecords}
+                  attributes={attributes}
+                  onRecordClick={handleRecordClick}
+                  onRecordUpdate={handleRecordUpdate}
+                  onCreateInStage={handleCreateInStage}
+                  highlightAttributes={kanbanHighlightAttributes}
+                  isLoading={isLoading}
+                />
+              </>
             )
           )}
 
