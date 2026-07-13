@@ -13,7 +13,6 @@ from aexy.schemas.crm import (
     CRMAttributeCreate,
     CRMAttributeUpdate,
     CRMAttributeResponse,
-    AttributeReorder,
     CRMRecordCreate,
     CRMRecordUpdate,
     CRMRecordResponse,
@@ -30,6 +29,51 @@ from aexy.schemas.crm import (
 from aexy.services.data_table_service import DataTableService
 from aexy.services.table_audit_service import TableAuditService, TableShareService
 from aexy.services.workspace_service import WorkspaceService
+
+
+# -- Endpoint-specific query models for POST /tables/{table_id}/records/query --
+# These intentionally omit operators and fields the shared DataTableService
+# engine does not currently implement (between, nulls-ordering).  They exist
+# only here so the Tables module does not depend on unmerged experimental
+# CRM branches.  Claude should consolidate these with the equivalent
+# QueryFilterCondition/QuerySortCondition/QueryFilterOperator types in
+# schemas/crm.py during final integration.
+
+from typing import Literal, Any
+from pydantic import ConfigDict
+
+TableQueryFilterOperator = Literal[
+    "equals", "not_equals", "contains", "not_contains",
+    "starts_with", "ends_with",
+    "gt", "gte", "lt", "lte",
+    "is_empty", "is_not_empty",
+    "in", "not_in"
+]
+
+TableSortDirection = Literal["asc", "desc"]
+
+
+class TableQueryFilterCondition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attribute: str
+    operator: TableQueryFilterOperator
+    value: Any = None
+
+
+class TableQuerySortCondition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attribute: str
+    direction: TableSortDirection = "asc"
+
+
+class TableRecordQuery(BaseModel):
+    filters: list[TableQueryFilterCondition] | None = None
+    sorts: list[TableQuerySortCondition] | None = None
+    q: str | None = None
+    include_archived: bool = False
+    limit: int = Field(default=50, le=100)
+    offset: int = Field(default=0, ge=0)
+# -- end endpoint-specific query models --
 
 
 router = APIRouter(
@@ -226,8 +270,12 @@ async def get_table(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = DataTableService(db)
-    table = await service.get_table(table_id)
-    if not table or str(table.workspace_id) != workspace_id:
+    # Workspace membership is not table access -- a private table's schema
+    # (including which fields exist) must not be readable by every workspace
+    # member, only those with at least "view" access to this specific table.
+    await service.auth.check_access(table_id, str(current_user.id), "view", workspace_id)
+    table = await service.get_table(table_id, workspace_id)
+    if not table:
         raise HTTPException(status_code=404, detail="Table not found")
 
     return CRMObjectWithAttributesResponse(
@@ -291,7 +339,9 @@ async def update_table(
     service = DataTableService(db)
     await service.auth.check_access(table_id, str(current_user.id), "manage", workspace_id)
 
-    table = await service.update_table(table_id, **data.model_dump(exclude_unset=True))
+    table = await service.update_table(
+        table_id, workspace_id=workspace_id, **data.model_dump(exclude_unset=True)
+    )
     if not table:
         raise HTTPException(status_code=404, detail="Table not found")
 
@@ -312,7 +362,7 @@ async def delete_table(
     service = DataTableService(db)
     await service.auth.check_access(table_id, str(current_user.id), "admin", workspace_id)
 
-    if not await service.delete_table(table_id):
+    if not await service.delete_table(table_id, workspace_id=workspace_id):
         raise HTTPException(status_code=404, detail="Table not found")
 
     await db.commit()
@@ -333,8 +383,10 @@ async def list_fields(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = DataTableService(db)
-    table = await service.get_table(table_id)
-    if not table or str(table.workspace_id) != workspace_id:
+    # See get_table() -- workspace membership alone isn't table access.
+    await service.auth.check_access(table_id, str(current_user.id), "view", workspace_id)
+    table = await service.get_table(table_id, workspace_id)
+    if not table:
         # 404 either way — cross-workspace probes get the same response as
         # a genuinely missing table.
         raise HTTPException(status_code=404, detail="Table not found")
@@ -378,22 +430,26 @@ async def add_field(
     service = DataTableService(db)
     await service.auth.check_access(table_id, str(current_user.id), "manage", workspace_id)
 
-    field = await service.add_field(
-        table_id=table_id,
-        name=data.name,
-        field_type=data.attribute_type,
-        slug=data.slug,
-        description=data.description,
-        config=data.config.model_dump() if data.config else None,
-        is_required=data.is_required,
-        is_unique=data.is_unique,
-        default_value=data.default_value,
-        position=data.position,
-        is_visible=data.is_visible,
-        is_filterable=data.is_filterable,
-        is_sortable=data.is_sortable,
-        column_width=data.column_width,
-    )
+    try:
+        field = await service.add_field(
+            table_id=table_id,
+            workspace_id=workspace_id,
+            name=data.name,
+            field_type=data.attribute_type,
+            slug=data.slug,
+            description=data.description,
+            config=data.config.model_dump() if data.config else None,
+            is_required=data.is_required,
+            is_unique=data.is_unique,
+            default_value=data.default_value,
+            position=data.position,
+            is_visible=data.is_visible,
+            is_filterable=data.is_filterable,
+            is_sortable=data.is_sortable,
+            column_width=data.column_width,
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Table not found")
 
     await db.commit()
     return field
@@ -418,7 +474,9 @@ async def update_field(
     if "config" in update_data and update_data["config"] is not None:
         update_data["config"] = update_data["config"]
 
-    field = await service.update_field(field_id, **update_data)
+    field = await service.update_field(
+        field_id, table_id=table_id, workspace_id=workspace_id, **update_data
+    )
     if not field:
         raise HTTPException(status_code=404, detail="Field not found")
 
@@ -440,7 +498,9 @@ async def delete_field(
     service = DataTableService(db)
     await service.auth.check_access(table_id, str(current_user.id), "manage", workspace_id)
 
-    if not await service.delete_field(field_id):
+    if not await service.delete_field(
+        field_id, table_id=table_id, workspace_id=workspace_id
+    ):
         raise HTTPException(status_code=404, detail="Field not found")
 
     await db.commit()
@@ -449,6 +509,75 @@ async def delete_field(
 # =============================================================================
 # RECORD CRUD
 # =============================================================================
+
+@router.post("/{table_id}/records/query")
+async def query_records(
+    workspace_id: str,
+    table_id: str,
+    data: TableRecordQuery,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Query table records with server-side filtering and sorting."""
+    await check_workspace_permission(workspace_id, current_user, db)
+
+    service = DataTableService(db)
+    access = await service.auth.check_access(
+        table_id, str(current_user.id), "view", workspace_id
+    )
+
+    filters_dicts: list[dict] | None = None
+    if data.filters:
+        filters_dicts = [
+            {"attribute": f.attribute, "operator": f.operator, "value": f.value}
+            for f in data.filters
+        ]
+
+    sorts_dicts: list[dict] | None = None
+    if data.sorts:
+        sorts_dicts = [
+            {"attribute": s.attribute, "direction": s.direction}
+            for s in data.sorts
+        ]
+
+    try:
+        records, total = await service.list_records(
+            table_id=table_id,
+            workspace_id=workspace_id,
+            filters=filters_dicts,
+            sorts=sorts_dicts,
+            search=data.q.strip() if data.q and data.q.strip() else None,
+            include_archived=data.include_archived,
+            limit=data.limit,
+            offset=data.offset,
+            access=access,
+            user_id=str(current_user.id),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    primary_slug = await service.get_primary_attribute_slug(table_id)
+    record_responses = []
+    for r in records:
+        values, display_name = service.redact_record_for_access(r.values, r.display_name, access, primary_slug)
+        record_responses.append(CRMRecordListResponse(
+            id=str(r.id),
+            object_id=str(r.object_id),
+            values=values,
+            display_name=display_name,
+            owner_id=str(r.owner_id) if r.owner_id else None,
+            is_archived=r.is_archived,
+            created_at=r.created_at,
+            updated_at=r.updated_at,
+        ))
+
+    return {
+        "records": record_responses,
+        "total": total,
+        "limit": data.limit,
+        "offset": data.offset,
+    }
+
 
 @router.get("/{table_id}/records")
 async def list_records(
@@ -478,23 +607,23 @@ async def list_records(
         user_id=str(current_user.id),
     )
 
+    primary_slug = await service.get_primary_attribute_slug(table_id)
+    record_responses = []
+    for r in records:
+        values, display_name = service.redact_record_for_access(r.values, r.display_name, access, primary_slug)
+        record_responses.append(CRMRecordListResponse(
+            id=str(r.id),
+            object_id=str(r.object_id),
+            values=values,
+            display_name=display_name,
+            owner_id=str(r.owner_id) if r.owner_id else None,
+            is_archived=r.is_archived,
+            created_at=r.created_at,
+            updated_at=r.updated_at,
+        ))
+
     return {
-        "records": [
-            CRMRecordListResponse(
-                id=str(r.id),
-                object_id=str(r.object_id),
-                values={
-                    k: v for k, v in r.values.items()
-                    if k not in access.hidden_columns
-                },
-                display_name=r.display_name,
-                owner_id=str(r.owner_id) if r.owner_id else None,
-                is_archived=r.is_archived,
-                created_at=r.created_at,
-                updated_at=r.updated_at,
-            )
-            for r in records
-        ],
+        "records": record_responses,
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -518,21 +647,27 @@ async def create_record(
     )
     service.auth.validate_write(data.values, access)
 
-    record = await service.create_record(
-        table_id=table_id,
-        workspace_id=workspace_id,
-        values=data.values,
-        owner_id=data.owner_id or str(current_user.id),
-        created_by_id=str(current_user.id),
-    )
+    try:
+        record = await service.create_record(
+            table_id=table_id,
+            workspace_id=workspace_id,
+            values=data.values,
+            owner_id=data.owner_id or str(current_user.id),
+            created_by_id=str(current_user.id),
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Table not found")
 
     await db.commit()
+    primary_slug = await service.get_primary_attribute_slug(table_id)
+    values, display_name = service.redact_record_for_access(record.values, record.display_name, access, primary_slug)
     return CRMRecordResponse(
         id=str(record.id),
         workspace_id=str(record.workspace_id),
         object_id=str(record.object_id),
-        values=record.values,
-        display_name=record.display_name,
+        # Same hidden-column/display_name filtering as the read path -- see update_record().
+        values=values,
+        display_name=display_name,
         owner_id=str(record.owner_id) if record.owner_id else None,
         created_by_id=str(record.created_by_id) if record.created_by_id else None,
         is_archived=record.is_archived,
@@ -562,25 +697,33 @@ async def update_record(
         service.auth.validate_write(data.values, access)
 
     # Validate the record belongs to this table before modifying
-    existing = await service.get_record(record_id)
-    if not existing or str(existing.object_id) != table_id:
+    existing = await service.get_record(record_id, table_id, workspace_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="Record not found in this table")
 
     record = await service.update_record(
         record_id=record_id,
         values=data.values,
         owner_id=data.owner_id,
+        table_id=table_id,
+        workspace_id=workspace_id,
     )
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
 
     await db.commit()
+    primary_slug = await service.get_primary_attribute_slug(table_id)
+    values, display_name = service.redact_record_for_access(record.values, record.display_name, access, primary_slug)
     return CRMRecordResponse(
         id=str(record.id),
         workspace_id=str(record.workspace_id),
         object_id=str(record.object_id),
-        values=record.values,
-        display_name=record.display_name,
+        # Same hidden-column/display_name filtering as the read path
+        # (list_records' response construction) -- an edit collaborator
+        # who can write a permitted field must not get every other hidden
+        # value back for free in the response to that same write.
+        values=values,
+        display_name=display_name,
         owner_id=str(record.owner_id) if record.owner_id else None,
         created_by_id=str(record.created_by_id) if record.created_by_id else None,
         is_archived=record.is_archived,
@@ -608,11 +751,13 @@ async def delete_record(
     )
 
     # Validate the record belongs to this table
-    existing = await service.get_record(record_id)
-    if not existing or str(existing.object_id) != table_id:
+    existing = await service.get_record(record_id, table_id, workspace_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="Record not found in this table")
 
-    if not await service.delete_record(record_id, permanent):
+    if not await service.delete_record(
+        record_id, permanent, table_id=table_id, workspace_id=workspace_id
+    ):
         raise HTTPException(status_code=404, detail="Record not found")
 
     await db.commit()
@@ -634,7 +779,15 @@ async def bulk_delete_records(
         table_id, str(current_user.id), "manage", workspace_id
     )
 
-    deleted = await service.bulk_delete_records(data.record_ids, data.permanent, table_id=table_id)
+    try:
+        deleted = await service.bulk_delete_records(
+            data.record_ids,
+            data.permanent,
+            table_id=table_id,
+            workspace_id=workspace_id,
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Record not found in this table")
     await db.commit()
     return {"deleted": deleted}
 
@@ -658,7 +811,7 @@ async def get_my_access(
         table_id, str(current_user.id), workspace_id
     )
     if not access:
-        raise HTTPException(status_code=403, detail="No access to this table")
+        raise HTTPException(status_code=404, detail="Table not found")
 
     return TableAccessResponse(
         permission=access.permission,
@@ -771,6 +924,7 @@ async def update_collaborator(
 
     collab = await service.update_collaborator(
         collaborator_id=collaborator_id,
+        table_id=table_id,
         permission=data.permission,
         hidden_columns=data.hidden_columns,
         readonly_columns=data.readonly_columns,
@@ -811,7 +965,7 @@ async def remove_collaborator(
         table_id, str(current_user.id), "admin", workspace_id
     )
 
-    if not await service.remove_collaborator(collaborator_id):
+    if not await service.remove_collaborator(collaborator_id, table_id):
         raise HTTPException(status_code=404, detail="Collaborator not found")
 
     await db.commit()
@@ -910,7 +1064,7 @@ async def revoke_share_link(
     )
 
     share_svc = TableShareService(db)
-    if not await share_svc.revoke_link(link_id):
+    if not await share_svc.revoke_link(link_id, table_id=table_id):
         raise HTTPException(status_code=404, detail="Share link not found")
 
     await db.commit()
@@ -980,6 +1134,9 @@ async def list_views(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = DataTableService(db)
+    # See get_table() -- workspace membership alone isn't table access; a
+    # saved view's filters/columns can reveal a private table's schema.
+    await service.auth.check_access(table_id, str(current_user.id), "view", workspace_id)
     views = await service.list_views(
         table_id=table_id,
         workspace_id=workspace_id,
@@ -1028,6 +1185,9 @@ async def create_view(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = DataTableService(db)
+    # See get_table() -- must be able to at least edit the table's data to
+    # create a view over it.
+    await service.auth.check_access(table_id, str(current_user.id), "edit", workspace_id)
     view = await service.create_view(
         table_id=table_id,
         workspace_id=workspace_id,
@@ -1085,6 +1245,11 @@ async def update_view(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = DataTableService(db)
+    # A non-private view is still scoped to a specific table -- editing it
+    # requires table access, not just workspace membership. Checked before
+    # the private-view lookup below so a foreign/inaccessible table_id can't
+    # be probed via this route either.
+    await service.auth.check_access(table_id, str(current_user.id), "edit", workspace_id)
     existing = await service.get_view(view_id, workspace_id=workspace_id)
     if not existing or str(existing.object_id) != table_id:
         raise HTTPException(status_code=404, detail="View not found")
@@ -1149,6 +1314,8 @@ async def delete_view(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = DataTableService(db)
+    # See update_view() -- table access required, checked before lookup.
+    await service.auth.check_access(table_id, str(current_user.id), "edit", workspace_id)
     existing = await service.get_view(view_id, workspace_id=workspace_id)
     if not existing or str(existing.object_id) != table_id:
         raise HTTPException(status_code=404, detail="View not found")

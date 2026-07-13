@@ -36,11 +36,46 @@ import { KanbanBoard } from "@/components/crm/KanbanBoard";
 import { ColumnVisibilityMenu } from "@/components/crm/ColumnSelector";
 import { FieldEditor } from "@/components/fields";
 import { TableShareDialog, TablePermissionBadge, TableAuditLog } from "@/components/tables";
-import { TableFilterPanel, FilterRule, matchesFilters } from "@/components/tables/TableFilterPanel";
+import { TableFilterPanel, FilterRule } from "@/components/tables/TableFilterPanel";
 import { FIELD_TYPE_OPTIONS } from "@/config/fieldTypes";
 import { registerCustomFieldTypes, getAllCustomFieldTypes } from "@/components/fields";
 import { useCustomFieldTypes } from "@/hooks/useTables";
 import type { CRMAttribute, CRMRecord, CRMAttributeType, TableSavedView, ColumnDisplayConfig, WorkspaceFieldType } from "@/lib/api";
+
+const PAGE_LIMIT = 50;
+
+// FilterRule uses a UI-only checkbox shorthand (is_true/is_false) that the
+// backend query contract doesn't have; equals/"true"|"false" round-trips it.
+function toQueryFilters(rules: FilterRule[]): Record<string, unknown>[] {
+  return rules
+    .filter((r) => r.field && (r.value !== "" || r.operator === "is_empty" || r.operator === "is_not_empty" || r.operator === "is_true" || r.operator === "is_false"))
+    .map((r) => {
+      if (r.operator === "is_true") return { attribute: r.field, operator: "equals", value: "true" };
+      if (r.operator === "is_false") return { attribute: r.field, operator: "equals", value: "false" };
+      return { attribute: r.field, operator: r.operator, value: r.value };
+    });
+}
+
+function fromQueryFilters(saved: Record<string, unknown>[] | undefined): FilterRule[] {
+  if (!saved?.length) return [];
+  return saved.map((f, idx) => {
+    const attribute = String(f.attribute ?? "");
+    const operator = String(f.operator ?? "equals");
+    const value = f.value;
+    if (operator === "equals" && value === "true") {
+      return { id: `restored_${idx}_${Date.now()}`, field: attribute, operator: "is_true", value: "" };
+    }
+    if (operator === "equals" && value === "false") {
+      return { id: `restored_${idx}_${Date.now()}`, field: attribute, operator: "is_false", value: "" };
+    }
+    return {
+      id: `restored_${idx}_${Date.now()}`,
+      field: attribute,
+      operator: operator as FilterRule["operator"],
+      value: value == null ? "" : String(value),
+    };
+  });
+}
 
 function AddFieldPanel({
   onAdd,
@@ -435,8 +470,17 @@ export default function TableDetailPage() {
   const [createDefaultValues, setCreateDefaultValues] = useState<Record<string, unknown>>({});
   const [sortConfig, setSortConfig] = useState<{ attribute: string; direction: "asc" | "desc" } | null>(null);
   const [filterRules, setFilterRules] = useState<FilterRule[]>([]);
+  const [offset, setOffset] = useState(0);
   const [visibleColumns, setVisibleColumns] = useState<string[]>([]);
   const [columnOrder, setColumnOrder] = useState<string[]>([]);
+
+  const queryFilters = useMemo(() => toQueryFilters(filterRules), [filterRules]);
+
+  // Reset pagination whenever the query-defining state changes, so an old
+  // offset never gets applied to a different result set.
+  useEffect(() => {
+    setOffset(0);
+  }, [queryFilters, sortConfig, activeViewId, searchQuery]);
 
   // Initialize and sync columns when fields change
   useEffect(() => {
@@ -470,8 +514,11 @@ export default function TableDetailPage() {
     bulkDeleteRecords,
     isCreating,
   } = useTableRecords(workspaceId, tableId, {
-    sort_by: sortConfig?.attribute,
-    sort_dir: sortConfig?.direction,
+    filters: queryFilters.length ? queryFilters : undefined,
+    sorts: sortConfig ? [{ attribute: sortConfig.attribute, direction: sortConfig.direction }] : undefined,
+    q: searchQuery || undefined,
+    limit: PAGE_LIMIT,
+    offset,
   });
 
   // Adapt records to CRMRecord shape
@@ -491,22 +538,10 @@ export default function TableDetailPage() {
     }));
   }, [rawRecords]);
 
-  // Filter by search + filter rules
-  const filteredRecords = useMemo(() => {
-    let result = records;
-    // Apply filter rules
-    if (filterRules.length > 0) {
-      result = result.filter((r) => matchesFilters(r, filterRules, attributes));
-    }
-    // Apply search
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter((r) =>
-        Object.values(r.values).some((val) => String(val).toLowerCase().includes(q))
-      );
-    }
-    return result;
-  }, [records, searchQuery, filterRules, attributes]);
+  // Structured filters, sorting, and free-text search are all applied
+  // server-side against the complete authorized dataset via the POST
+  // query endpoint. No client-side filtering remains.
+  const searchableRecords = records;
 
   const hasStatusField = useMemo(() => {
     return fields.some((f) => f.attribute_type === "status");
@@ -532,7 +567,7 @@ export default function TableDetailPage() {
 
   const handleSelectAll = () => {
     setSelectedRecords(
-      selectedRecords.length === filteredRecords.length ? [] : filteredRecords.map((r) => r.id)
+      selectedRecords.length === searchableRecords.length ? [] : searchableRecords.map((r) => r.id)
     );
   };
 
@@ -596,6 +631,7 @@ export default function TableDetailPage() {
       }
       setSortConfig(null);
       setColumnDisplayConfig([]);
+      setFilterRules([]);
       return;
     }
     setActiveViewId(view.id);
@@ -615,6 +651,7 @@ export default function TableDetailPage() {
     } else {
       setSortConfig(null);
     }
+    setFilterRules(fromQueryFilters(view.filters));
     if (view.view_type === "board" || view.view_type === "table") {
       setViewMode(view.view_type as ViewMode);
     }
@@ -683,6 +720,7 @@ export default function TableDetailPage() {
                 visible_attributes: visibleColumns,
                 column_config: columnDisplayConfig,
                 sorts: sortConfig ? [{ attribute: sortConfig.attribute, direction: sortConfig.direction }] : [],
+                filters: queryFilters,
                 view_type: viewMode as "table" | "board",
               }}
               isCreating={isCreatingView}
@@ -814,7 +852,7 @@ export default function TableDetailPage() {
           {fields.length > 0 && (
             viewMode === "table" ? (
               <DataTable
-                records={filteredRecords}
+                records={searchableRecords}
                 attributes={attributes}
                 isLoading={isLoading}
                 emptyMessage={searchQuery ? "No records match your search" : "No records yet"}
@@ -838,16 +876,48 @@ export default function TableDetailPage() {
                 onCellSave={canEdit ? handleCellSave : undefined}
               />
             ) : (
-              <KanbanBoard
-                records={filteredRecords}
-                attributes={attributes}
-                onRecordClick={handleRecordClick}
-                onRecordUpdate={handleRecordUpdate}
-                onCreateInStage={handleCreateInStage}
-                highlightAttributes={kanbanHighlightAttributes}
-                isLoading={isLoading}
-              />
+              <>
+                {total > PAGE_LIMIT && (
+                  <div className="mb-3 px-4 py-2 text-sm rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                    Showing {PAGE_LIMIT} of {total} records. Board view does not
+                    yet paginate — switch to table view to see the rest.
+                  </div>
+                )}
+                <KanbanBoard
+                  records={searchableRecords}
+                  attributes={attributes}
+                  onRecordClick={handleRecordClick}
+                  onRecordUpdate={handleRecordUpdate}
+                  onCreateInStage={handleCreateInStage}
+                  highlightAttributes={kanbanHighlightAttributes}
+                  isLoading={isLoading}
+                />
+              </>
             )
+          )}
+
+          {viewMode === "table" && total > PAGE_LIMIT && (
+            <div className="flex items-center justify-between mt-4 text-sm text-muted-foreground">
+              <span>
+                Showing {Math.min(offset + 1, total)}–{Math.min(offset + PAGE_LIMIT, total)} of {total}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setOffset(Math.max(0, offset - PAGE_LIMIT))}
+                  disabled={offset === 0}
+                  className="px-3 py-1.5 border border-border rounded-lg text-foreground hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setOffset(offset + PAGE_LIMIT)}
+                  disabled={offset + PAGE_LIMIT >= total}
+                  className="px-3 py-1.5 border border-border rounded-lg text-foreground hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           )}
         </div>
       </div>

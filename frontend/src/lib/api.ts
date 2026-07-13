@@ -10173,6 +10173,25 @@ export const crmApi = {
       return response.data;
     },
 
+    // Server-side filter/sort/search query (truthful pagination: the
+    // returned `total` reflects the complete authorized+filtered dataset,
+    // not just the returned page).
+    query: async (
+      workspaceId: string,
+      objectId: string,
+      body?: {
+        filters?: Record<string, unknown>[];
+        sorts?: Record<string, unknown>[];
+        q?: string;
+        include_archived?: boolean;
+        limit?: number;
+        offset?: number;
+      }
+    ): Promise<{ records: CRMRecord[]; total: number; limit: number; offset: number }> => {
+      const response = await api.post(`/workspaces/${workspaceId}/crm/objects/${objectId}/records/query`, body ?? {});
+      return response.data;
+    },
+
     get: async (workspaceId: string, recordId: string): Promise<CRMRecord> => {
       const response = await api.get(`/workspaces/${workspaceId}/crm/records/${recordId}`);
       return response.data;
@@ -21597,6 +21616,20 @@ export const tablesApi = {
       search?: string;
     }): Promise<{ records: TableRecord[]; total: number }> => {
       const response = await api.get(`/workspaces/${workspaceId}/tables/${tableId}/records`, { params });
+      return response.data;
+    },
+
+    // Server-side filter/sort query (truthful pagination: `total` reflects
+    // the complete authorized+filtered dataset, not just the returned page).
+    query: async (workspaceId: string, tableId: string, body?: {
+      filters?: Record<string, unknown>[];
+      sorts?: Record<string, unknown>[];
+      q?: string;
+      include_archived?: boolean;
+      limit?: number;
+      offset?: number;
+    }): Promise<{ records: TableRecord[]; total: number; limit: number; offset: number }> => {
+      const response = await api.post(`/workspaces/${workspaceId}/tables/${tableId}/records/query`, body ?? {});
       return response.data;
     },
     create: async (workspaceId: string, tableId: string, values: Record<string, unknown>): Promise<TableRecord> => {

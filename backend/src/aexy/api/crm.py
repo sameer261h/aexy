@@ -44,6 +44,7 @@ from aexy.schemas.crm import (
     # Filter/sort
     FilterCondition,
     SortCondition,
+    CRMRecordQuery,
 )
 from aexy.services.crm_service import (
     CRMObjectService,
@@ -1408,31 +1409,118 @@ async def list_records(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMRecordService(db)
+    access = await service.dts.auth.check_access(
+        object_id, str(current_user.id), "view", workspace_id
+    )
     records, total = await service.list_records(
         workspace_id=workspace_id,
         object_id=object_id,
         include_archived=include_archived,
         limit=limit,
         offset=offset,
+        access=access,
+        user_id=str(current_user.id),
     )
 
+    primary_slug = await service.dts.get_primary_attribute_slug(object_id)
+    record_responses = []
+    for r in records:
+        values, display_name = service.dts.redact_record_for_access(r.values, r.display_name, access, primary_slug)
+        record_responses.append(CRMRecordListResponse(
+            id=str(r.id),
+            object_id=str(r.object_id),
+            values=values,
+            display_name=display_name,
+            owner_id=str(r.owner_id) if r.owner_id else None,
+            is_archived=r.is_archived,
+            created_at=r.created_at,
+            updated_at=r.updated_at,
+        ))
+
     return {
-        "records": [
-            CRMRecordListResponse(
-                id=str(r.id),
-                object_id=str(r.object_id),
-                values=r.values,
-                display_name=r.display_name,
-                owner_id=str(r.owner_id) if r.owner_id else None,
-                is_archived=r.is_archived,
-                created_at=r.created_at,
-                updated_at=r.updated_at,
-            )
-            for r in records
-        ],
+        "records": record_responses,
         "total": total,
         "limit": limit,
         "offset": offset,
+    }
+
+
+@router.post("/objects/{object_id}/records/query")
+async def query_records(
+    workspace_id: str,
+    object_id: str,
+    data: CRMRecordQuery,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Query CRM records with server-side filtering and sorting."""
+    await check_workspace_permission(workspace_id, current_user, db)
+
+    # The filter engine (_apply_filters) ANDs every condition unconditionally
+    # -- it has no OR-grouping implementation. Silently dropping a caller's
+    # conjunction: "or" and running it as AND returns wrong data with no
+    # error, which is worse than rejecting it outright. Reject until the
+    # engine actually supports OR grouping.
+    if data.filters and any(f.conjunction == "or" for f in data.filters):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OR-conjunction filters are not yet supported; only AND is implemented",
+        )
+
+    filters_dicts: list[dict] | None = None
+    if data.filters:
+        filters_dicts = [
+            {"attribute": f.attribute, "operator": f.operator, "value": f.value}
+            for f in data.filters
+        ]
+
+    sorts_dicts: list[dict] | None = None
+    if data.sorts:
+        sorts_dicts = [
+            {"attribute": s.attribute, "direction": s.direction}
+            for s in data.sorts
+        ]
+
+    service = CRMRecordService(db)
+    access = await service.dts.auth.check_access(
+        object_id, str(current_user.id), "view", workspace_id
+    )
+    try:
+        records, total = await service.list_records(
+            workspace_id=workspace_id,
+            object_id=object_id,
+            filters=filters_dicts,
+            sorts=sorts_dicts,
+            search=data.q,
+            include_archived=data.include_archived,
+            limit=data.limit,
+            offset=data.offset,
+            access=access,
+            user_id=str(current_user.id),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    primary_slug = await service.dts.get_primary_attribute_slug(object_id)
+    record_responses = []
+    for r in records:
+        values, display_name = service.dts.redact_record_for_access(r.values, r.display_name, access, primary_slug)
+        record_responses.append(CRMRecordListResponse(
+            id=str(r.id),
+            object_id=str(r.object_id),
+            values=values,
+            display_name=display_name,
+            owner_id=str(r.owner_id) if r.owner_id else None,
+            is_archived=r.is_archived,
+            created_at=r.created_at,
+            updated_at=r.updated_at,
+        ))
+
+    return {
+        "records": record_responses,
+        "total": total,
+        "limit": data.limit,
+        "offset": data.offset,
     }
 
 
@@ -1448,6 +1536,10 @@ async def create_record(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMRecordService(db)
+    access = await service.dts.auth.check_access(
+        object_id, str(current_user.id), "edit", workspace_id
+    )
+    service.dts.auth.validate_write(data.values, access)
 
     try:
         record = await service.create_record(
@@ -1464,13 +1556,14 @@ async def create_record(
         )
 
     await db.commit()
-
+    primary_slug = await service.dts.get_primary_attribute_slug(object_id)
+    values, display_name = service.dts.redact_record_for_access(record.values, record.display_name, access, primary_slug)
     return CRMRecordResponse(
         id=str(record.id),
         workspace_id=str(record.workspace_id),
         object_id=str(record.object_id),
-        values=record.values,
-        display_name=record.display_name,
+        values=values,
+        display_name=display_name,
         owner_id=str(record.owner_id) if record.owner_id else None,
         created_by_id=str(record.created_by_id) if record.created_by_id else None,
         is_archived=record.is_archived,
@@ -1492,20 +1585,25 @@ async def get_record(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMRecordService(db)
-    record = await service.get_record(record_id)
+    access = await service.dts.auth.check_access(
+        object_id, str(current_user.id), "view", workspace_id
+    )
+    record = await service.get_record(record_id, object_id, workspace_id)
 
-    if not record or str(record.workspace_id) != workspace_id or str(record.object_id) != object_id:
+    if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Record not found",
         )
 
+    primary_slug = await service.dts.get_primary_attribute_slug(object_id)
+    values, display_name = service.dts.redact_record_for_access(record.values, record.display_name, access, primary_slug)
     return CRMRecordResponse(
         id=str(record.id),
         workspace_id=str(record.workspace_id),
         object_id=str(record.object_id),
-        values=record.values,
-        display_name=record.display_name,
+        values=values,
+        display_name=display_name,
         owner_id=str(record.owner_id) if record.owner_id else None,
         created_by_id=str(record.created_by_id) if record.created_by_id else None,
         is_archived=record.is_archived,
@@ -1528,20 +1626,28 @@ async def get_record_by_id(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMRecordService(db)
-    record = await service.get_record(record_id)
+    record = await service.get_record(record_id, workspace_id=workspace_id)
 
-    if not record or str(record.workspace_id) != workspace_id:
+    if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Record not found",
         )
 
+    # object_id isn't known until the record is fetched -- table access is
+    # checked against the record's actual object_id, same as every other
+    # record route, just after the lookup instead of before.
+    access = await service.dts.auth.check_access(
+        str(record.object_id), str(current_user.id), "view", workspace_id
+    )
+    primary_slug = await service.dts.get_primary_attribute_slug(str(record.object_id))
+    values, display_name = service.dts.redact_record_for_access(record.values, record.display_name, access, primary_slug)
     return CRMRecordResponse(
         id=str(record.id),
         workspace_id=str(record.workspace_id),
         object_id=str(record.object_id),
-        values=record.values,
-        display_name=record.display_name,
+        values=values,
+        display_name=display_name,
         owner_id=str(record.owner_id) if record.owner_id else None,
         created_by_id=str(record.created_by_id) if record.created_by_id else None,
         is_archived=record.is_archived,
@@ -1565,29 +1671,40 @@ async def update_record_by_id(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMRecordService(db)
-    record = await service.get_record(record_id)
+    record = await service.get_record(record_id, workspace_id=workspace_id)
 
-    if not record or str(record.workspace_id) != workspace_id:
+    if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Record not found",
         )
+
+    # object_id isn't known until the record is fetched -- see get_record_by_id().
+    object_id = str(record.object_id)
+    access = await service.dts.auth.check_access(
+        object_id, str(current_user.id), "edit", workspace_id
+    )
+    if data.values:
+        service.dts.auth.validate_write(data.values, access)
 
     record = await service.update_record(
         record_id=record_id,
         values=data.values,
         owner_id=data.owner_id,
         updated_by_id=str(current_user.id),
+        workspace_id=workspace_id,
+        object_id=object_id,
     )
 
     await db.commit()
-
+    primary_slug = await service.dts.get_primary_attribute_slug(object_id)
+    values, display_name = service.dts.redact_record_for_access(record.values, record.display_name, access, primary_slug)
     return CRMRecordResponse(
         id=str(record.id),
         workspace_id=str(record.workspace_id),
         object_id=str(record.object_id),
-        values=record.values,
-        display_name=record.display_name,
+        values=values,
+        display_name=display_name,
         owner_id=str(record.owner_id) if record.owner_id else None,
         created_by_id=str(record.created_by_id) if record.created_by_id else None,
         is_archived=record.is_archived,
@@ -1610,9 +1727,15 @@ async def update_record(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMRecordService(db)
-    record = await service.get_record(record_id)
+    access = await service.dts.auth.check_access(
+        object_id, str(current_user.id), "edit", workspace_id
+    )
+    if data.values:
+        service.dts.auth.validate_write(data.values, access)
 
-    if not record or str(record.workspace_id) != workspace_id or str(record.object_id) != object_id:
+    record = await service.get_record(record_id, object_id, workspace_id)
+
+    if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Record not found",
@@ -1623,16 +1746,19 @@ async def update_record(
         values=data.values,
         owner_id=data.owner_id,
         updated_by_id=str(current_user.id),
+        workspace_id=workspace_id,
+        object_id=object_id,
     )
 
     await db.commit()
-
+    primary_slug = await service.dts.get_primary_attribute_slug(object_id)
+    values, display_name = service.dts.redact_record_for_access(record.values, record.display_name, access, primary_slug)
     return CRMRecordResponse(
         id=str(record.id),
         workspace_id=str(record.workspace_id),
         object_id=str(record.object_id),
-        values=record.values,
-        display_name=record.display_name,
+        values=values,
+        display_name=display_name,
         owner_id=str(record.owner_id) if record.owner_id else None,
         created_by_id=str(record.created_by_id) if record.created_by_id else None,
         is_archived=record.is_archived,
@@ -1654,15 +1780,26 @@ async def delete_record_by_id(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMRecordService(db)
-    record = await service.get_record(record_id)
+    record = await service.get_record(record_id, workspace_id=workspace_id)
 
-    if not record or str(record.workspace_id) != workspace_id:
+    if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Record not found",
         )
 
-    await service.delete_record(record_id, permanent, str(current_user.id))
+    # object_id isn't known until the record is fetched -- see get_record_by_id().
+    await service.dts.auth.check_access(
+        str(record.object_id), str(current_user.id), "manage", workspace_id
+    )
+
+    await service.delete_record(
+        record_id,
+        permanent,
+        str(current_user.id),
+        workspace_id=workspace_id,
+        object_id=record.object_id,
+    )
     await db.commit()
 
 
@@ -1679,15 +1816,24 @@ async def delete_record(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMRecordService(db)
-    record = await service.get_record(record_id)
+    await service.dts.auth.check_access(
+        object_id, str(current_user.id), "manage", workspace_id
+    )
+    record = await service.get_record(record_id, object_id, workspace_id)
 
-    if not record or str(record.workspace_id) != workspace_id or str(record.object_id) != object_id:
+    if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Record not found",
         )
 
-    await service.delete_record(record_id, permanent, str(current_user.id))
+    await service.delete_record(
+        record_id,
+        permanent,
+        str(current_user.id),
+        workspace_id=workspace_id,
+        object_id=object_id,
+    )
     await db.commit()
 
 
@@ -1771,8 +1917,9 @@ async def update_note(
     await _assert_record_in_workspace(db, workspace_id, record_id)
 
     service = CRMNoteService(db)
-    note = await service.update_note(
+    note = await service.update_note_in_record(
         note_id=note_id,
+        record_id=record_id,
         content=data.content,
         is_pinned=data.is_pinned,
     )
@@ -1809,7 +1956,7 @@ async def delete_note(
     await _assert_record_in_workspace(db, workspace_id, record_id)
 
     service = CRMNoteService(db)
-    if not await service.delete_note(note_id):
+    if not await service.delete_note_in_record(note_id, record_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Note not found",

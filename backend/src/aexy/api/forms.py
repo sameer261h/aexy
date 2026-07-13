@@ -451,10 +451,12 @@ async def update_field(
 ):
     """Update a form field."""
     await check_workspace_permission(workspace_id, current_user, db, "admin")
+    await _assert_form_in_workspace(db, workspace_id, form_id)
+    await _assert_field_in_form(db, form_id, field_id)
 
     form_service = FormsService(db)
     field = await form_service.update_field(field_id, field_data)
-    if not field or field.form_id != form_id:
+    if not field:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Field not found")
 
     return FormFieldResponse(

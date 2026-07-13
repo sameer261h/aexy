@@ -418,7 +418,9 @@ async def execute_workflow(
         from aexy.services.crm_service import CRMRecordService
 
         record_service = CRMRecordService(db)
-        record = await record_service.get_record(data.record_id)
+        record = await record_service.get_record(
+            data.record_id, workspace_id=workspace_id
+        )
         if record:
             record_data = {
                 "id": record.id,
