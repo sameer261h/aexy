@@ -9726,6 +9726,11 @@ export interface CRMRecord {
   is_archived: boolean;
   archived_at: string | null;
   object?: CRMObject;
+  computed?: {
+    last_email_interaction: string | null;
+    last_calendar_interaction: string | null;
+    connection_strength: "weak" | "good" | "strong" | "very_strong" | null;
+  } | null;
   created_at: string;
   updated_at: string;
 }
