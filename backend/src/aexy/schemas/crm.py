@@ -274,6 +274,24 @@ class CRMRecordResponse(BaseModel):
     created_by_name: str | None = None
 
 
+class CRMRecordEmailSendRequest(BaseModel):
+    """Schema for sending an email to a CRM record's contact.
+
+    Recipient is intentionally not a field here -- it's resolved
+    server-side from the record's own email attribute under the
+    caller's table access, never trusted from the client.
+    """
+    subject: str = Field(min_length=1, max_length=500)
+    body_html: str = Field(min_length=1, max_length=100_000)
+
+
+class CRMRecordEmailSendResponse(BaseModel):
+    """Schema for a sent record-email result."""
+    message_id: str
+    thread_id: str | None = None
+    sent_to: str
+
+
 class CRMRecordListResponse(BaseModel):
     """Schema for listing CRM records."""
     model_config = ConfigDict(from_attributes=True)

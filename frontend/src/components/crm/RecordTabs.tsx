@@ -13,6 +13,7 @@ import {
   Calendar,
   ArrowRight,
   FileText,
+  Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CRMRecord, CRMAttribute, CRMNote } from "@/lib/api";
@@ -147,6 +148,8 @@ export function ActivityItem({ activity }: ActivityItemProps) {
         return <FileText className="h-4 w-4" />;
       case "status_changed":
         return <ArrowRight className="h-4 w-4" />;
+      case "email.sent":
+        return <Mail className="h-4 w-4" />;
       default:
         return <Activity className="h-4 w-4" />;
     }

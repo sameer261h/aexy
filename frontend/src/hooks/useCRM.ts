@@ -485,6 +485,27 @@ export function useCRMActivities(workspaceId: string | null, recordId: string | 
   };
 }
 
+export function useSendRecordEmail(workspaceId: string | null, objectId: string | null, recordId: string | null) {
+  const queryClient = useQueryClient();
+
+  const sendMutation = useMutation({
+    mutationFn: (data: { subject: string; body_html: string }) =>
+      crmApi.records.sendEmail(workspaceId!, objectId!, recordId!, data),
+    onSuccess: () => {
+      toast.success("Email sent");
+      queryClient.invalidateQueries({ queryKey: ["crmActivities", workspaceId, recordId] });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Failed to send email");
+    },
+  });
+
+  return {
+    sendEmail: sendMutation.mutateAsync,
+    isSending: sendMutation.isPending,
+  };
+}
+
 // ==================== List Hooks ====================
 
 export function useCRMLists(workspaceId: string | null, objectId?: string) {

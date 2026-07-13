@@ -27,6 +27,8 @@ from aexy.schemas.crm import (
     CRMRecordBulkCreate,
     CRMRecordBulkUpdate,
     CRMRecordBulkDelete,
+    CRMRecordEmailSendRequest,
+    CRMRecordEmailSendResponse,
     # Note schemas
     CRMNoteCreate,
     CRMNoteUpdate,
@@ -1855,6 +1857,48 @@ async def delete_record(
         object_id=object_id,
     )
     await db.commit()
+
+
+@router.post(
+    "/objects/{object_id}/records/{record_id}/send-email",
+    response_model=CRMRecordEmailSendResponse,
+)
+async def send_record_email(
+    workspace_id: str,
+    object_id: str,
+    record_id: str,
+    data: CRMRecordEmailSendRequest,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send an email to a record's contact via the workspace's connected
+    Gmail integration and log it as an EMAIL_SENT activity."""
+    await check_workspace_permission(workspace_id, current_user, db)
+
+    service = CRMRecordService(db)
+    access = await service.dts.auth.check_access(
+        object_id, str(current_user.id), "edit", workspace_id
+    )
+
+    record = await service.get_record(record_id, object_id, workspace_id)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")
+
+    try:
+        result = await service.send_email(
+            workspace_id=workspace_id,
+            object_id=object_id,
+            record_id=record_id,
+            subject=data.subject,
+            body_html=data.body_html,
+            access=access,
+            actor_id=str(current_user.id),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    await db.commit()
+    return CRMRecordEmailSendResponse(**result)
 
 
 # =============================================================================

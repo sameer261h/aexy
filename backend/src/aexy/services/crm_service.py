@@ -21,6 +21,7 @@ from aexy.models.crm import (
     CRMList,
     CRMListEntry,
     CRMActivity,
+    CRMActivityType,
     CRMObjectType,
     CRMAttributeType,
     CRMPipeline,
@@ -1305,13 +1306,95 @@ class CRMRecordService:
                 deleted += 1
         return deleted
 
+    async def send_email(
+        self,
+        *,
+        workspace_id: str,
+        object_id: str,
+        record_id: str,
+        subject: str,
+        body_html: str,
+        access: TableAccess,
+        actor_id: str,
+    ) -> dict[str, Any]:
+        """Send an email to a record's contact via the workspace's connected
+        Gmail integration, then log a CRMActivityType.EMAIL_SENT entry.
+
+        The recipient is always resolved from the record's own configured
+        email attribute under the caller's table access -- never trusted
+        from the caller directly -- so a hidden email column can't be used
+        to send to (or thereby confirm) an address the caller can't see.
+        The activity is only logged after a confirmed provider send.
+        """
+        from aexy.api.google_integration import get_integration
+        from aexy.services.gmail_sync_service import GmailSyncService, GmailSyncError
+
+        record = await self.get_record(record_id, object_id, workspace_id)
+        if record is None:
+            raise ValueError("record not found")
+
+        email_slug = (
+            await self.db.execute(
+                select(CRMAttribute.slug).where(
+                    CRMAttribute.object_id == object_id,
+                    CRMAttribute.attribute_type == CRMAttributeType.EMAIL.value,
+                )
+            )
+        ).scalars().first()
+        if email_slug is None:
+            raise ValueError("this object has no configured email attribute")
+        if email_slug in access.hidden_columns:
+            raise ValueError("email attribute is not accessible")
+
+        to_email = record.values.get(email_slug)
+        if not to_email or not isinstance(to_email, str):
+            raise ValueError("record has no email address to send to")
+
+        integration = await get_integration(workspace_id, self.db, required=False)
+        if integration is None:
+            raise ValueError("Google integration is not connected for this workspace")
+
+        try:
+            result = await GmailSyncService(self.db).send_email(
+                integration=integration,
+                to=to_email,
+                subject=subject,
+                body_html=body_html,
+            )
+        except GmailSyncError as e:
+            raise ValueError(f"failed to send email: {e}")
+
+        await self._log_activity(
+            workspace_id=workspace_id,
+            record_id=record_id,
+            activity_type=CRMActivityType.EMAIL_SENT.value,
+            actor_id=actor_id,
+            title=f"Email sent to {to_email}",
+            description=subject,
+            metadata={
+                "subject": subject,
+                "to": to_email,
+                "message_id": result.get("message_id"),
+                "thread_id": result.get("thread_id"),
+            },
+        )
+        await self.db.flush()
+
+        return {
+            "message_id": result.get("message_id"),
+            "thread_id": result.get("thread_id"),
+            "sent_to": to_email,
+        }
+
     async def _log_activity(
         self,
         workspace_id: str,
         record_id: str,
         activity_type: str,
         actor_id: str | None = None,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
+        title: str | None = None,
+        description: str | None = None,
     ) -> CRMActivity:
         """Log an activity for a record."""
         activity = CRMActivity(
@@ -1321,7 +1404,9 @@ class CRMRecordService:
             activity_type=activity_type,
             actor_type="user" if actor_id else "system",
             actor_id=actor_id,
-            metadata=metadata or {},
+            title=title,
+            description=description,
+            activity_metadata=metadata or {},
             occurred_at=datetime.now(timezone.utc),
         )
         self.db.add(activity)
@@ -1805,7 +1890,7 @@ class CRMActivityService:
             actor_type=actor_type,
             actor_id=actor_id,
             actor_name=actor_name,
-            metadata=metadata or {},
+            activity_metadata=metadata or {},
             occurred_at=occurred_at or datetime.now(timezone.utc),
         )
         self.db.add(activity)

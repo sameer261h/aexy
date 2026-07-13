@@ -10249,6 +10249,14 @@ export const crmApi = {
       });
       return response.data;
     },
+
+    // Sends via the workspace's connected Gmail integration; recipient is
+    // resolved server-side from the record's own email attribute, never
+    // sent from the client.
+    sendEmail: async (workspaceId: string, objectId: string, recordId: string, data: { subject: string; body_html: string }): Promise<{ message_id: string; thread_id: string | null; sent_to: string }> => {
+      const response = await api.post(`/workspaces/${workspaceId}/crm/objects/${objectId}/records/${recordId}/send-email`, data);
+      return response.data;
+    },
   },
 
   // Notes
