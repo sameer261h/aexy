@@ -1,5 +1,6 @@
 "use client";
 
+import axios from "axios";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -273,6 +274,33 @@ export function useTableAccess(workspaceId: string | null, tableId: string | nul
   });
 
   return { access, isLoading };
+}
+
+// ==================== Export Hook ====================
+
+export function useExportTableCsv(workspaceId: string | null, tableId: string | null) {
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const { blob, filename } = await tablesApi.tables.exportCsv(workspaceId!, tableId!);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    },
+    onError: (error) => {
+      if (axios.isAxiosError(error) && error.response?.status === 413) {
+        toast.error("This table has too many records for a direct export. Contact support for a full export.");
+        return;
+      }
+      toast.error("Couldn't export this table. Check your access and try again.");
+    },
+  });
+
+  return { exportCsv: mutation.mutate, isExporting: mutation.isPending };
 }
 
 // ==================== Collaborator Hooks ====================

@@ -14,6 +14,7 @@ import {
   Columns,
   Loader2,
   Star,
+  Download,
 } from "lucide-react";
 import { SearchInput } from "@/components/ui/search-input";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
@@ -23,6 +24,7 @@ import {
   useTableFields,
   useTableRecords,
   useTableAccess,
+  useExportTableCsv,
   useSavedViews,
   useTableCollaborators,
   useTableShareLinks,
@@ -400,6 +402,7 @@ export default function TableDetailPage() {
   const { fields, isLoading: fieldsLoading, addField, isAdding } = useTableFields(workspaceId, tableId);
   const { fieldTypes: customFieldTypes } = useCustomFieldTypes(workspaceId);
   const { access } = useTableAccess(workspaceId, tableId);
+  const { exportCsv, isExporting } = useExportTableCsv(workspaceId, tableId);
 
   // Register custom field types for the field registry to resolve custom:slug types
   useEffect(() => {
@@ -733,6 +736,20 @@ export default function TableDetailPage() {
               title="Activity log"
             >
               <History className="h-4 w-4" />
+            </button>
+
+            <button
+              onClick={() => exportCsv()}
+              disabled={isExporting}
+              className="flex items-center gap-2 px-3 py-2 bg-muted hover:bg-accent border border-border text-foreground rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Export CSV"
+            >
+              {isExporting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              Export CSV
             </button>
 
             <button

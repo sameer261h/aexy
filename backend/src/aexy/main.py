@@ -94,6 +94,9 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Needed for the browser to read the filename off a downloaded
+        # response (e.g. CSV table export) — not exposed by default.
+        expose_headers=["Content-Disposition"],
     )
 
     # Usage tracking middleware for API call metering
