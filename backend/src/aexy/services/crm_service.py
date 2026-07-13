@@ -27,7 +27,7 @@ from aexy.models.crm import (
     CRMPipelineStage,
     CRMStageHistory,
 )
-from aexy.services.data_table_service import DataTableService
+from aexy.services.data_table_service import DataTableService, TableAccess
 from aexy.services.activity_logger import log_activity
 from aexy.services.notification_service import (
     extract_mentioned_user_ids,
@@ -824,6 +824,8 @@ class CRMRecordService:
         include_archived: bool = False,
         limit: int = 50,
         offset: int = 0,
+        access: TableAccess | None = None,
+        user_id: str | None = None,
     ) -> tuple[list[CRMRecord], int]:
         """List records with filtering, free-text search, and sorting."""
         return await self.dts.list_records(
@@ -835,6 +837,8 @@ class CRMRecordService:
             include_archived=include_archived,
             limit=limit,
             offset=offset,
+            access=access,
+            user_id=user_id,
         )
 
     async def update_record(

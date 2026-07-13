@@ -604,6 +604,11 @@ class DataTableService:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    # Non-attribute fields _apply_filters/_apply_sorts special-case rather
+    # than looking up in CRMAttribute -- always permitted (subject to the
+    # display_name hidden-primary check below), never looked up by slug.
+    BUILTIN_QUERY_FIELDS = {"created_at", "updated_at", "display_name"}
+
     async def _assert_query_permission(
         self,
         table_id: str,
@@ -624,21 +629,43 @@ class DataTableService:
         if named_in_hidden:
             raise ValueError(f"cannot query hidden attribute(s): {sorted(named_in_hidden)}")
 
-        attrs_result = await self.db.execute(
-            select(CRMAttribute.slug, CRMAttribute.is_filterable, CRMAttribute.is_sortable).where(
-                CRMAttribute.object_id == table_id, CRMAttribute.slug.in_(referenced)
-            )
-        )
-        by_slug = {row[0]: (row[1], row[2]) for row in attrs_result.all()}
+        # display_name mirrors the primary attribute's value (see
+        # _compute_display_name) -- querying by it can leak a hidden
+        # attribute's value/ordering the same way searching by it could,
+        # so gate it against the same hidden-primary check _apply_search uses.
+        if "display_name" in referenced:
+            primary_slug = await self.get_primary_attribute_slug(table_id)
+            if primary_slug is None or primary_slug in hidden:
+                raise ValueError("cannot query hidden attribute(s): ['display_name']")
 
+        lookup_slugs = referenced - self.BUILTIN_QUERY_FIELDS
+        by_slug: dict[str, tuple[bool, bool]] = {}
+        if lookup_slugs:
+            attrs_result = await self.db.execute(
+                select(CRMAttribute.slug, CRMAttribute.is_filterable, CRMAttribute.is_sortable).where(
+                    CRMAttribute.object_id == table_id, CRMAttribute.slug.in_(lookup_slugs)
+                )
+            )
+            by_slug = {row[0]: (row[1], row[2]) for row in attrs_result.all()}
+
+        # Records can carry JSONB keys with no matching CRMAttribute row --
+        # this table is deliberately schemaless for values not formally
+        # registered via add_field() (see test_13_row_security_independent_
+        # from_user_filters). A slug with no CRMAttribute is therefore
+        # permitted by default, same as before this method existed; only a
+        # *registered* attribute's is_filterable/is_sortable=False is enforced.
         filter_slugs = {f.get("attribute") for f in (filters or []) if f.get("attribute")}
         for slug in filter_slugs:
+            if slug in self.BUILTIN_QUERY_FIELDS:
+                continue
             is_filterable, _ = by_slug.get(slug, (True, True))
             if not is_filterable:
                 raise ValueError(f"attribute {slug!r} is not filterable")
 
         sort_slugs = {s.get("attribute") for s in (sorts or []) if s.get("attribute")}
         for slug in sort_slugs:
+            if slug in self.BUILTIN_QUERY_FIELDS:
+                continue
             _, is_sortable = by_slug.get(slug, (True, True))
             if not is_sortable:
                 raise ValueError(f"attribute {slug!r} is not sortable")
@@ -1065,6 +1092,46 @@ class DataTableService:
 
         return None
 
+    async def get_primary_attribute_slug(self, table_id: str) -> str | None:
+        """Slug of the table's primary attribute, or None if unset."""
+        primary_attribute_id = (
+            await self.db.execute(
+                select(CRMObject.primary_attribute_id).where(CRMObject.id == table_id)
+            )
+        ).scalar_one_or_none()
+        if not primary_attribute_id:
+            return None
+        return (
+            await self.db.execute(
+                select(CRMAttribute.slug).where(CRMAttribute.id == primary_attribute_id)
+            )
+        ).scalar_one_or_none()
+
+    @staticmethod
+    def redact_record_for_access(
+        values: dict[str, Any],
+        display_name: str | None,
+        access: "TableAccess | None",
+        primary_slug: str | None,
+    ) -> tuple[dict[str, Any], str | None]:
+        """Strip hidden-column data from a record's values and display_name.
+
+        display_name is a stored copy of the primary attribute's value (see
+        _compute_display_name) -- filtering values alone doesn't stop it
+        leaking the same data back out. Redact it whenever its source
+        attribute is hidden; when no primary attribute is set, the
+        fallback source is unpredictable, so redact conservatively.
+        """
+        if access is None or not access.hidden_columns:
+            return values, display_name
+        hidden = set(access.hidden_columns)
+        filtered_values = {k: v for k, v in values.items() if k not in hidden}
+        if primary_slug is not None and primary_slug not in hidden:
+            filtered_display_name = display_name
+        else:
+            filtered_display_name = None
+        return filtered_values, filtered_display_name
+
     @staticmethod
     def _escape_like(value: str) -> str:
         """Escape special LIKE/ILIKE characters to prevent wildcard injection."""
@@ -1179,20 +1246,10 @@ class DataTableService:
         # fallback. Only search it when that source is provably not
         # hidden; if no primary attribute is set, any hidden text
         # attribute could have been the source, so skip it conservatively.
-        primary_attribute_id = (
-            await self.db.execute(
-                select(CRMObject.primary_attribute_id).where(CRMObject.id == table_id)
-            )
-        ).scalar_one_or_none()
-        if primary_attribute_id:
-            primary_slug = (
-                await self.db.execute(
-                    select(CRMAttribute.slug).where(CRMAttribute.id == primary_attribute_id)
-                )
-            ).scalar_one_or_none()
-            display_name_safe = primary_slug is not None and primary_slug not in exclude_slugs
-        else:
-            display_name_safe = not exclude_slugs
+        primary_slug = await self.get_primary_attribute_slug(table_id)
+        display_name_safe = (
+            primary_slug not in exclude_slugs if primary_slug is not None else not exclude_slugs
+        )
 
         if display_name_safe:
             conditions.append(CRMRecord.display_name.ilike(pattern))

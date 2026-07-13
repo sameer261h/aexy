@@ -540,36 +540,39 @@ async def query_records(
             for s in data.sorts
         ]
 
-    records, total = await service.list_records(
-        table_id=table_id,
-        workspace_id=workspace_id,
-        filters=filters_dicts,
-        sorts=sorts_dicts,
-        search=data.q.strip() if data.q and data.q.strip() else None,
-        include_archived=data.include_archived,
-        limit=data.limit,
-        offset=data.offset,
-        access=access,
-        user_id=str(current_user.id),
-    )
+    try:
+        records, total = await service.list_records(
+            table_id=table_id,
+            workspace_id=workspace_id,
+            filters=filters_dicts,
+            sorts=sorts_dicts,
+            search=data.q.strip() if data.q and data.q.strip() else None,
+            include_archived=data.include_archived,
+            limit=data.limit,
+            offset=data.offset,
+            access=access,
+            user_id=str(current_user.id),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    primary_slug = await service.get_primary_attribute_slug(table_id)
+    record_responses = []
+    for r in records:
+        values, display_name = service.redact_record_for_access(r.values, r.display_name, access, primary_slug)
+        record_responses.append(CRMRecordListResponse(
+            id=str(r.id),
+            object_id=str(r.object_id),
+            values=values,
+            display_name=display_name,
+            owner_id=str(r.owner_id) if r.owner_id else None,
+            is_archived=r.is_archived,
+            created_at=r.created_at,
+            updated_at=r.updated_at,
+        ))
 
     return {
-        "records": [
-            CRMRecordListResponse(
-                id=str(r.id),
-                object_id=str(r.object_id),
-                values={
-                    k: v for k, v in r.values.items()
-                    if k not in access.hidden_columns
-                },
-                display_name=r.display_name,
-                owner_id=str(r.owner_id) if r.owner_id else None,
-                is_archived=r.is_archived,
-                created_at=r.created_at,
-                updated_at=r.updated_at,
-            )
-            for r in records
-        ],
+        "records": record_responses,
         "total": total,
         "limit": data.limit,
         "offset": data.offset,
@@ -604,23 +607,23 @@ async def list_records(
         user_id=str(current_user.id),
     )
 
+    primary_slug = await service.get_primary_attribute_slug(table_id)
+    record_responses = []
+    for r in records:
+        values, display_name = service.redact_record_for_access(r.values, r.display_name, access, primary_slug)
+        record_responses.append(CRMRecordListResponse(
+            id=str(r.id),
+            object_id=str(r.object_id),
+            values=values,
+            display_name=display_name,
+            owner_id=str(r.owner_id) if r.owner_id else None,
+            is_archived=r.is_archived,
+            created_at=r.created_at,
+            updated_at=r.updated_at,
+        ))
+
     return {
-        "records": [
-            CRMRecordListResponse(
-                id=str(r.id),
-                object_id=str(r.object_id),
-                values={
-                    k: v for k, v in r.values.items()
-                    if k not in access.hidden_columns
-                },
-                display_name=r.display_name,
-                owner_id=str(r.owner_id) if r.owner_id else None,
-                is_archived=r.is_archived,
-                created_at=r.created_at,
-                updated_at=r.updated_at,
-            )
-            for r in records
-        ],
+        "records": record_responses,
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -656,13 +659,15 @@ async def create_record(
         raise HTTPException(status_code=404, detail="Table not found")
 
     await db.commit()
+    primary_slug = await service.get_primary_attribute_slug(table_id)
+    values, display_name = service.redact_record_for_access(record.values, record.display_name, access, primary_slug)
     return CRMRecordResponse(
         id=str(record.id),
         workspace_id=str(record.workspace_id),
         object_id=str(record.object_id),
-        # Same hidden-column filtering as the read path -- see update_record().
-        values={k: v for k, v in record.values.items() if k not in access.hidden_columns},
-        display_name=record.display_name,
+        # Same hidden-column/display_name filtering as the read path -- see update_record().
+        values=values,
+        display_name=display_name,
         owner_id=str(record.owner_id) if record.owner_id else None,
         created_by_id=str(record.created_by_id) if record.created_by_id else None,
         is_archived=record.is_archived,
@@ -707,16 +712,18 @@ async def update_record(
         raise HTTPException(status_code=404, detail="Record not found")
 
     await db.commit()
+    primary_slug = await service.get_primary_attribute_slug(table_id)
+    values, display_name = service.redact_record_for_access(record.values, record.display_name, access, primary_slug)
     return CRMRecordResponse(
         id=str(record.id),
         workspace_id=str(record.workspace_id),
         object_id=str(record.object_id),
-        # Same hidden-column filtering as the read path (list_records'
-        # response construction) -- an edit collaborator who can write a
-        # permitted field must not get every other hidden value back for
-        # free in the response to that same write.
-        values={k: v for k, v in record.values.items() if k not in access.hidden_columns},
-        display_name=record.display_name,
+        # Same hidden-column/display_name filtering as the read path
+        # (list_records' response construction) -- an edit collaborator
+        # who can write a permitted field must not get every other hidden
+        # value back for free in the response to that same write.
+        values=values,
+        display_name=display_name,
         owner_id=str(record.owner_id) if record.owner_id else None,
         created_by_id=str(record.created_by_id) if record.created_by_id else None,
         is_archived=record.is_archived,

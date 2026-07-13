@@ -183,11 +183,14 @@ async def test_table_and_field_get_routes_pass_workspace_to_scoped_lookup(
     assert (await client.get(foreign_url, headers=headers)).status_code == 404
     assert (await client.get(f"{foreign_url}/fields", headers=headers)).status_code == 404
 
+    # table_b's requests never reach DataTableService.get_table at all:
+    # service.auth.check_access() now runs first and 404s cross-workspace
+    # tables before the endpoint gets to the get_table() call this test
+    # spies on -- a strictly earlier rejection than the old behavior of
+    # relying on get_table()'s own workspace-scoped query to return None.
     assert observed == [
         (data["table_a"].id, data["ws_a"].id),
         (data["table_a"].id, data["ws_a"].id),
-        (data["table_b"].id, data["ws_a"].id),
-        (data["table_b"].id, data["ws_a"].id),
     ]
 
 
