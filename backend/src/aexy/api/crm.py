@@ -1448,6 +1448,17 @@ async def query_records(
     """Query CRM records with server-side filtering and sorting."""
     await check_workspace_permission(workspace_id, current_user, db)
 
+    # The filter engine (_apply_filters) ANDs every condition unconditionally
+    # -- it has no OR-grouping implementation. Silently dropping a caller's
+    # conjunction: "or" and running it as AND returns wrong data with no
+    # error, which is worse than rejecting it outright. Reject until the
+    # engine actually supports OR grouping.
+    if data.filters and any(f.conjunction == "or" for f in data.filters):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OR-conjunction filters are not yet supported; only AND is implemented",
+        )
+
     filters_dicts: list[dict] | None = None
     if data.filters:
         filters_dicts = [
@@ -1845,8 +1856,9 @@ async def update_note(
     await _assert_record_in_workspace(db, workspace_id, record_id)
 
     service = CRMNoteService(db)
-    note = await service.update_note(
+    note = await service.update_note_in_record(
         note_id=note_id,
+        record_id=record_id,
         content=data.content,
         is_pinned=data.is_pinned,
     )
@@ -1883,7 +1895,7 @@ async def delete_note(
     await _assert_record_in_workspace(db, workspace_id, record_id)
 
     service = CRMNoteService(db)
-    if not await service.delete_note(note_id):
+    if not await service.delete_note_in_record(note_id, record_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Note not found",

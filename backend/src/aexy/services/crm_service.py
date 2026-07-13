@@ -1535,10 +1535,27 @@ class CRMNoteService:
         return note
 
     async def get_note(self, note_id: str) -> CRMNote | None:
-        """Get a note by ID."""
+        """Get a note by ID, unscoped. Only for callers that immediately
+        re-derive and verify the record/workspace from the returned note
+        itself (the /notes/{note_id} by-ID routes) -- everything else must
+        use get_note_in_record(), which takes record_id as required, not
+        optional, so scope can't be silently forgotten."""
         stmt = (
             select(CRMNote)
             .where(CRMNote.id == note_id)
+            .options(selectinload(CRMNote.author))
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_note_in_record(self, note_id: str, record_id: str) -> CRMNote | None:
+        """Get a note by ID, bound to a specific record. record_id is
+        required (not Optional[None]) so a note belonging to a different
+        record can never be addressed by pairing a valid record_id with an
+        unrelated note_id -- the exact "scoping fails open" pattern to avoid."""
+        stmt = (
+            select(CRMNote)
+            .where(CRMNote.id == note_id, CRMNote.record_id == record_id)
             .options(selectinload(CRMNote.author))
         )
         result = await self.db.execute(stmt)
@@ -1561,7 +1578,8 @@ class CRMNoteService:
         content: str | None = None,
         is_pinned: bool | None = None,
     ) -> CRMNote | None:
-        """Update a note."""
+        """Update a note by ID only. Only for callers that already verified
+        scope from the note itself -- see get_note()/get_note_in_record()."""
         note = await self.get_note(note_id)
         if not note:
             return None
@@ -1575,9 +1593,43 @@ class CRMNoteService:
         await self.db.refresh(note)
         return note
 
+    async def update_note_in_record(
+        self,
+        note_id: str,
+        record_id: str,
+        content: str | None = None,
+        is_pinned: bool | None = None,
+    ) -> CRMNote | None:
+        """Update a note bound to a specific record. record_id required --
+        see get_note_in_record()."""
+        note = await self.get_note_in_record(note_id, record_id)
+        if not note:
+            return None
+
+        if content is not None:
+            note.content = content
+        if is_pinned is not None:
+            note.is_pinned = is_pinned
+
+        await self.db.flush()
+        await self.db.refresh(note)
+        return note
+
     async def delete_note(self, note_id: str) -> bool:
-        """Delete a note."""
+        """Delete a note by ID only. Only for callers that already verified
+        scope from the note itself -- see get_note()/get_note_in_record()."""
         note = await self.get_note(note_id)
+        if not note:
+            return False
+
+        await self.db.delete(note)
+        await self.db.flush()
+        return True
+
+    async def delete_note_in_record(self, note_id: str, record_id: str) -> bool:
+        """Delete a note bound to a specific record. record_id required --
+        see get_note_in_record()."""
+        note = await self.get_note_in_record(note_id, record_id)
         if not note:
             return False
 

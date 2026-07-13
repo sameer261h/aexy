@@ -16,7 +16,12 @@ from aexy.services.crm_pipeline_service import (
     StageMovementService,
     StageService,
 )
-from aexy.services.crm_service import CRMAttributeService, CRMObjectService, CRMRecordService
+from aexy.services.crm_service import (
+    CRMAttributeService,
+    CRMNoteService,
+    CRMObjectService,
+    CRMRecordService,
+)
 from aexy.services.data_table_service import DataTableService
 from aexy.services.table_audit_service import TableShareService
 
@@ -325,3 +330,77 @@ async def test_share_link_revocation_is_table_bound(db_session):
     ).scalar_one()
     assert persisted_other.is_active is True
     assert persisted_foreign.is_active is True
+
+
+@pytest.mark.asyncio
+async def test_note_mutation_is_bound_to_its_own_record(db_session):
+    """A note update/delete must fail if note_id and record_id are a valid
+    pair from two DIFFERENT records/workspaces, not just individually real."""
+    ws_a, user_a = await _workspace(db_session, "notes-a")
+    ws_b, user_b = await _workspace(db_session, "notes-b")
+    obj_a = await CRMObjectService(db_session).create_object(
+        workspace_id=ws_a.id, name="Leads", plural_name="Leads",
+    )
+    obj_b = await CRMObjectService(db_session).create_object(
+        workspace_id=ws_b.id, name="Leads", plural_name="Leads",
+    )
+    record_a = await CRMRecordService(db_session).create_record(
+        workspace_id=ws_a.id, object_id=obj_a.id, values={}, owner_id=user_a.id,
+    )
+    record_b = await CRMRecordService(db_session).create_record(
+        workspace_id=ws_b.id, object_id=obj_b.id, values={}, owner_id=user_b.id,
+    )
+    note_svc = CRMNoteService(db_session)
+    note_on_b = await note_svc.create_note(record_id=record_b.id, content="secret", author_id=user_b.id)
+    await db_session.flush()
+
+    # Pairing a real record_id (A's) with a real but foreign note_id (B's
+    # note) must not succeed -- this is the exact cross-tenant path.
+    assert await note_svc.get_note_in_record(note_on_b.id, record_a.id) is None
+    assert await note_svc.update_note_in_record(note_on_b.id, record_a.id, content="pwned") is None
+    assert await note_svc.delete_note_in_record(note_on_b.id, record_a.id) is False
+
+    persisted = (
+        await db_session.execute(select(CRMRecord).where(CRMRecord.id == record_b.id))
+    ).scalar_one()
+    assert persisted is not None  # record_b untouched
+    still_there = await note_svc.get_note_in_record(note_on_b.id, record_b.id)
+    assert still_there is not None
+    assert still_there.content == "secret"  # note_b untouched, not "pwned"
+
+    # The correct pairing still works.
+    updated = await note_svc.update_note_in_record(note_on_b.id, record_b.id, content="updated")
+    assert updated is not None
+    assert updated.content == "updated"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_creation_rejects_foreign_object_id(db_session):
+    """Creating a pipeline with an object_id from a DIFFERENT workspace must
+    fail, not silently create a real STATUS attribute on the foreign object."""
+    ws_a, user_a = await _workspace(db_session, "pipe-a")
+    ws_b, _ = await _workspace(db_session, "pipe-b")
+    obj_b = await CRMObjectService(db_session).create_object(
+        workspace_id=ws_b.id, name="Deals", plural_name="Deals",
+    )
+    before_count = len((await CRMAttributeService(db_session).list_attributes(obj_b.id)))
+
+    with pytest.raises(ValueError, match="object_id must belong to workspace_id"):
+        await PipelineService(db_session).create_pipeline(
+            workspace_id=ws_a.id,
+            object_id=obj_b.id,
+            name="Hijacked Pipeline",
+            created_by_id=user_a.id,
+        )
+
+    after_count = len((await CRMAttributeService(db_session).list_attributes(obj_b.id)))
+    assert after_count == before_count  # no STATUS attribute was created on the foreign object
+
+    # A legitimate same-workspace pipeline still works.
+    obj_a = await CRMObjectService(db_session).create_object(
+        workspace_id=ws_a.id, name="Deals", plural_name="Deals",
+    )
+    pipeline = await PipelineService(db_session).create_pipeline(
+        workspace_id=ws_a.id, object_id=obj_a.id, name="Real Pipeline", created_by_id=user_a.id,
+    )
+    assert pipeline.object_id == obj_a.id

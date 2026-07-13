@@ -226,6 +226,17 @@ class PipelineService:
         - otherwise a new STATUS attribute named ``status_attribute_name`` is
           created and populated from ``stages`` (or DEFAULT_STAGES).
         """
+        # object_id is caller-supplied (request body) -- must be proven to
+        # belong to workspace_id before any mutation. Without this, an admin
+        # of one workspace can pass another workspace's object_id and create
+        # a real STATUS attribute on a foreign object's schema.
+        object_stmt = select(CRMObject).where(
+            CRMObject.id == object_id, CRMObject.workspace_id == workspace_id
+        )
+        target_object = (await self.db.execute(object_stmt)).scalar_one_or_none()
+        if target_object is None:
+            raise ValueError("object_id must belong to workspace_id")
+
         # Resolve / create the managed STATUS attribute.
         if adopt_attribute_id:
             attr = await self.attr_service.get_attribute(adopt_attribute_id)
