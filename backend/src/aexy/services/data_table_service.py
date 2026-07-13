@@ -5,6 +5,7 @@ their table/record CRUD to this service. Module-specific logic (automations,
 activity logging, domain events) stays in the module service.
 """
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -23,6 +24,14 @@ from aexy.models.crm import (
     CRMListEntry,
     CRMAttributeType,
     TableCollaborator,
+)
+from aexy.llm.gateway import get_llm_gateway
+
+AI_AUTOFILL_SYSTEM_PROMPT = (
+    "You are a data-classification assistant. Given a record's field values "
+    "and a classification instruction, respond with ONLY the single "
+    "best-matching label -- no explanation, no punctuation beyond the label "
+    "itself."
 )
 
 
@@ -700,6 +709,125 @@ class DataTableService:
         # Attach changes as transient attribute for caller inspection
         record._changes = changes  # type: ignore[attr-defined]
         return record
+
+    async def run_ai_autofill(
+        self,
+        *,
+        table_id: str,
+        attribute_id: str,
+        workspace_id: str,
+        record_ids: list[str] | None = None,
+        llm_gateway: Any | None = None,
+    ) -> dict[str, Any]:
+        """Run an `ai_computed` attribute's classification prompt against
+        records and write results back to CRMRecord.values.
+
+        Generic over every module that delegates to DataTableService (CRM,
+        Standalone Tables, Document Databases, Sprint fields) -- keyed only
+        on table_id/attribute_id, no CRM-specific concept involved, so a
+        Dev-module or Documentation-module table gets this for free too.
+
+        Attribute config shape (see CRMAttributeType.AI_COMPUTED):
+          {"prompt": str, "inputAttributes": list[str] | None,
+           "allowNewOptions": bool, "options": [{"value","label","color"}]}
+        `inputAttributes` of None means "use every value on the record."
+        """
+        table = await self.get_table(table_id, workspace_id)
+        if table is None:
+            raise ValueError(f"table {table_id} not found")
+        # Query directly rather than trust table.attributes -- that relationship
+        # collection can be cached stale in the identity map within a session
+        # that already touched it before this attribute existed (observed in
+        # testing: an empty-collection snapshot persists across a same-session
+        # selectinload refetch of the same identity-mapped object).
+        attr_stmt = select(CRMAttribute).where(
+            CRMAttribute.id == attribute_id, CRMAttribute.object_id == table_id
+        )
+        attribute = (await self.db.execute(attr_stmt)).scalar_one_or_none()
+        if attribute is None:
+            raise ValueError(f"attribute {attribute_id} not found on table {table_id}")
+        if attribute.attribute_type != CRMAttributeType.AI_COMPUTED.value:
+            raise ValueError(f"attribute {attribute_id} is not an ai_computed attribute")
+
+        config = attribute.config or {}
+        prompt_instruction = config.get("prompt", "")
+        input_slugs = config.get("inputAttributes") or None
+        allow_new_options = bool(config.get("allowNewOptions", False))
+        options = list(config.get("options", []))
+
+        records, _ = await self.list_records(
+            table_id=table_id,
+            workspace_id=workspace_id,
+            limit=len(record_ids) if record_ids else 1000,
+        )
+        if record_ids:
+            wanted = set(record_ids)
+            records = [r for r in records if str(r.id) in wanted]
+
+        gateway = llm_gateway if llm_gateway is not None else get_llm_gateway()
+        results: dict[str, Any] = {"classified": 0, "skipped": 0, "new_options_added": [], "errors": []}
+        if gateway is None:
+            results["errors"].append("LLM gateway unavailable")
+            return results
+
+        for record in records:
+            input_values = (
+                record.values
+                if input_slugs is None
+                else {k: v for k, v in record.values.items() if k in input_slugs}
+            )
+            option_labels = [opt["label"] for opt in options]
+            user_prompt = (
+                f"Classification instruction: {prompt_instruction}\n\n"
+                f"Record fields: {json.dumps(input_values, default=str)}\n\n"
+                f"Allowed options: {option_labels}\n"
+                + (
+                    "You may propose a new short label if none fit well.\n"
+                    if allow_new_options
+                    else "You must pick exactly one of the allowed options.\n"
+                )
+            )
+            try:
+                response, _, _, _ = await gateway.provider._call_api(
+                    AI_AUTOFILL_SYSTEM_PROMPT, user_prompt
+                )
+            except Exception as exc:  # pragma: no cover - defensive, provider-specific
+                results["errors"].append(f"{record.id}: {exc}")
+                continue
+
+            label = response.strip().strip('"').strip()
+            matched = next(
+                (opt for opt in options if opt["label"].lower() == label.lower()), None
+            )
+            if matched is None:
+                if not allow_new_options:
+                    results["skipped"] += 1
+                    continue
+                # Lazy import: crm_service imports DataTableService, so a
+                # top-level import here would be circular.
+                from aexy.services.crm_service import generate_attribute_slug
+
+                matched = {
+                    "value": generate_attribute_slug(label),
+                    "label": label,
+                    "color": "#94a3b8",
+                }
+                options.append(matched)
+                results["new_options_added"].append(label)
+
+            await self.update_record(
+                str(record.id),
+                values={attribute.slug: matched["value"]},
+                table_id=table_id,
+                workspace_id=workspace_id,
+            )
+            results["classified"] += 1
+
+        if results["new_options_added"]:
+            attribute.config = {**config, "options": options}
+            await self.db.flush()
+
+        return results
 
     async def delete_record(
         self,
