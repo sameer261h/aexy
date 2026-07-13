@@ -8,6 +8,7 @@ import {
   Activity,
   Calendar,
   Building2,
+  Users,
   Zap,
   Settings,
 } from "lucide-react";
@@ -41,9 +42,13 @@ export function CRMNav() {
   const companyObject = objects?.find((object) => object.object_type === "company");
   const companiesHref = companyObject ? `/crm/${companyObject.slug}` : "/crm/company";
 
+  const personObject = objects?.find((object) => object.object_type === "person");
+  const peopleHref = personObject ? `/crm/${personObject.slug}` : "/crm/person";
+
   const items: NavItem[] = [
     ...staticItems,
     { href: companiesHref, label: "Companies", icon: Building2 },
+    { href: peopleHref, label: "People", icon: Users },
     ...trailingItems,
   ];
 
