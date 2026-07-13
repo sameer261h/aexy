@@ -21,9 +21,11 @@ import {
   RecordTabId,
   NotesTabContent,
   ActivityTabContent,
-  RelatedTabContent,
   OverviewTabContent,
 } from "@/components/crm/RecordTabs";
+import { RelationshipsPanel } from "@/components/crm/relationships/RelationshipsPanel";
+import { BacklinksPanel } from "@/components/crm/relationships/BacklinksPanel";
+import { useRecordRelationships, useRecordBacklinks } from "@/hooks/useCRMRelationships";
 
 export default function RecordDetailPage() {
   const router = useRouter();
@@ -66,6 +68,17 @@ export default function RecordDetailPage() {
     workspaceId,
     recordId
   );
+
+  // Relationship counts for the "Related" tab badge -- same queries the
+  // panels below run, so react-query dedupes them rather than double-fetching.
+  const { groups: relationshipGroups } = useRecordRelationships(
+    workspaceId, currentObject?.id || null, recordId
+  );
+  const { total: backlinksTotal } = useRecordBacklinks(
+    workspaceId, currentObject?.id || null, recordId
+  );
+  const relatedCount =
+    relationshipGroups.reduce((sum, g) => sum + g.total, 0) + backlinksTotal;
 
   // UI State
   const [isEditing, setIsEditing] = useState(false);
@@ -220,6 +233,8 @@ export default function RecordDetailPage() {
               record={record}
               attributes={attributes}
               maxCards={6}
+              relationshipGroups={relationshipGroups}
+              objects={objects}
             />
           </div>
 
@@ -230,7 +245,7 @@ export default function RecordDetailPage() {
               onTabChange={setActiveTab}
               notesCount={notes.length}
               activitiesCount={activities.length}
-              relatedCount={0}
+              relatedCount={relatedCount}
             />
           </div>
 
@@ -270,12 +285,27 @@ export default function RecordDetailPage() {
             )}
 
             {activeTab === "related" && (
-              <RelatedTabContent
-                relatedRecords={[]}
-                onRecordClick={(related) =>
-                  router.push(`/crm/${related.object_slug}/${related.id}`)
-                }
-              />
+              <div className="space-y-8">
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground mb-3">Relationships</h3>
+                  <RelationshipsPanel
+                    workspaceId={workspaceId}
+                    objectId={currentObject?.id || null}
+                    recordId={recordId}
+                    objects={objects}
+                  />
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground mb-3">Referenced by</h3>
+                  <BacklinksPanel
+                    workspaceId={workspaceId}
+                    objectId={currentObject?.id || null}
+                    recordId={recordId}
+                    objects={objects}
+                  />
+                </div>
+              </div>
             )}
           </div>
         </div>
@@ -292,6 +322,8 @@ export default function RecordDetailPage() {
           notes={notes}
           onTogglePin={handleTogglePin}
           onDeleteNote={handleDeleteNote}
+          relationshipGroups={relationshipGroups}
+          objects={objects}
         />
       </div>
 

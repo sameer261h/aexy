@@ -15,8 +15,9 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CRMRecord, CRMAttribute } from "@/lib/api";
+import { CRMRecord, CRMAttribute, CRMObject, RelationshipGroup } from "@/lib/api";
 import { FieldRenderer } from "@/components/fields";
+import { RelationshipFieldValue } from "@/components/crm/relationships/RelationshipFieldValue";
 
 interface HighlightCardProps {
   icon: React.ReactNode;
@@ -61,6 +62,9 @@ interface RecordHighlightsProps {
   attributes: CRMAttribute[];
   highlightAttributes?: string[]; // Attribute slugs to highlight
   maxCards?: number;
+  // Already-loaded relationship groups for `record_reference` attributes.
+  relationshipGroups?: RelationshipGroup[];
+  objects?: CRMObject[];
   className?: string;
 }
 
@@ -99,8 +103,25 @@ function getAttributeIcon(type: string, slug: string) {
   }
 }
 
-// Format value for display — delegates to shared FieldRenderer
-function formatValue(value: unknown, attribute: CRMAttribute): React.ReactNode {
+// Format value for display — delegates to shared FieldRenderer, except
+// `record_reference` which needs already-resolved relationship data instead
+// of the raw stored ID(s).
+function formatValue(
+  value: unknown,
+  attribute: CRMAttribute,
+  relationshipGroups: RelationshipGroup[],
+  objects: CRMObject[]
+): React.ReactNode {
+  if (attribute.attribute_type === "record_reference") {
+    return (
+      <RelationshipFieldValue
+        attribute={attribute}
+        groups={relationshipGroups}
+        objects={objects}
+        surface="highlights"
+      />
+    );
+  }
   return <FieldRenderer value={value} attribute={attribute} surface="highlights" />;
 }
 
@@ -125,6 +146,8 @@ export function RecordHighlights({
   attributes,
   highlightAttributes,
   maxCards = 6,
+  relationshipGroups = [],
+  objects = [],
   className,
 }: RecordHighlightsProps) {
   // Determine which attributes to show
@@ -174,7 +197,7 @@ export function RecordHighlights({
             key={attr.slug}
             icon={getAttributeIcon(attr.attribute_type, attr.slug)}
             label={attr.name}
-            value={formatValue(value, attr)}
+            value={formatValue(value, attr, relationshipGroups, objects)}
             href={getValueHref(value, attr)}
           />
         );
@@ -187,10 +210,14 @@ export function RecordHighlights({
 export function RecordHighlightsCompact({
   record,
   attributes,
+  relationshipGroups = [],
+  objects = [],
   className,
 }: {
   record: CRMRecord;
   attributes: CRMAttribute[];
+  relationshipGroups?: RelationshipGroup[];
+  objects?: CRMObject[];
   className?: string;
 }) {
   const attrsWithValues = attributes.filter(
@@ -206,7 +233,7 @@ export function RecordHighlightsCompact({
       {attrsWithValues.map((attr) => {
         const value = record.values[attr.slug];
         const href = getValueHref(value, attr);
-        const formattedValue = formatValue(value, attr);
+        const formattedValue = formatValue(value, attr, relationshipGroups, objects);
 
         return (
           <div key={attr.slug} className="flex items-start gap-3">

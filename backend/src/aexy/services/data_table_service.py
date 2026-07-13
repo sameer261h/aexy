@@ -682,6 +682,7 @@ class DataTableService:
         offset: int = 0,
         access: TableAccess | None = None,
         user_id: str | None = None,
+        exclude_ids: list[str] | None = None,
     ) -> tuple[list[CRMRecord], int]:
         """List records with filtering, free-text search, sorting, pagination, and row security."""
         table = await self.get_table(table_id)
@@ -721,6 +722,11 @@ class DataTableService:
         if search:
             hidden = set(access.hidden_columns) if access else set()
             stmt = await self._apply_search(stmt, table_id, search, exclude_slugs=hidden)
+
+        # Exclude specific record IDs (e.g. the current record, or already-
+        # related IDs, when this is used as a relationship candidate search)
+        if exclude_ids:
+            stmt = stmt.where(~CRMRecord.id.in_(exclude_ids))
 
         # Count
         count_stmt = select(func.count()).select_from(stmt.subquery())
