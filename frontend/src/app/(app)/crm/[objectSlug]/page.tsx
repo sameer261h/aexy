@@ -12,6 +12,7 @@ import {
   LayoutGrid,
   Target,
   Settings,
+  Upload,
 } from "lucide-react";
 import { SearchInput } from "@/components/ui/search-input";
 import { useWorkspace } from "@/hooks/useWorkspace";
@@ -27,6 +28,7 @@ import { PipelineBoard } from "@/components/crm/PipelineBoard";
 import { ColumnVisibilityMenu } from "@/components/crm/ColumnSelector";
 import { FieldEditor } from "@/components/fields";
 import { TableFilterPanel, FilterRule } from "@/components/tables";
+import { ImportCsvModal } from "@/components/crm/ImportCsvModal";
 
 const PAGE_LIMIT = 50;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -271,6 +273,7 @@ export default function RecordsPage() {
   const [offset, setOffset] = useState(0);
   const [selectedRecords, setSelectedRecords] = useState<string[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [createDefaultValues, setCreateDefaultValues] = useState<Record<string, unknown>>({});
   const [sortConfig, setSortConfig] = useState<{ attribute: string; direction: "asc" | "desc" } | null>(null);
 
@@ -330,6 +333,7 @@ export default function RecordsPage() {
     bulkDeleteRecords,
     isCreating,
     isDeleting,
+    refetch: refetchRecords,
   } = useCRMRecords(workspaceId, currentObject?.id || null, {
     sorts: sortConfig ? [{ attribute: sortConfig.attribute, direction: sortConfig.direction }] : undefined,
     filters: queryFilters.length ? queryFilters : undefined,
@@ -541,6 +545,16 @@ export default function RecordsPage() {
               availableViews={availableViews}
             />
 
+            {currentObject && (
+              <button
+                onClick={() => setShowImportModal(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-muted hover:bg-accent border border-border text-foreground rounded-lg transition-colors"
+              >
+                <Upload className="h-4 w-4" />
+                Import CSV
+              </button>
+            )}
+
             <button
               onClick={() => {
                 setCreateDefaultValues({});
@@ -683,6 +697,16 @@ export default function RecordsPage() {
               isCreating={isCreating}
               object={currentObject}
               defaultValues={createDefaultValues}
+            />
+          )}
+
+          {currentObject && workspaceId && (
+            <ImportCsvModal
+              isOpen={showImportModal}
+              onClose={() => setShowImportModal(false)}
+              workspaceId={workspaceId}
+              object={currentObject}
+              onImported={() => refetchRecords()}
             />
           )}
         </div>

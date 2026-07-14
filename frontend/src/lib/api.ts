@@ -10119,6 +10119,20 @@ export const crmApi = {
       const response = await api.post(`/workspaces/${workspaceId}/crm/objects/recalculate-counts`);
       return response.data;
     },
+
+    importCsv: async (
+      workspaceId: string,
+      objectId: string,
+      data: { csv_content: string; skip_duplicates?: boolean }
+    ): Promise<{
+      job_id: string; status: string; total_rows: number; processed: number;
+      created: number; duplicates: number; invalid_emails: number; skipped: number;
+      errors: number; enrolled: number; unmapped_headers: string[];
+      rows: Array<{ row: number; email: string; status: string; record_id: string | null; duplicate_of: string | null; error: string | null }>;
+    }> => {
+      const response = await api.post(`/workspaces/${workspaceId}/crm/objects/${objectId}/import`, data);
+      return response.data;
+    },
   },
 
   // Attributes
