@@ -980,5 +980,36 @@ class TableAccessResponse(BaseModel):
     readonly_columns: list[str] = Field(default_factory=list)
 
 
+class CRMObjectImportRequest(BaseModel):
+    """Request to import CSV rows into an existing CRM object, mapped to its
+    real attribute schema (not a fixed contact-shaped column set)."""
+    csv_content: str = Field(..., max_length=10_000_000)
+    skip_duplicates: bool = True
+
+
+class CRMObjectImportRowResult(BaseModel):
+    row: int
+    email: str
+    status: str
+    record_id: str | None = None
+    duplicate_of: str | None = None
+    error: str | None = None
+
+
+class CRMObjectImportResponse(BaseModel):
+    job_id: str
+    status: str
+    total_rows: int
+    processed: int
+    created: int
+    duplicates: int
+    invalid_emails: int
+    skipped: int
+    errors: int
+    enrolled: int
+    unmapped_headers: list[str]
+    rows: list[CRMObjectImportRowResult]
+
+
 # Update forward references
 CRMObjectWithAttributesResponse.model_rebuild()

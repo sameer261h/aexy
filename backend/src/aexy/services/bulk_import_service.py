@@ -84,6 +84,7 @@ class ImportJob:
     rows: list[ImportRow] = field(default_factory=list)
     sequence_id: str | None = None
     enrolled: int = 0
+    unmapped_headers: list[str] = field(default_factory=list)
 
 
 class BulkImportService:
@@ -335,6 +336,190 @@ class BulkImportService:
                 job.errors += 1
 
         await self.db.flush()
+
+    # =========================================================================
+    # ATTRIBUTE-AWARE CRM OBJECT IMPORT (used by the CRM object grid's Import
+    # CSV action, as opposed to run_import() above which is GTM-specific and
+    # writes to a fixed, hardcoded set of contact-shaped keys via COLUMN_MAP).
+    #
+    # run_import() must stay untouched: GTM's own UI and outreach-sequence
+    # enrollment depend on its exact fixed-key contract. Reusing it for
+    # arbitrary CRM objects was the bug being fixed here — it writes
+    # values under keys like "full_name" while an attribute named "Name"
+    # slugifies to "name", so imported data would silently never render in
+    # the object's grid (record.values[attr.slug] would find nothing).
+    # This method instead resolves the destination object's *real*
+    # CRMAttribute slugs and writes values keyed by those, matching exactly
+    # what CRMObjectService/CRMAttributeService and the grid already expect.
+    # =========================================================================
+
+    async def run_import_into_crm_object(
+        self,
+        workspace_id: str,
+        object_id: str,
+        csv_content: str,
+        skip_duplicates: bool = True,
+    ) -> ImportJob:
+        """Import CSV rows into an existing CRM object using its real attribute
+        schema. Raises ValueError (caller maps to 4xx) for validation failures
+        that should block the whole import before any record is written:
+        object not found, empty CSV, or a required attribute with no mapped
+        column."""
+        from aexy.models.crm import CRMAttribute
+
+        obj = (await self.db.execute(
+            select(CRMObject).where(
+                and_(CRMObject.id == object_id, CRMObject.workspace_id == workspace_id)
+            )
+        )).scalar_one_or_none()
+        if obj is None:
+            raise ValueError("Target CRM object not found in this workspace")
+
+        attrs = (await self.db.execute(
+            select(CRMAttribute)
+            .where(CRMAttribute.object_id == object_id)
+            .order_by(CRMAttribute.position)
+        )).scalars().all()
+        if not attrs:
+            raise ValueError("Target CRM object has no attributes to import into")
+
+        reader = csv.DictReader(io.StringIO(csv_content))
+        headers = [h for h in (reader.fieldnames or []) if h]
+        if not headers:
+            raise ValueError("CSV has no header row")
+
+        def normalize(s: str) -> str:
+            return s.strip().lower().replace(" ", "_").replace("-", "_")
+
+        # Map each CSV header to a real attribute slug by matching against
+        # the attribute's own slug or name (case/whitespace-insensitive).
+        # Unmatched headers are recorded and ignored, never silently merged
+        # into a wrong key.
+        attrs_by_key = {}
+        for a in attrs:
+            attrs_by_key[normalize(a.slug)] = a
+            attrs_by_key[normalize(a.name)] = a
+
+        header_to_attr: dict[str, CRMAttribute] = {}
+        unmapped_headers: list[str] = []
+        for h in headers:
+            match = attrs_by_key.get(normalize(h))
+            if match:
+                header_to_attr[h] = match
+            else:
+                unmapped_headers.append(h)
+
+        mapped_slugs = {a.slug for a in header_to_attr.values()}
+        missing_required = [
+            a.name for a in attrs
+            if a.is_required and a.slug not in mapped_slugs
+        ]
+        if missing_required:
+            raise ValueError(
+                "CSV is missing a column for required field(s): "
+                + ", ".join(missing_required)
+            )
+
+        email_attr = next(
+            (a for a in attrs if a.attribute_type == "email" and a.slug in mapped_slugs),
+            None,
+        )
+
+        job = ImportJob(job_id=str(uuid4()), workspace_id=workspace_id)
+        raw_rows = list(reader)
+        job.total_rows = len(raw_rows)
+        if not raw_rows:
+            job.status = "completed"
+            return job
+
+        parsed: list[ImportRow] = []
+        for idx, raw in enumerate(raw_rows, start=1):
+            values: dict[str, Any] = {}
+            for h, attr in header_to_attr.items():
+                v = (raw.get(h) or "").strip()
+                if v:
+                    values[attr.slug] = v
+            email = values.get(email_attr.slug, "") if email_attr else ""
+            row = ImportRow(row_number=idx, email=email, values=values)
+
+            missing_value = [
+                a.name for a in attrs
+                if a.is_required and not values.get(a.slug)
+            ]
+            if missing_value:
+                row.status = "invalid_email" if email_attr and not email else "error"
+                row.error = "Missing required value(s): " + ", ".join(missing_value)
+                if row.status == "error":
+                    job.errors += 1
+                else:
+                    job.invalid_emails += 1
+            parsed.append(row)
+        job.rows = parsed
+
+        if skip_duplicates and email_attr:
+            pending = [r for r in job.rows if r.status == "pending" and r.email]
+            if pending:
+                existing = (await self.db.execute(
+                    select(CRMRecord.id, CRMRecord.values)
+                    .where(
+                        and_(
+                            CRMRecord.workspace_id == workspace_id,
+                            CRMRecord.object_id == object_id,
+                            CRMRecord.is_archived == False,
+                        )
+                    )
+                )).all()
+                existing_emails: dict[str, str] = {}
+                for record_id, rec_values in existing:
+                    v = (rec_values or {}).get(email_attr.slug, "")
+                    if v:
+                        existing_emails[v.strip().lower()] = record_id
+                # Track emails within this CSV batch too — two rows with the
+                # same email in one file must not both import as "created".
+                seen_in_batch: set[str] = set()
+                for row in pending:
+                    key = row.email.lower()
+                    match = existing_emails.get(key)
+                    if match:
+                        row.status = "duplicate"
+                        row.duplicate_of = match
+                        job.duplicates += 1
+                    elif key in seen_in_batch:
+                        row.status = "duplicate"
+                        row.duplicate_of = "duplicate row in this file"
+                        job.duplicates += 1
+                    else:
+                        seen_in_batch.add(key)
+
+        primary_slug = next((a.slug for a in attrs if not a.is_system), attrs[0].slug)
+        for row in job.rows:
+            if row.status != "pending":
+                continue
+            try:
+                display_name = row.values.get(primary_slug) or row.email or f"Row {row.row_number}"
+                record = CRMRecord(
+                    id=str(uuid4()),
+                    workspace_id=workspace_id,
+                    object_id=object_id,
+                    values=row.values,
+                    display_name=display_name,
+                )
+                self.db.add(record)
+                row.record_id = record.id
+                row.status = "created"
+                job.created += 1
+            except Exception as e:
+                row.status = "error"
+                row.error = str(e)[:200]
+                job.errors += 1
+
+        await self.db.flush()
+        await self.db.commit()
+
+        job.status = "completed"
+        job.processed = job.total_rows
+        job.unmapped_headers = unmapped_headers
+        return job
 
     # =========================================================================
     # SEQUENCE ENROLLMENT

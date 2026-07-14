@@ -45,6 +45,9 @@ from aexy.schemas.crm import (
     FilterCondition,
     SortCondition,
     CRMRecordQuery,
+    # CRM object CSV import
+    CRMObjectImportRequest,
+    CRMObjectImportResponse,
 )
 from aexy.services.crm_service import (
     CRMObjectService,
@@ -1075,6 +1078,39 @@ async def seed_from_template(
         ],
         "message": f"Created {len(created_objects)} objects from {template} template",
     }
+
+
+# =============================================================================
+# CRM OBJECT CSV IMPORT (attribute-aware — writes values keyed by the
+# object's real attribute slugs, unlike GTM's /gtm/import which uses a fixed
+# contact-shaped column set). Discoverable from the CRM object grid, not
+# just onboarding.
+# =============================================================================
+
+@router.post("/objects/{object_id}/import", response_model=CRMObjectImportResponse)
+async def import_csv_into_object(
+    workspace_id: str,
+    object_id: str,
+    data: CRMObjectImportRequest,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+) -> CRMObjectImportResponse:
+    await check_workspace_permission(workspace_id, current_user, db)
+
+    from aexy.services.bulk_import_service import BulkImportService
+
+    service = BulkImportService(db)
+    try:
+        job = await service.run_import_into_crm_object(
+            workspace_id=workspace_id,
+            object_id=object_id,
+            csv_content=data.csv_content,
+            skip_duplicates=data.skip_duplicates,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+
+    return CRMObjectImportResponse(**service.get_job_summary(job))
 
 
 # =============================================================================
