@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.51] - 2026-07-15
+
+### Fix: Ask AI chat ignored LLM_PROVIDER and hit a suspended Gemini key
+
+The Ask feature (the floating chat widget's "AI" tab and the full `/chat` AI
+panel) failed to return any response in production: it silently routed to
+Gemini and got `403 CONSUMER_SUSPENDED`, so nothing streamed back.
+
+Root cause: `AskService` ignored `settings.llm.llm_provider` and instead picked
+a provider by "first API key present" in the order Anthropic → OpenAI → Gemini,
+with no DeepSeek branch at all. Every other part of the platform honours
+`LLM_PROVIDER` via the LLM gateway — the Ask feature was the one place that
+didn't. A deployment configured for `deepseek` therefore still called Gemini.
+
+- `AskService` now resolves the provider from `LLM_PROVIDER` (the same source of
+  truth the gateway uses). DeepSeek, OpenRouter, and LM Studio reuse the
+  OpenAI-compatible streaming path with the correct base URL; Claude/OpenAI/
+  Gemini keep their existing paths.
+- If the configured provider has no usable credentials, it falls back to the
+  previous auto-detect so deployments that never set `LLM_PROVIDER` are
+  unaffected.
+- Added `tests/unit/test_ask_provider_selection.py` (11 tests) pinning the
+  resolver, including the exact prod scenario (DeepSeek chosen even when a
+  Gemini key is also present).
+
+Note: honouring `deepseek` requires `DEEPSEEK_API_KEY` to be set in the target
+environment; without it the resolver falls back to auto-detect.
+
 ## [0.8.50] - 2026-07-15
 
 ### CRM automation hardening: CRM-only scope, real send path, workspace isolation
