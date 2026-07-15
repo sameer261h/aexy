@@ -1,0 +1,146 @@
+{
+  "mcp": {
+    "title": "Model Context Protocol",
+    "subtitle": "AI coding assistants को Aexy से जोड़ें",
+
+    "overview": {
+      "heading": "अवलोकन",
+      "descriptionBefore": "",
+      "linkText": "Model Context Protocol (MCP)",
+      "descriptionAfter": " Claude Code और OpenAI Codex जैसे AI assistants को आपके Aexy workspace के साथ सीधे इंटरैक्ट करने देता है — sprints प्रबंधित करना, analytics query करना, agents चलाना, और बहुत कुछ, वह भी प्राकृतिक भाषा के ज़रिए।",
+      "toolCount": "{count, plural, =1 {1 tool} other {# tools}}",
+      "summary": "{categories} categories में कुल {total} tools उपलब्ध"
+    },
+
+    "quickStart": {
+      "heading": "Quick Start",
+      "step1": {
+        "title": "एक API token बनाएं",
+        "description": "MCP server को आपके Aexy खाते के साथ प्रमाणित करने के लिए एक token जनरेट करें।",
+        "link": "Settings → API Tokens"
+      },
+      "step2": {
+        "title": "MCP server इंस्टॉल करें"
+      },
+      "step3": {
+        "title": "अपना AI client कॉन्फ़िगर करें",
+        "description": "अपने विशिष्ट client के लिए नीचे दिए गए setup guides देखें।"
+      }
+    },
+
+    "clientSetup": {
+      "heading": "Client Setup",
+      "tabs": {
+        "claude": "Claude Code",
+        "codex": "OpenAI Codex",
+        "other": "अन्य Clients"
+      },
+      "claude": {
+        "introBefore": "इसे अपनी ",
+        "introAfter": " या global Claude Code settings में जोड़ें:",
+        "noteLabel": "नोट:",
+        "noteBefore": " ",
+        "noteMiddle": " को ",
+        "noteAfter": " पर सेट करें अगर आपको Temporal debugging tools की आवश्यकता नहीं है, या अगर Temporal server आपकी मशीन से एक्सेस नहीं किया जा सकता।"
+      },
+      "codex": {
+        "intro": "connection details प्रदान करके Codex को Aexy MCP server उपयोग करने के लिए कॉन्फ़िगर करें:",
+        "serverCommand": "Server command",
+        "requiredEnvVars": "आवश्यक environment variables",
+        "env": {
+          "apiUrl": "Aexy backend API URL",
+          "apiToken": "Settings से API token",
+          "enableTemporal": "Temporal tools सक्षम करें"
+        }
+      },
+      "other": {
+        "intro": "किसी भी MCP-compatible client के लिए, इन environment variables के साथ stdio transport का उपयोग करें:",
+        "envReferenceLabel": "Environment variables संदर्भ:",
+        "env": {
+          "apiUrl": "Backend API base URL",
+          "apiToken": "प्रमाणीकरण token (Settings > API Tokens में बनाएं)",
+          "enableTemporal": "Temporal tools सक्षम/अक्षम करें (true/false)",
+          "temporalAddress": "Temporal server पता (डिफ़ॉल्ट: localhost:7233)",
+          "temporalNamespace": "Temporal namespace (डिफ़ॉल्ट: default)"
+        }
+      }
+    },
+
+    "availableTools": {
+      "heading": "उपलब्ध Tools"
+    },
+
+    "categories": {
+      "sprintManagement": {
+        "name": "Sprint प्रबंधन",
+        "tools": {
+          "aexy_sprints": "sprints को सूचीबद्ध करें, बनाएं, शुरू करें और पूरा करें",
+          "aexy_sprint_tasks": "sprint tasks प्रबंधित करें — बनाएं, status अपडेट करें, असाइन करें, comment करें",
+          "aexy_sprint_analytics": "Velocity, burndown, और sprint मेट्रिक्स",
+          "aexy_projects": "projects को सूचीबद्ध और प्रबंधित करें",
+          "aexy_epics": "epics बनाएं और प्रबंधित करें",
+          "aexy_bugs": "bugs को ट्रैक और प्रबंधित करें"
+        }
+      },
+      "crm": {
+        "name": "CRM",
+        "tools": {
+          "aexy_crm_objects": "CRM object schemas प्रबंधित करें (contacts, deals, आदि)",
+          "aexy_crm_records": "CRM records पर CRUD ऑपरेशन",
+          "aexy_crm_automations": "CRM automations बनाएं और प्रबंधित करें"
+        }
+      },
+      "aiAgents": {
+        "name": "AI Agents",
+        "tools": {
+          "aexy_agents": "AI agents को सूचीबद्ध करें, बनाएं, चलाएं और प्रबंधित करें",
+          "aexy_agent_policies": "agent safety policies कॉन्फ़िगर करें",
+          "aexy_workflows": "Visual workflow builder ऑपरेशन"
+        }
+      },
+      "emailGtm": {
+        "name": "Email & GTM",
+        "tools": {
+          "aexy_email_campaigns": "email campaigns बनाएं और भेजें",
+          "aexy_email_infrastructure": "sending domains और providers प्रबंधित करें",
+          "aexy_gtm_leads": "Lead scoring और visitor tracking",
+          "aexy_gtm_sequences": "Outreach sequence प्रबंधन"
+        }
+      },
+      "analyticsInsights": {
+        "name": "Analytics & Insights",
+        "tools": {
+          "aexy_analytics": "Developer और team analytics",
+          "aexy_developer_insights": "व्यक्तिगत developer मेट्रिक्स",
+          "aexy_compliance": "Compliance और training ट्रैकिंग",
+          "aexy_assessments": "तकनीकी assessment प्रबंधन"
+        }
+      },
+      "platform": {
+        "name": "Platform",
+        "tools": {
+          "aexy_workspaces": "Workspace और team प्रबंधन",
+          "aexy_notifications": "notifications पढ़ें और प्रबंधित करें",
+          "aexy_documents": "Document प्रबंधन",
+          "aexy_tickets": "Ticket और support प्रबंधन",
+          "aexy_tables": "Standalone table ऑपरेशन",
+          "aexy_integrations": "बाहरी integrations (Slack, Jira, Linear)",
+          "aexy_api": "किसी भी endpoint के लिए Generic API gateway"
+        }
+      },
+      "temporal": {
+        "name": "Temporal (Infrastructure)",
+        "tools": {
+          "temporal_list_workflows": "चल रहे और पूर्ण हुए workflows सूचीबद्ध करें",
+          "temporal_describe_workflow": "workflow execution विवरण प्राप्त करें",
+          "temporal_get_workflow_history": "workflow event history देखें",
+          "temporal_query_workflow": "workflow state query करें",
+          "temporal_signal_workflow": "चल रहे workflows को signals भेजें",
+          "temporal_cancel_workflow": "चल रहे workflow को रद्द करें",
+          "temporal_list_schedules": "scheduled workflows सूचीबद्ध करें",
+          "temporal_system_status": "Temporal cluster health check"
+        }
+      }
+    }
+  }
+}

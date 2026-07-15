@@ -39,13 +39,26 @@ async def list_api_tokens(
     return [ApiTokenResponse.model_validate(t) for t in tokens]
 
 
+@router.post("/{token_id}/revoke", status_code=204)
+async def revoke_api_token(
+    token_id: str,
+    developer_id: str = Depends(get_current_developer_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Revoke an API token (soft-disable, keeps the row for audit)."""
+    service = ApiTokenService(db)
+    revoked = await service.revoke(developer_id, token_id)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="Token not found")
+
+
 @router.delete("/{token_id}", status_code=204)
 async def delete_api_token(
     token_id: str,
     developer_id: str = Depends(get_current_developer_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Revoke and delete an API token."""
+    """Permanently delete an API token."""
     service = ApiTokenService(db)
     deleted = await service.delete(developer_id, token_id)
     if not deleted:

@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.54] - 2026-07-15
+
+### Harden the MCP / API-token surface: tests, soft-revoke, i18n
+
+Follow-up to the MCP review. API tokens are what the (external) MCP server and
+other integrations use to authenticate into the platform, and that surface was
+previously untested.
+
+- **Test coverage (was zero).** Added `backend/tests/unit/test_api_tokens.py`
+  covering `ApiTokenService` (generation/hashing, expiry, `list`/`revoke`/
+  `delete` owner-scoping, `validate` including the 5-minute `last_used_at`
+  debounce) and the `aexy_`-prefix branch of `get_current_developer_id` end to
+  end via the real endpoints — valid / unknown / expired / revoked tokens, plus
+  a JWT-still-works regression check.
+- **Soft-revoke.** `POST /developers/me/api-tokens/{id}/revoke` marks a token
+  inactive but keeps the row for audit; a revoked token immediately fails
+  `validate()`. `DELETE` remains for permanent removal. This makes the
+  previously unreachable "Revoked" UI state real: active tokens get a **Revoke**
+  action, revoked tokens can then be **Delete**d.
+- **i18n.** The `/mcp` docs page and the API Tokens settings page were 100%
+  hardcoded English. Both now use `next-intl` with full en + hi message files
+  (`messages/{en,hi}/mcp.json`, `messages/{en,hi}/api-tokens.json`); technical
+  terms and tool identifiers stay in English per convention.
+- **Docs drift guard.** Documented that the `/mcp` tool catalog is
+  hand-maintained and mirrors the external `aexy-io/mcp-server` repo, which is
+  the source of truth.
+
 ## [0.8.53] - 2026-07-15
 
 ### Rename "Operations" nav group to "Autopilot" + restore the MCP link

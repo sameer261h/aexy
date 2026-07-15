@@ -1,0 +1,47 @@
+{
+  "apiTokens": {
+    "title": "API Tokens",
+    "subtitle": "MCP servers और बाहरी integrations के लिए tokens बनाएं और प्रबंधित करें",
+    "createButton": "Token बनाएं",
+    "form": {
+      "heading": "नया API Token",
+      "nameLabel": "Token नाम",
+      "namePlaceholder": "जैसे \"Claude Code local\"",
+      "expiryLabel": "समाप्ति",
+      "submit": "बनाएं"
+    },
+    "expiry": {
+      "days": "{count} दिन",
+      "year1": "1 वर्ष",
+      "none": "कोई समाप्ति नहीं"
+    },
+    "created": {
+      "banner": "Token \"{name}\" बन गया",
+      "warning": "इस token को अभी कॉपी करें। यह दोबारा नहीं दिखाया जाएगा।",
+      "dismiss": "बंद करें"
+    },
+    "table": {
+      "name": "नाम",
+      "created": "बनाया गया",
+      "lastUsed": "अंतिम उपयोग",
+      "status": "स्थिति",
+      "never": "कभी नहीं"
+    },
+    "status": {
+      "active": "सक्रिय",
+      "expired": "समाप्त",
+      "revoked": "रद्द"
+    },
+    "actions": {
+      "revoke": "रद्द करें",
+      "revokeTitle": "Token रद्द करें",
+      "delete": "हटाएं",
+      "deleteTitle": "Token हटाएं"
+    },
+    "empty": {
+      "title": "अभी कोई API token नहीं",
+      "description": "Claude Code या OpenAI Codex जैसे AI clients को MCP के ज़रिए अपने Aexy workspace से जोड़ने के लिए एक token बनाएं।"
+    },
+    "footer": "Tokens आपके account के साथ MCP servers और बाहरी integrations को प्रमाणित करते हैं। जिस token का उपयोग न हो उसे रद्द कर दें।"
+  }
+}

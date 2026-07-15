@@ -49,6 +49,17 @@ async function createToken(data: {
   return res.json();
 }
 
+async function revokeToken(tokenId: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/developers/me/api-tokens/${tokenId}/revoke`,
+    {
+      method: "POST",
+      headers: getHeaders(),
+    }
+  );
+  if (!res.ok) throw new Error("Failed to revoke API token");
+}
+
 async function deleteToken(tokenId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/developers/me/api-tokens/${tokenId}`, {
     method: "DELETE",
@@ -83,6 +94,19 @@ export function useApiTokens() {
     },
   });
 
+  const revokeMutation = useMutation({
+    mutationFn: revokeToken,
+    onSuccess: () => {
+      toast.success("API token revoked");
+      queryClient.invalidateQueries({ queryKey: ["api-tokens"] });
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to revoke token"
+      );
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: deleteToken,
     onSuccess: () => {
@@ -103,6 +127,8 @@ export function useApiTokens() {
     refetch,
     createToken: createMutation.mutateAsync,
     isCreating: createMutation.isPending,
+    revokeToken: revokeMutation.mutateAsync,
+    isRevoking: revokeMutation.isPending,
     deleteToken: deleteMutation.mutateAsync,
     isDeleting: deleteMutation.isPending,
   };

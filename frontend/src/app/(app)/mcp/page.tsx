@@ -11,6 +11,7 @@ import {
   Wrench,
 } from "lucide-react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { CopyButton } from "@/components/ui/copy-button";
 
 function CodeBlock({ code }: { code: string }) {
@@ -26,75 +27,81 @@ function CodeBlock({ code }: { code: string }) {
   );
 }
 
-const TOOL_CATEGORIES = [
+/**
+ * Hand-maintained catalog of MCP tools exposed on this docs page.
+ *
+ * SOURCE OF TRUTH: the external MCP server repo
+ * https://github.com/aexy-io/mcp-server
+ *
+ * This list is NOT generated — it duplicates the tools defined in that repo
+ * for display purposes only. Whenever tools are added, removed, or renamed in
+ * mcp-server, update this array (tool identifier) AND the matching i18n keys
+ * in messages/{en,hi}/mcp.json under `categories.<category>.tools.<identifier>`.
+ *
+ * Category keys and tool identifiers are stable and map directly to i18n keys.
+ * Human-readable category names and tool descriptions live in i18n, not here.
+ */
+const TOOL_CATEGORIES: { key: string; tools: string[] }[] = [
   {
-    name: "Sprint Management",
+    key: "sprintManagement",
     tools: [
-      { name: "aexy_sprints", desc: "List, create, start, and complete sprints" },
-      { name: "aexy_sprint_tasks", desc: "Manage sprint tasks — create, update status, assign, comment" },
-      { name: "aexy_sprint_analytics", desc: "Velocity, burndown, and sprint metrics" },
-      { name: "aexy_projects", desc: "List and manage projects" },
-      { name: "aexy_epics", desc: "Create and manage epics" },
-      { name: "aexy_bugs", desc: "Track and manage bugs" },
+      "aexy_sprints",
+      "aexy_sprint_tasks",
+      "aexy_sprint_analytics",
+      "aexy_projects",
+      "aexy_epics",
+      "aexy_bugs",
     ],
   },
   {
-    name: "CRM",
+    key: "crm",
+    tools: ["aexy_crm_objects", "aexy_crm_records", "aexy_crm_automations"],
+  },
+  {
+    key: "aiAgents",
+    tools: ["aexy_agents", "aexy_agent_policies", "aexy_workflows"],
+  },
+  {
+    key: "emailGtm",
     tools: [
-      { name: "aexy_crm_objects", desc: "Manage CRM object schemas (contacts, deals, etc.)" },
-      { name: "aexy_crm_records", desc: "CRUD operations on CRM records" },
-      { name: "aexy_crm_automations", desc: "Create and manage CRM automations" },
+      "aexy_email_campaigns",
+      "aexy_email_infrastructure",
+      "aexy_gtm_leads",
+      "aexy_gtm_sequences",
     ],
   },
   {
-    name: "AI Agents",
+    key: "analyticsInsights",
     tools: [
-      { name: "aexy_agents", desc: "List, create, run, and manage AI agents" },
-      { name: "aexy_agent_policies", desc: "Configure agent safety policies" },
-      { name: "aexy_workflows", desc: "Visual workflow builder operations" },
+      "aexy_analytics",
+      "aexy_developer_insights",
+      "aexy_compliance",
+      "aexy_assessments",
     ],
   },
   {
-    name: "Email & GTM",
+    key: "platform",
     tools: [
-      { name: "aexy_email_campaigns", desc: "Create and send email campaigns" },
-      { name: "aexy_email_infrastructure", desc: "Manage sending domains and providers" },
-      { name: "aexy_gtm_leads", desc: "Lead scoring and visitor tracking" },
-      { name: "aexy_gtm_sequences", desc: "Outreach sequence management" },
+      "aexy_workspaces",
+      "aexy_notifications",
+      "aexy_documents",
+      "aexy_tickets",
+      "aexy_tables",
+      "aexy_integrations",
+      "aexy_api",
     ],
   },
   {
-    name: "Analytics & Insights",
+    key: "temporal",
     tools: [
-      { name: "aexy_analytics", desc: "Developer and team analytics" },
-      { name: "aexy_developer_insights", desc: "Individual developer metrics" },
-      { name: "aexy_compliance", desc: "Compliance and training tracking" },
-      { name: "aexy_assessments", desc: "Technical assessment management" },
-    ],
-  },
-  {
-    name: "Platform",
-    tools: [
-      { name: "aexy_workspaces", desc: "Workspace and team management" },
-      { name: "aexy_notifications", desc: "Read and manage notifications" },
-      { name: "aexy_documents", desc: "Document management" },
-      { name: "aexy_tickets", desc: "Ticket and support management" },
-      { name: "aexy_tables", desc: "Standalone table operations" },
-      { name: "aexy_integrations", desc: "External integrations (Slack, Jira, Linear)" },
-      { name: "aexy_api", desc: "Generic API gateway for any endpoint" },
-    ],
-  },
-  {
-    name: "Temporal (Infrastructure)",
-    tools: [
-      { name: "temporal_list_workflows", desc: "List running and completed workflows" },
-      { name: "temporal_describe_workflow", desc: "Get workflow execution details" },
-      { name: "temporal_get_workflow_history", desc: "View workflow event history" },
-      { name: "temporal_query_workflow", desc: "Query workflow state" },
-      { name: "temporal_signal_workflow", desc: "Send signals to running workflows" },
-      { name: "temporal_cancel_workflow", desc: "Cancel a running workflow" },
-      { name: "temporal_list_schedules", desc: "List scheduled workflows" },
-      { name: "temporal_system_status", desc: "Temporal cluster health check" },
+      "temporal_list_workflows",
+      "temporal_describe_workflow",
+      "temporal_get_workflow_history",
+      "temporal_query_workflow",
+      "temporal_signal_workflow",
+      "temporal_cancel_workflow",
+      "temporal_list_schedules",
+      "temporal_system_status",
     ],
   },
 ];
@@ -133,12 +140,13 @@ uv run --directory /path/to/aexy/mcp-server aexy-mcp`;
 type ClientTab = "claude" | "codex" | "other";
 
 function ToolCategory({
-  name,
+  categoryKey,
   tools,
 }: {
-  name: string;
-  tools: { name: string; desc: string }[];
+  categoryKey: string;
+  tools: string[];
 }) {
+  const t = useTranslations("mcp");
   const [open, setOpen] = useState(false);
   return (
     <div className="border border-border rounded-lg">
@@ -148,7 +156,9 @@ function ToolCategory({
       >
         <div className="flex items-center gap-2">
           <Wrench className="h-4 w-4 text-muted-foreground" />
-          <span className="font-medium text-sm">{name}</span>
+          <span className="font-medium text-sm">
+            {t(`categories.${categoryKey}.name`)}
+          </span>
           <span className="text-xs text-muted-foreground bg-accent px-1.5 py-0.5 rounded">
             {tools.length}
           </span>
@@ -162,14 +172,13 @@ function ToolCategory({
       {open && (
         <div className="px-4 pb-3 space-y-1">
           {tools.map((tool) => (
-            <div
-              key={tool.name}
-              className="flex items-start gap-3 py-1.5 text-sm"
-            >
+            <div key={tool} className="flex items-start gap-3 py-1.5 text-sm">
               <code className="text-xs bg-accent px-1.5 py-0.5 rounded font-mono text-foreground shrink-0">
-                {tool.name}
+                {tool}
               </code>
-              <span className="text-muted-foreground">{tool.desc}</span>
+              <span className="text-muted-foreground">
+                {t(`categories.${categoryKey}.tools.${tool}`)}
+              </span>
             </div>
           ))}
         </div>
@@ -179,6 +188,7 @@ function ToolCategory({
 }
 
 export default function McpPage() {
+  const t = useTranslations("mcp");
   const [activeTab, setActiveTab] = useState<ClientTab>("claude");
 
   const totalTools = TOOL_CATEGORIES.reduce(
@@ -195,69 +205,71 @@ export default function McpPage() {
             <Plug className="h-5 w-5 text-purple-400" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold">Model Context Protocol</h1>
-            <p className="text-muted-foreground text-sm">
-              Connect AI coding assistants to Aexy
-            </p>
+            <h1 className="text-2xl font-bold">{t("title")}</h1>
+            <p className="text-muted-foreground text-sm">{t("subtitle")}</p>
           </div>
         </div>
       </div>
 
       {/* Overview */}
       <section className="space-y-4">
-        <h2 className="text-lg font-semibold">Overview</h2>
+        <h2 className="text-lg font-semibold">{t("overview.heading")}</h2>
         <p className="text-sm text-muted-foreground leading-relaxed">
-          The{" "}
+          {t("overview.descriptionBefore")}
           <a
             href="https://modelcontextprotocol.io"
             target="_blank"
             rel="noopener noreferrer"
             className="text-purple-400 hover:underline"
           >
-            Model Context Protocol (MCP)
-          </a>{" "}
-          lets AI assistants like Claude Code and OpenAI Codex interact directly
-          with your Aexy workspace — managing sprints, querying analytics,
-          running agents, and more through natural language.
+            {t("overview.linkText")}
+          </a>
+          {t("overview.descriptionAfter")}
         </p>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {TOOL_CATEGORIES.map((cat) => (
             <div
-              key={cat.name}
+              key={cat.key}
               className="bg-accent/50 border border-border rounded-lg px-3 py-2"
             >
-              <div className="text-sm font-medium">{cat.name}</div>
+              <div className="text-sm font-medium">
+                {t(`categories.${cat.key}.name`)}
+              </div>
               <div className="text-xs text-muted-foreground">
-                {cat.tools.length} tools
+                {t("overview.toolCount", { count: cat.tools.length })}
               </div>
             </div>
           ))}
         </div>
         <p className="text-xs text-muted-foreground">
-          {totalTools} tools available across {TOOL_CATEGORIES.length} categories
+          {t("overview.summary", {
+            total: totalTools,
+            categories: TOOL_CATEGORIES.length,
+          })}
         </p>
       </section>
 
       {/* Quick Start */}
       <section className="space-y-4">
-        <h2 className="text-lg font-semibold">Quick Start</h2>
+        <h2 className="text-lg font-semibold">{t("quickStart.heading")}</h2>
         <div className="space-y-4">
           <div className="flex gap-3">
             <div className="flex-shrink-0 h-6 w-6 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center text-xs font-bold">
               1
             </div>
             <div className="space-y-1">
-              <p className="text-sm font-medium">Create an API token</p>
+              <p className="text-sm font-medium">
+                {t("quickStart.step1.title")}
+              </p>
               <p className="text-sm text-muted-foreground">
-                Generate a token to authenticate the MCP server with your Aexy
-                account.
+                {t("quickStart.step1.description")}
               </p>
               <Link
                 href="/settings/api-tokens"
                 className="inline-flex items-center gap-1.5 text-sm text-purple-400 hover:underline"
               >
                 <KeyRound className="h-3.5 w-3.5" />
-                Settings &rarr; API Tokens
+                {t("quickStart.step1.link")}
                 <ExternalLink className="h-3 w-3" />
               </Link>
             </div>
@@ -267,7 +279,9 @@ export default function McpPage() {
               2
             </div>
             <div className="space-y-2">
-              <p className="text-sm font-medium">Install the MCP server</p>
+              <p className="text-sm font-medium">
+                {t("quickStart.step2.title")}
+              </p>
               <CodeBlock code="git clone https://github.com/aexy-io/mcp-server.git && cd mcp-server && uv sync" />
             </div>
           </div>
@@ -276,9 +290,11 @@ export default function McpPage() {
               3
             </div>
             <div>
-              <p className="text-sm font-medium">Configure your AI client</p>
+              <p className="text-sm font-medium">
+                {t("quickStart.step3.title")}
+              </p>
               <p className="text-sm text-muted-foreground">
-                See the setup guides below for your specific client.
+                {t("quickStart.step3.description")}
               </p>
             </div>
           </div>
@@ -287,13 +303,13 @@ export default function McpPage() {
 
       {/* Client Setup Guides */}
       <section className="space-y-4">
-        <h2 className="text-lg font-semibold">Client Setup</h2>
+        <h2 className="text-lg font-semibold">{t("clientSetup.heading")}</h2>
         <div className="flex gap-1 border-b border-border">
           {(
             [
-              { id: "claude" as const, label: "Claude Code" },
-              { id: "codex" as const, label: "OpenAI Codex" },
-              { id: "other" as const, label: "Other Clients" },
+              { id: "claude" as const, label: t("clientSetup.tabs.claude") },
+              { id: "codex" as const, label: t("clientSetup.tabs.codex") },
+              { id: "other" as const, label: t("clientSetup.tabs.other") },
             ] as const
           ).map((tab) => (
             <button
@@ -314,23 +330,25 @@ export default function McpPage() {
           {activeTab === "claude" && (
             <>
               <p className="text-sm text-muted-foreground">
-                Add this to your{" "}
+                {t("clientSetup.claude.introBefore")}
                 <code className="text-xs bg-accent px-1 py-0.5 rounded">
                   .claude/settings.local.json
-                </code>{" "}
-                or global Claude Code settings:
+                </code>
+                {t("clientSetup.claude.introAfter")}
               </p>
               <CodeBlock code={getClaudeConfig(API_BASE)} />
               <div className="bg-blue-500/5 border border-blue-500/20 rounded-lg p-3">
                 <p className="text-xs text-muted-foreground">
-                  <strong className="text-foreground">Note:</strong> Set{" "}
+                  <strong className="text-foreground">
+                    {t("clientSetup.claude.noteLabel")}
+                  </strong>
+                  {t("clientSetup.claude.noteBefore")}
                   <code className="bg-accent px-1 py-0.5 rounded">
                     AEXY_ENABLE_TEMPORAL
-                  </code>{" "}
-                  to{" "}
-                  <code className="bg-accent px-1 py-0.5 rounded">false</code>{" "}
-                  if you don&apos;t need Temporal debugging tools, or if the Temporal
-                  server is not accessible from your machine.
+                  </code>
+                  {t("clientSetup.claude.noteMiddle")}
+                  <code className="bg-accent px-1 py-0.5 rounded">false</code>
+                  {t("clientSetup.claude.noteAfter")}
                 </p>
               </div>
             </>
@@ -339,36 +357,54 @@ export default function McpPage() {
           {activeTab === "codex" && (
             <>
               <p className="text-sm text-muted-foreground">
-                Configure Codex to use the Aexy MCP server by providing the
-                connection details:
+                {t("clientSetup.codex.intro")}
               </p>
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <Terminal className="h-4 w-4 text-muted-foreground" />
                   <span className="text-sm font-medium">
-                    Server command
+                    {t("clientSetup.codex.serverCommand")}
                   </span>
                 </div>
-                <CodeBlock code={`uv run --directory /path/to/aexy/mcp-server aexy-mcp`} />
+                <CodeBlock
+                  code={`uv run --directory /path/to/aexy/mcp-server aexy-mcp`}
+                />
               </div>
               <div className="space-y-2">
                 <span className="text-sm font-medium">
-                  Required environment variables
+                  {t("clientSetup.codex.requiredEnvVars")}
                 </span>
                 <div className="bg-accent/50 border border-border rounded-lg divide-y divide-border text-sm">
                   {[
-                    ["AEXY_API_URL", API_BASE, "Aexy backend API URL"],
-                    ["AEXY_API_TOKEN", "<your-token>", "API token from Settings"],
-                    ["AEXY_ENABLE_TEMPORAL", "true", "Enable Temporal tools"],
+                    [
+                      "AEXY_API_URL",
+                      API_BASE,
+                      t("clientSetup.codex.env.apiUrl"),
+                    ],
+                    [
+                      "AEXY_API_TOKEN",
+                      "<your-token>",
+                      t("clientSetup.codex.env.apiToken"),
+                    ],
+                    [
+                      "AEXY_ENABLE_TEMPORAL",
+                      "true",
+                      t("clientSetup.codex.env.enableTemporal"),
+                    ],
                   ].map(([name, value, desc]) => (
-                    <div key={name} className="flex items-center px-3 py-2 gap-4">
+                    <div
+                      key={name}
+                      className="flex items-center px-3 py-2 gap-4"
+                    >
                       <code className="font-mono text-xs text-foreground w-48 shrink-0">
                         {name}
                       </code>
                       <code className="font-mono text-xs text-muted-foreground flex-1">
                         {value}
                       </code>
-                      <span className="text-xs text-muted-foreground">{desc}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {desc}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -379,24 +415,36 @@ export default function McpPage() {
           {activeTab === "other" && (
             <>
               <p className="text-sm text-muted-foreground">
-                For any MCP-compatible client, use the stdio transport with
-                these environment variables:
+                {t("clientSetup.other.intro")}
               </p>
               <CodeBlock code={getGenericConfig(API_BASE)} />
               <div className="bg-accent/50 border border-border rounded-lg p-3">
                 <p className="text-xs text-muted-foreground">
-                  <strong className="text-foreground">Environment variables reference:</strong>
+                  <strong className="text-foreground">
+                    {t("clientSetup.other.envReferenceLabel")}
+                  </strong>
                 </p>
                 <div className="mt-2 space-y-1 text-xs">
                   {[
-                    ["AEXY_API_URL", "Backend API base URL"],
-                    ["AEXY_API_TOKEN", "Authentication token (create in Settings > API Tokens)"],
-                    ["AEXY_ENABLE_TEMPORAL", "Enable/disable Temporal tools (true/false)"],
-                    ["TEMPORAL_ADDRESS", "Temporal server address (default: localhost:7233)"],
-                    ["TEMPORAL_NAMESPACE", "Temporal namespace (default: default)"],
+                    ["AEXY_API_URL", t("clientSetup.other.env.apiUrl")],
+                    ["AEXY_API_TOKEN", t("clientSetup.other.env.apiToken")],
+                    [
+                      "AEXY_ENABLE_TEMPORAL",
+                      t("clientSetup.other.env.enableTemporal"),
+                    ],
+                    [
+                      "TEMPORAL_ADDRESS",
+                      t("clientSetup.other.env.temporalAddress"),
+                    ],
+                    [
+                      "TEMPORAL_NAMESPACE",
+                      t("clientSetup.other.env.temporalNamespace"),
+                    ],
                   ].map(([name, desc]) => (
                     <div key={name} className="flex gap-2">
-                      <code className="font-mono text-foreground shrink-0">{name}</code>
+                      <code className="font-mono text-foreground shrink-0">
+                        {name}
+                      </code>
                       <span className="text-muted-foreground">{desc}</span>
                     </div>
                   ))}
@@ -409,10 +457,16 @@ export default function McpPage() {
 
       {/* Available Tools */}
       <section className="space-y-4">
-        <h2 className="text-lg font-semibold">Available Tools</h2>
+        <h2 className="text-lg font-semibold">
+          {t("availableTools.heading")}
+        </h2>
         <div className="space-y-2">
           {TOOL_CATEGORIES.map((cat) => (
-            <ToolCategory key={cat.name} name={cat.name} tools={cat.tools} />
+            <ToolCategory
+              key={cat.key}
+              categoryKey={cat.key}
+              tools={cat.tools}
+            />
           ))}
         </div>
       </section>

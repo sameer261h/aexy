@@ -56,8 +56,27 @@ class ApiTokenService:
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
+    async def revoke(self, developer_id: str, token_id: str) -> bool:
+        """Soft-revoke a token: mark it inactive but keep the row for audit.
+
+        A revoked token immediately fails `validate()` (which filters on
+        `is_active`), but stays visible in the token list so its name and
+        last-used history are preserved. Returns False if not found.
+        """
+        stmt = select(ApiToken).where(
+            ApiToken.id == token_id,
+            ApiToken.developer_id == developer_id,
+        )
+        result = await self.db.execute(stmt)
+        token = result.scalar_one_or_none()
+        if token is None:
+            return False
+        token.is_active = False
+        await self.db.flush()
+        return True
+
     async def delete(self, developer_id: str, token_id: str) -> bool:
-        """Hard-delete a token."""
+        """Hard-delete a token (permanent removal, no audit trail)."""
         stmt = select(ApiToken).where(
             ApiToken.id == token_id,
             ApiToken.developer_id == developer_id,

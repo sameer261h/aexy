@@ -7,31 +7,41 @@ import {
   Loader2,
   CheckCircle2,
   Trash2,
+  Ban,
   AlertTriangle,
   ShieldAlert,
 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useApiTokens, ApiTokenCreated } from "@/hooks/useApiTokens";
 import { CopyButton } from "@/components/ui/copy-button";
 import { formatDistanceToNow } from "date-fns";
 
-const EXPIRY_OPTIONS = [
-  { value: 30, label: "30 days" },
-  { value: 60, label: "60 days" },
-  { value: 90, label: "90 days" },
-  { value: 180, label: "180 days" },
-  { value: 365, label: "1 year" },
-  { value: null, label: "No expiry" },
-];
+// Expiry values in days; null means no expiry. Labels are resolved via i18n.
+const EXPIRY_VALUES: (number | null)[] = [30, 60, 90, 180, 365, null];
 
 export default function ApiTokensPage() {
-  const { tokens, isLoading, createToken, isCreating, deleteToken } =
-    useApiTokens();
+  const t = useTranslations("apiTokens");
+  const tc = useTranslations("common");
+  const {
+    tokens,
+    isLoading,
+    createToken,
+    isCreating,
+    revokeToken,
+    deleteToken,
+  } = useApiTokens();
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
   const [expiresInDays, setExpiresInDays] = useState<number | null>(90);
   const [newlyCreatedToken, setNewlyCreatedToken] = useState<ApiTokenCreated | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+
+  const expiryLabel = (value: number | null) => {
+    if (value === null) return t("expiry.none");
+    if (value === 365) return t("expiry.year1");
+    return t("expiry.days", { count: value });
+  };
 
   const handleCreate = async () => {
     if (!name.trim()) return;
@@ -48,15 +58,21 @@ export default function ApiTokensPage() {
     }
   };
 
-  const handleDelete = async (tokenId: string) => {
-    setConfirmDeleteId(null);
-    setDeletingId(tokenId);
+  // Active tokens are revoked (soft-disabled, kept for audit); already-revoked
+  // tokens can then be permanently deleted.
+  const handleAction = async (tokenId: string, isActive: boolean) => {
+    setConfirmId(null);
+    setPendingId(tokenId);
     try {
-      await deleteToken(tokenId);
+      if (isActive) {
+        await revokeToken(tokenId);
+      } else {
+        await deleteToken(tokenId);
+      }
     } catch {
       // error handled by hook
     } finally {
-      setDeletingId(null);
+      setPendingId(null);
     }
   };
 
@@ -69,10 +85,8 @@ export default function ApiTokensPage() {
             <KeyRound className="h-5 w-5 text-amber-400" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold">API Tokens</h1>
-            <p className="text-sm text-muted-foreground">
-              Create and manage tokens for MCP servers and external integrations
-            </p>
+            <h1 className="text-2xl font-bold">{t("title")}</h1>
+            <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
           </div>
         </div>
         <button
@@ -80,31 +94,31 @@ export default function ApiTokensPage() {
           className="inline-flex items-center gap-2 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
         >
           <Plus className="h-4 w-4" />
-          Create Token
+          {t("createButton")}
         </button>
       </div>
 
       {/* Create form */}
       {showCreate && (
         <div className="bg-accent/50 border border-border rounded-lg p-4 space-y-4">
-          <h3 className="text-sm font-medium">New API Token</h3>
+          <h3 className="text-sm font-medium">{t("form.heading")}</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs text-muted-foreground mb-1">
-                Token name
+                {t("form.nameLabel")}
               </label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder='e.g. "Claude Code local"'
+                placeholder={t("form.namePlaceholder")}
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/50"
                 onKeyDown={(e) => e.key === "Enter" && handleCreate()}
               />
             </div>
             <div>
               <label className="block text-xs text-muted-foreground mb-1">
-                Expiry
+                {t("form.expiryLabel")}
               </label>
               <select
                 value={expiresInDays ?? ""}
@@ -115,9 +129,9 @@ export default function ApiTokensPage() {
                 }
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/50"
               >
-                {EXPIRY_OPTIONS.map((opt) => (
-                  <option key={opt.label} value={opt.value ?? ""}>
-                    {opt.label}
+                {EXPIRY_VALUES.map((value) => (
+                  <option key={value ?? "none"} value={value ?? ""}>
+                    {expiryLabel(value)}
                   </option>
                 ))}
               </select>
@@ -130,13 +144,13 @@ export default function ApiTokensPage() {
               className="inline-flex items-center gap-2 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
             >
               {isCreating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Create
+              {t("form.submit")}
             </button>
             <button
               onClick={() => setShowCreate(false)}
               className="px-3 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
             >
-              Cancel
+              {tc("cancel")}
             </button>
           </div>
         </div>
@@ -148,7 +162,7 @@ export default function ApiTokensPage() {
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4 text-emerald-400" />
             <span className="text-sm font-medium">
-              Token &ldquo;{newlyCreatedToken.name}&rdquo; created
+              {t("created.banner", { name: newlyCreatedToken.name })}
             </span>
           </div>
           <div className="flex items-center gap-2 bg-zinc-900 border border-border rounded-lg px-3 py-2">
@@ -159,15 +173,13 @@ export default function ApiTokensPage() {
           </div>
           <div className="flex items-center gap-2 text-xs text-amber-400">
             <AlertTriangle className="h-3.5 w-3.5" />
-            <span>
-              Copy this token now. It won&apos;t be shown again.
-            </span>
+            <span>{t("created.warning")}</span>
           </div>
           <button
             onClick={() => setNewlyCreatedToken(null)}
             className="text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
-            Dismiss
+            {t("created.dismiss")}
           </button>
         </div>
       )}
@@ -182,20 +194,19 @@ export default function ApiTokensPage() {
           <div className="mx-auto h-12 w-12 rounded-full bg-accent flex items-center justify-center">
             <ShieldAlert className="h-6 w-6 text-muted-foreground" />
           </div>
-          <p className="text-sm font-medium">No API tokens yet</p>
+          <p className="text-sm font-medium">{t("empty.title")}</p>
           <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-            Create a token to connect AI clients like Claude Code or OpenAI
-            Codex to your Aexy workspace via MCP.
+            {t("empty.description")}
           </p>
         </div>
       ) : (
         <div className="border border-border rounded-lg divide-y divide-border">
           {/* Table header */}
           <div className="grid grid-cols-[1fr_140px_140px_100px_80px] gap-4 px-4 py-2 text-xs text-muted-foreground font-medium">
-            <div>Name</div>
-            <div>Created</div>
-            <div>Last used</div>
-            <div>Status</div>
+            <div>{t("table.name")}</div>
+            <div>{t("table.created")}</div>
+            <div>{t("table.lastUsed")}</div>
+            <div>{t("table.status")}</div>
             <div></div>
           </div>
           {tokens.map((token) => (
@@ -219,54 +230,64 @@ export default function ApiTokensPage() {
                   ? formatDistanceToNow(new Date(token.last_used_at), {
                       addSuffix: true,
                     })
-                  : "Never"}
+                  : t("table.never")}
               </div>
               <div>
                 {token.is_active ? (
                   token.expires_at &&
                   new Date(token.expires_at) < new Date() ? (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs text-amber-400 bg-amber-400/10">
-                      Expired
+                      {t("status.expired")}
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs text-emerald-400 bg-emerald-400/10">
-                      Active
+                      {t("status.active")}
                     </span>
                   )
                 ) : (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs text-zinc-400 bg-zinc-400/10">
-                    Revoked
+                    {t("status.revoked")}
                   </span>
                 )}
               </div>
               <div className="flex justify-end">
-                {confirmDeleteId === token.id ? (
+                {confirmId === token.id ? (
                   <div className="flex items-center gap-1">
                     <button
-                      onClick={() => handleDelete(token.id)}
-                      disabled={deletingId === token.id}
+                      onClick={() => handleAction(token.id, token.is_active)}
+                      disabled={pendingId === token.id}
                       className="px-2 py-1 text-xs font-medium text-red-400 hover:bg-red-400/10 rounded transition-colors"
                     >
-                      {deletingId === token.id ? (
+                      {pendingId === token.id ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : token.is_active ? (
+                        t("actions.revoke")
                       ) : (
-                        "Delete"
+                        t("actions.delete")
                       )}
                     </button>
                     <button
-                      onClick={() => setConfirmDeleteId(null)}
+                      onClick={() => setConfirmId(null)}
                       className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded transition-colors"
                     >
-                      Cancel
+                      {tc("cancel")}
                     </button>
                   </div>
                 ) : (
                   <button
-                    onClick={() => setConfirmDeleteId(token.id)}
+                    onClick={() => setConfirmId(token.id)}
                     className="p-1.5 text-muted-foreground hover:text-red-400 hover:bg-red-400/10 rounded transition-colors"
-                    title="Delete token"
+                    title={
+                      token.is_active
+                        ? t("actions.revokeTitle")
+                        : t("actions.deleteTitle")
+                    }
                   >
-                    <Trash2 className="h-4 w-4" />
+                    {token.is_active ? (
+                      <Ban className="h-4 w-4" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
                   </button>
                 )}
               </div>
@@ -277,10 +298,7 @@ export default function ApiTokensPage() {
 
       {/* Info */}
       {tokens.length > 0 && (
-        <p className="text-xs text-muted-foreground">
-          Tokens authenticate MCP servers and external integrations with your
-          account. Revoke any token you no longer use.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("footer")}</p>
       )}
     </div>
   );
