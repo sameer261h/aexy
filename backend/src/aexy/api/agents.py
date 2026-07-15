@@ -312,6 +312,8 @@ async def get_agent_defaults(
         "openai": getattr(settings.llm, "openai_model", "gpt-4o-mini"),
         "ollama": getattr(settings.llm, "ollama_model", "codellama:13b"),
         "lmstudio": getattr(settings.llm, "lmstudio_model", "qwen/qwen3.5-9b"),
+        "deepseek": settings.llm.llm_model if settings.llm.llm_provider == "deepseek" else "deepseek-chat",
+        "openrouter": getattr(settings.llm, "openrouter_model", "openai/gpt-4o"),
     }
     default_provider = settings.llm.llm_provider
     return {

@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.52] - 2026-07-15
+
+### Fix: more LLM paths ignored LLM_PROVIDER (audit follow-up to 0.8.51)
+
+Auditing for the same anti-pattern behind the Ask chat bug turned up two more
+LLM call sites that ignored the configured provider, plus one UI gap:
+
+- **Writing-style email generation** (`writing_style_service.generate_email`)
+  built a hardcoded `AsyncAnthropic` client, so the agent "generate email"
+  action failed on any non-Anthropic deployment. It now goes through the LLM
+  gateway (honours `LLM_PROVIDER`, works on DeepSeek/Gemini/etc., and gets
+  rate-limiting + billing tracking for free).
+- **LangGraph agents** (`agents/base.py`) only handled `gemini` and `lmstudio`;
+  every other provider fell through to `else -> ChatAnthropic`, so an agent
+  configured for `openai`, `ollama`, `deepseek`, or `openrouter` silently ran
+  on Claude. Provider resolution is now an explicit, unit-tested map — DeepSeek/
+  OpenRouter/OpenAI/Ollama route through the OpenAI-compatible client with the
+  correct base URL, and an unknown provider raises instead of masquerading as
+  Claude.
+- **Agent defaults endpoint** (`GET /agents/defaults`) now includes `deepseek`
+  and `openrouter` in `provider_models` so they're selectable in the UI.
+- Added `tests/unit/test_agent_provider_selection.py` (8) and
+  `tests/unit/test_writing_style_generate_email.py` (2).
+
 ## [0.8.51] - 2026-07-15
 
 ### Fix: Ask AI chat ignored LLM_PROVIDER and hit a suspended Gemini key

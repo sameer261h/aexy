@@ -8,13 +8,13 @@ config logic and the capture-config schema validation.
 import pytest
 from pydantic import ValidationError
 
-from aexy.api.tracker_admin import _apply_project_config, _config_from_settings
+from aexy.api.tracker_admin import _apply_config_to_device, _config_from_settings
 from aexy.models.permissions import PERMISSIONS
 from aexy.schemas.tracker_ingest import TrackerCaptureConfig
 
 
 class FakeDevice:
-    """Stand-in with just the capture-config columns."""
+    """Stand-in with just the capture-config columns + etag."""
 
     def __init__(self):
         self.sample_interval_s = 60
@@ -23,6 +23,7 @@ class FakeDevice:
         self.idle_threshold_s = 300
         self.paused = False
         self.excluded_bundle_ids = None
+        self.config_etag = None
 
 
 # --------------------------------------------------------------------------- #
@@ -60,20 +61,26 @@ def test_config_from_settings_drops_unknown_keys():
 
 
 # --------------------------------------------------------------------------- #
-# _apply_project_config
+# _apply_config_to_device
 # --------------------------------------------------------------------------- #
-def test_apply_empty_config_leaves_device_defaults():
+def test_apply_config_writes_every_field_and_etag():
     d = FakeDevice()
-    _apply_project_config(d, {})
-    assert d.sample_interval_s == 60 and d.screenshot_policy == "off"
-
-
-def test_apply_config_sets_only_present_keys():
-    d = FakeDevice()
-    _apply_project_config(d, {"sample_interval_s": 300, "excluded_bundle_ids": ["com.x"]})
+    cfg = TrackerCaptureConfig(sample_interval_s=300, excluded_bundle_ids=["com.x"])
+    _apply_config_to_device(d, cfg, "cfg_abc123")
     assert d.sample_interval_s == 300
     assert d.excluded_bundle_ids == ["com.x"]
-    assert d.screenshot_policy == "off"  # untouched
+    assert d.config_etag == "cfg_abc123"
+
+
+def test_apply_config_resets_unspecified_fields_to_schema_defaults():
+    # The full validated config is applied, so a field the caller didn't set is
+    # written from the schema default (not left at the device's prior value).
+    d = FakeDevice()
+    d.screenshot_policy = "active_window"  # stale prior value
+    cfg = TrackerCaptureConfig(sample_interval_s=120)  # screenshot_policy defaults to "off"
+    _apply_config_to_device(d, cfg, "cfg_def456")
+    assert d.sample_interval_s == 120
+    assert d.screenshot_policy == "off"
 
 
 # --------------------------------------------------------------------------- #

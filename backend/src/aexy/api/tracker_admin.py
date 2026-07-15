@@ -74,6 +74,18 @@ def _config_from_settings(settings: dict | None) -> TrackerCaptureConfig:
     return TrackerCaptureConfig(**known)
 
 
+def _apply_config_to_device(device, config: TrackerCaptureConfig, etag: str) -> None:
+    """Copy a validated capture config onto an enrolled device + stamp the etag.
+
+    Every capture field is written (the config is already defaulted by the
+    schema), so a device always reflects the project's current config after an
+    update. The etag lets clients detect the change on their next heartbeat.
+    """
+    for key in _CONFIG_KEYS:
+        setattr(device, key, getattr(config, key))
+    device.config_etag = etag
+
+
 # --------------------------------------------------------------------------- #
 # Per-project config
 # --------------------------------------------------------------------------- #
@@ -119,13 +131,7 @@ async def update_project_tracker_config(
         .all()
     )
     for device in devices:
-        device.sample_interval_s = data.config.sample_interval_s
-        device.screenshot_policy = data.config.screenshot_policy
-        device.screenshot_every_n_samples = data.config.screenshot_every_n_samples
-        device.idle_threshold_s = data.config.idle_threshold_s
-        device.paused = data.config.paused
-        device.excluded_bundle_ids = data.config.excluded_bundle_ids
-        device.config_etag = etag
+        _apply_config_to_device(device, data.config, etag)
 
     await db.commit()
     return TrackerProjectConfigResponse(
