@@ -240,6 +240,8 @@ class WorkflowExecutionContext(BaseModel):
     record_data: dict[str, Any] = Field(default_factory=dict)
     trigger_data: dict[str, Any] = Field(default_factory=dict)
     variables: dict[str, Any] = Field(default_factory=dict)
+    # When True, action nodes are simulated (no real side effects) — US-7.1.
+    is_dry_run: bool = False
     # Execution state
     executed_nodes: list[str] = Field(default_factory=list)
     current_node_id: str | None = None

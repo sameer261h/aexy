@@ -463,6 +463,7 @@ async def execute_workflow(
             record_data=record_data,
             trigger_data=trigger_data,
             variables=data.variables,
+            is_dry_run=True,  # US-7.1: Test Run must not cause real side effects
         )
 
         executor = WorkflowExecutor(db)

@@ -110,6 +110,26 @@ class WorkflowActionHandler:
                 error=f"Unknown action type: {action_type}",
             )
 
+        # US-7.1: a dry run ("Test Run") must not perform real side effects.
+        # Every action in this handler is side-effecting (record writes, sends,
+        # webhooks, notifications), so simulate it and report the node as a
+        # would-run success without invoking the handler. Pure logic nodes
+        # (condition/wait/branch) are evaluated for real by the executor, so
+        # path selection is still meaningful.
+        # ponytail: reports "would run" per node rather than deep-validating each
+        # node's config in dry mode; upgrade to per-node validation if the test
+        # UI needs to surface config errors without a live run.
+        if getattr(context, "is_dry_run", False):
+            return NodeExecutionResult(
+                node_id="",
+                status="success",
+                output={
+                    "dry_run": True,
+                    "simulated_action": action_type,
+                    "message": f"[dry run] would execute '{action_type}' — no side effect performed",
+                },
+            )
+
         return await handler(data, context)
 
     async def _update_record(
