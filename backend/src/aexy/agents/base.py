@@ -62,39 +62,78 @@ class BaseAgent(ABC):
     def llm(self) -> BaseChatModel:
         """Get the LLM instance based on provider."""
         if self._llm is None:
-            if self.llm_provider == "gemini":
+            family, model_id, base_url, api_key = self._plan_llm(
+                self.llm_provider, self.model_name, self.default_model, settings.llm
+            )
+            if family == "gemini":
                 self._llm = ChatGoogleGenerativeAI(
-                    model=self.model_name if self.model_name.startswith("gemini") else "gemini-1.5-pro",
-                    google_api_key=settings.llm.gemini_api_key,
+                    model=model_id,
+                    google_api_key=api_key,
                     max_output_tokens=4096,
                 )
-            elif self.llm_provider == "lmstudio":
-                # Local LM Studio via OpenAI-compatible chat completions.
-                # Imported lazily so the agent module doesn't require
-                # langchain-openai in production deployments that never
-                # use the local provider.
+            elif family == "anthropic":
+                self._llm = ChatAnthropic(
+                    model=model_id,
+                    anthropic_api_key=api_key,
+                    max_tokens=4096,
+                )
+            else:  # openai-compatible (openai, deepseek, openrouter, ollama, lmstudio)
+                # Imported lazily so deployments that never use these providers
+                # don't require langchain-openai at import time.
                 from langchain_openai import ChatOpenAI
 
-                model_id = (
-                    self.model_name
-                    if self.model_name and self.model_name != self.default_model
-                    else settings.llm.lmstudio_model
-                )
-                self._llm = ChatOpenAI(
-                    model=model_id,
-                    base_url=settings.llm.lmstudio_base_url,
-                    api_key=settings.llm.lmstudio_api_key or "lm-studio",
-                    max_tokens=4096,
-                    temperature=0.0,
-                )
-            else:
-                # Default to Claude
-                self._llm = ChatAnthropic(
-                    model=self.model_name,
-                    anthropic_api_key=settings.llm.anthropic_api_key,
-                    max_tokens=4096,
-                )
+                kwargs: dict = {
+                    "model": model_id,
+                    "api_key": api_key,
+                    "max_tokens": 4096,
+                    "temperature": 0.0,
+                }
+                if base_url:
+                    kwargs["base_url"] = base_url
+                self._llm = ChatOpenAI(**kwargs)
         return self._llm
+
+    @staticmethod
+    def _plan_llm(provider: str, model_name: str, default_model: str, llm):
+        """Resolve (family, model, base_url, api_key) for the agent's provider.
+
+        `family` is the LangChain client to build — "gemini", "anthropic", or
+        "openai" (used for every OpenAI-compatible provider: openai, deepseek,
+        openrouter, ollama, lmstudio). Kept pure/static so it is unit-testable
+        without constructing real chat-model clients. Raises on an unknown
+        provider instead of silently falling back to Claude.
+        """
+        provider = (provider or "claude").lower().strip()
+
+        def model_or(default: str) -> str:
+            # Use the agent's configured model unless it's still the class
+            # default (a Claude id) — then use the provider's own default.
+            if model_name and model_name != default_model:
+                return model_name
+            return default
+
+        if provider == "gemini":
+            gem = model_name if model_name.startswith("gemini") else "gemini-1.5-pro"
+            return ("gemini", gem, None, llm.gemini_api_key)
+        if provider in ("claude", "anthropic"):
+            return ("anthropic", model_name, None, llm.anthropic_api_key)
+        if provider == "lmstudio":
+            return ("openai", model_or(llm.lmstudio_model), llm.lmstudio_base_url,
+                    llm.lmstudio_api_key or "lm-studio")
+        if provider == "deepseek":
+            return ("openai", model_or("deepseek-chat"), "https://api.deepseek.com",
+                    llm.deepseek_api_key)
+        if provider == "openrouter":
+            return ("openai", model_or(llm.openrouter_model or "openai/gpt-4o"),
+                    "https://openrouter.ai/api/v1", llm.openrouter_api_key)
+        if provider == "ollama":
+            # Ollama ignores the key but the OpenAI client requires a non-empty one.
+            return ("openai", model_or(llm.ollama_model),
+                    f"{llm.ollama_base_url.rstrip('/')}/v1", "ollama")
+        if provider == "openai":
+            return ("openai", model_or(llm.openai_model or "gpt-4o-mini"), None,
+                    llm.openai_api_key)
+        raise ValueError(f"Unsupported agent LLM provider: {provider!r}")
 
     @property
     @abstractmethod

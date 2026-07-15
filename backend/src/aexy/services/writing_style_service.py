@@ -316,7 +316,7 @@ class WritingStyleService:
         tone_override: str | None = None,
     ) -> dict:
         """Generate an email matching the user's style using LLM."""
-        from anthropic import AsyncAnthropic
+        from aexy.llm.gateway import get_llm_gateway
 
         # Get style profile
         style = await self.get_style(developer_id, workspace_id)
@@ -342,15 +342,25 @@ class WritingStyleService:
             tone_override=tone_override,
         )
 
-        # Call LLM
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-        response = await client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=1000,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        # Call the configured LLM via the gateway (honours LLM_PROVIDER) rather
+        # than a hardcoded Anthropic client, so this works on any provider the
+        # deployment is configured for (DeepSeek, Gemini, etc.).
+        gateway = get_llm_gateway()
+        if not gateway:
+            raise ValueError("LLM provider not configured")
 
-        email_content = response.content[0].text
+        result = await gateway.call_llm(
+            system_prompt=(
+                "You write emails that match the user's personal writing style. "
+                "Return a subject line and body."
+            ),
+            user_prompt=prompt,
+            tokens_estimate=1000,
+            workspace_id=workspace_id,
+            developer_id=developer_id,
+            db=self.db,
+        )
+        email_content = result[0] if isinstance(result, tuple) else str(result)
 
         # Parse subject and body
         subject, body = self._parse_email_response(email_content)

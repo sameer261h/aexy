@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.53] - 2026-07-15
+
+### Rename "Operations" nav group to "Autopilot" + restore the MCP link
+
+- The AI-section group previously labelled **Operations** is now **Autopilot**,
+  and its "All Operations" entry is renamed to **Overview** (the old label was
+  vague and redundant with its own child). Applied to both the grouped and flat
+  sidebar layouts and the `/operations` page title (en + hi).
+- **Restored the MCP link to the sidebar.** When agents + automations were
+  merged into the unified group, the old nav array that held the MCP entry was
+  orphaned, so MCP silently disappeared from navigation (the page itself was
+  always reachable by URL). MCP is now a sub-item of the Autopilot group:
+  Overview / Agents / Workflows / MCP.
+- Removed the orphaned `aiAgentsItems` / `automationsItems` nav arrays so the
+  dead-link regression can't recur.
+
+## [0.8.52] - 2026-07-15
+
+### Fix: more LLM paths ignored LLM_PROVIDER (audit follow-up to 0.8.51)
+
+Auditing for the same anti-pattern behind the Ask chat bug turned up two more
+LLM call sites that ignored the configured provider, plus one UI gap:
+
+- **Writing-style email generation** (`writing_style_service.generate_email`)
+  built a hardcoded `AsyncAnthropic` client, so the agent "generate email"
+  action failed on any non-Anthropic deployment. It now goes through the LLM
+  gateway (honours `LLM_PROVIDER`, works on DeepSeek/Gemini/etc., and gets
+  rate-limiting + billing tracking for free).
+- **LangGraph agents** (`agents/base.py`) only handled `gemini` and `lmstudio`;
+  every other provider fell through to `else -> ChatAnthropic`, so an agent
+  configured for `openai`, `ollama`, `deepseek`, or `openrouter` silently ran
+  on Claude. Provider resolution is now an explicit, unit-tested map — DeepSeek/
+  OpenRouter/OpenAI/Ollama route through the OpenAI-compatible client with the
+  correct base URL, and an unknown provider raises instead of masquerading as
+  Claude.
+- **Agent defaults endpoint** (`GET /agents/defaults`) now includes `deepseek`
+  and `openrouter` in `provider_models` so they're selectable in the UI.
+- Added `tests/unit/test_agent_provider_selection.py` (8) and
+  `tests/unit/test_writing_style_generate_email.py` (2).
+
 ## [0.8.51] - 2026-07-15
 
 ### Fix: Ask AI chat ignored LLM_PROVIDER and hit a suspended Gemini key
