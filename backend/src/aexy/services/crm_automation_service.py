@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from aexy.models.crm import (
     CRMAutomation,
     CRMAutomationRun,
+    CRMAutomationTriggerType,
     CRMRecord,
     CRMSequence,
     CRMSequenceStep,
@@ -178,12 +179,19 @@ class CRMAutomationService:
         trigger_data: dict | None = None,
     ) -> list[CRMAutomationRun]:
         """Process a trigger event and run all matching automations."""
-        # Find all active automations matching this trigger
+        # Find all active automations matching this trigger.
+        # object_id is matched null-tolerantly: an automation bound to a specific
+        # object fires only for that object, while an automation with a NULL
+        # object_id fires for any object of this workspace. A strict
+        # `object_id == object_id` predicate silently excludes NULL rows — and the
+        # /automations builder never sets object_id — so record.created/updated/
+        # deleted automations built there would never fire (0 runs).
         stmt = select(CRMAutomation).where(
             CRMAutomation.workspace_id == workspace_id,
-            CRMAutomation.object_id == object_id,
             CRMAutomation.trigger_type == trigger_type,
             CRMAutomation.is_active == True,
+            (CRMAutomation.object_id == None)  # noqa: E711
+            | (CRMAutomation.object_id == object_id),
         )
         result = await self.db.execute(stmt)
         automations = list(result.scalars().all())
@@ -193,15 +201,18 @@ class CRMAutomationService:
             # Check trigger config to see if this specific trigger matches
             trigger_config = automation.trigger_config or {}
 
-            # For field_changed trigger, check if the specific field matches
-            if trigger_type == "field_changed":
+            # For field_changed trigger, check if the specific field matches.
+            # (Compare against the enum value "field.changed", not "field_changed"
+            # — the latter never equals the dispatched trigger_type, so the field
+            # filter was silently never applied.)
+            if trigger_type == CRMAutomationTriggerType.FIELD_CHANGED.value:
                 watched_field = trigger_config.get("field")
                 changed_field = (trigger_data or {}).get("changed_field")
                 if watched_field and watched_field != changed_field:
                     continue
 
             # For stage_changed trigger, check if stages match
-            if trigger_type == "stage_changed":
+            if trigger_type == CRMAutomationTriggerType.STAGE_CHANGED.value:
                 from_stage = trigger_config.get("from_stage")
                 to_stage = trigger_config.get("to_stage")
                 actual_old = (trigger_data or {}).get("old_stage")

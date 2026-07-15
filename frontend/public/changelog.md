@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.55] - 2026-07-15
+
+### Fix: CRM record-triggered automations never fired (0 runs)
+
+A published `record.created` automation showed 0 runs when a record was added.
+Root cause was a NULL-object mismatch: the `/automations` builder never sets
+`object_id`, so automations are stored with `object_id IS NULL`, but
+`process_trigger` matched with a strict `object_id == object_id` predicate —
+which never matches NULL in SQL. Every record-triggered CRM automation built in
+that UI silently never fired.
+
+- **`process_trigger` now matches `object_id` null-tolerantly** (`IS NULL OR ==
+  record's object`), so a global (unbound) automation fires for the workspace
+  and an object-bound one fires only for its object.
+- **Fixed the field/stage filters in the same function**, which compared against
+  `"field_changed"`/`"stage_changed"` (underscores) while the dispatched values
+  are `"field.changed"`/`"stage.changed"` (dots) — so those filters never
+  applied. Now keyed off the enum values.
+- **Replaced three silent `except Exception: pass` blocks** in `crm_service`
+  (record created/updated/deleted dispatch) with `logger.exception(...)`. The
+  dispatch stays best-effort (never fails record creation) but failures are no
+  longer invisible — this is what made the broken trigger impossible to see.
+- Added `tests/unit/test_crm_automation_trigger_matching.py` reproducing the
+  production scenario plus object-scoping, inactive, trigger-type, and
+  field-filter cases.
+
 ## [0.8.54] - 2026-07-15
 
 ### Harden the MCP / API-token surface: tests, soft-revoke, i18n
