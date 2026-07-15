@@ -3,6 +3,7 @@
 import asyncio
 import httpx
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -31,6 +32,37 @@ from aexy.services.crm_service import CRMRecordService, CRMActivityService
 from aexy.services.slack_integration import SlackIntegrationService
 from aexy.schemas.integrations import SlackMessage, SlackNotificationType
 from aexy.models.developer import Developer
+
+
+# {{...}} is the explicit variable syntax; anything still matching after
+# substitution is an unresolved reference (US-6.4).
+_UNRESOLVED_VAR_RE = re.compile(r"\{\{[^}]+\}\}")
+
+
+def find_unresolved_variables(*texts: str) -> list[str]:
+    """Return the distinct {{variable}} tokens left unresolved in the given
+    text(s), in first-seen order. Used to fail an action with a clear error
+    instead of sending output with a literal {{record.foo}} in it (US-6.4)."""
+    seen: list[str] = []
+    for text in texts:
+        if not text:
+            continue
+        for match in _UNRESOLVED_VAR_RE.findall(text):
+            if match not in seen:
+                seen.append(match)
+    return seen
+
+
+def is_valid_email(address: str) -> bool:
+    """Validate a literal recipient address (US-6.2). Uses the installed
+    email_validator, format-only (no DNS/deliverability lookup)."""
+    from email_validator import validate_email, EmailNotValidError
+
+    try:
+        validate_email(str(address).strip(), check_deliverability=False)
+        return True
+    except EmailNotValidError:
+        return False
 
 
 class CRMAutomationService:
@@ -954,6 +986,10 @@ class CRMAutomationService:
         if not email_to:
             return {"error": "No recipient email address specified"}
 
+        # US-6.2: reject malformed recipient addresses before attempting to send.
+        if not is_valid_email(email_to):
+            return {"error": f"Invalid recipient email address: {email_to!r}"}
+
         subject = config.get("email_subject", "")
         body = config.get("email_body", "")
 
@@ -992,6 +1028,19 @@ class CRMAutomationService:
             if hasattr(record, "name") and record.name:
                 subject = subject.replace("{record_name}", record.name)
                 body = body.replace("{record_name}", record.name)
+
+        # US-6.4: don't send with unresolved {{variables}} still in the content —
+        # surface a clear error so the author can fix the reference instead of
+        # emailing a literal "{{record.foo}}" to a contact.
+        unresolved = find_unresolved_variables(subject, body)
+        if unresolved:
+            return {
+                "error": (
+                    "Unresolved variable(s) in email: "
+                    + ", ".join(unresolved)
+                    + ". Check that the referenced fields exist on the record/trigger."
+                )
+            }
 
         # Queue the email via Temporal
         from aexy.temporal.dispatch import dispatch
