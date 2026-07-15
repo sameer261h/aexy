@@ -265,7 +265,45 @@ class CRMAutomationService:
         # Execute the automation
         await self._execute_automation(automation, run, record_id)
 
+        # Surface the run in the CRM activity feed (E3.5) so automation
+        # outcomes are observable alongside record changes.
+        await self._log_run_activity(automation, run, record_id)
+
         return run
+
+    async def _log_run_activity(
+        self,
+        automation: CRMAutomation,
+        run: CRMAutomationRun,
+        record_id: str | None,
+    ) -> None:
+        """Record an automation run in the CRM activity feed.
+
+        Only for CRM-scoped runs with a record (crm_activities.record_id is a
+        FK to crm_records). The automation name is the human-readable actor.
+        """
+        if not record_id or (automation.module or "crm") != "crm":
+            return
+
+        self.db.add(
+            CRMActivity(
+                id=str(uuid4()),
+                workspace_id=automation.workspace_id,
+                record_id=record_id,
+                activity_type="automation.triggered",
+                actor_type="automation",
+                actor_id=None,
+                actor_name=automation.name,
+                title=f'Automation "{automation.name}" {run.status}',
+                activity_metadata={
+                    "automation_id": automation.id,
+                    "run_id": run.id,
+                    "status": run.status,
+                },
+                occurred_at=datetime.now(timezone.utc),
+            )
+        )
+        await self.db.flush()
 
     async def _execute_automation(
         self,

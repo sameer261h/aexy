@@ -275,27 +275,64 @@ ACTION_REGISTRY: dict[str, list[dict[str, str]]] = {
 # These extract just the string IDs for code that does membership checks
 # =============================================================================
 
+# =============================================================================
+# CRM-ONLY SCOPE (descope decision 2026-07-15)
+# Automations are scoped to CRM. Non-CRM modules are hidden from the registry
+# the palette consumes (inventory preserved in prds/automations-noncrm-deferred.md).
+# Orphan/unwired capabilities are hidden until wired/built
+# (see prds/crm-automations-user-stories.md). To re-activate a module, add it to
+# ENABLED_MODULES and wire its trigger dispatch; to surface a hidden capability,
+# remove it from HIDDEN_TRIGGERS / HIDDEN_ACTIONS.
+# =============================================================================
+
+ENABLED_MODULES: tuple[str, ...] = ("crm",)
+
+HIDDEN_TRIGGERS: frozenset[str] = frozenset({
+    # Unwired CRM triggers: config saves but nothing dispatches them yet.
+    "schedule.daily", "schedule.weekly", "date.approaching", "date.passed",
+    "webhook.received", "email.opened", "email.clicked", "email.replied",
+})
+
+HIDDEN_ACTIONS: frozenset[str] = frozenset({
+    "api_request",        # no handler (only webhook_call is wired)
+    "enrich_record",      # no handler
+    "classify_record",    # no handler
+    "generate_summary",   # no handler
+})
+
+
+def _visible_triggers(entries: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [e for e in entries if e["id"] not in HIDDEN_TRIGGERS]
+
+
+def _visible_actions(entries: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [e for e in entries if e["id"] not in HIDDEN_ACTIONS]
+
+
 def get_trigger_ids(module: str) -> list[str]:
-    """Get trigger IDs (strings only) for a module. For backward-compatible membership checks."""
-    entries = TRIGGER_REGISTRY.get(module, [])
-    return [entry["id"] for entry in entries]
+    """Get visible trigger IDs for an enabled module (empty for descoped modules)."""
+    if module not in ENABLED_MODULES:
+        return []
+    return [entry["id"] for entry in _visible_triggers(TRIGGER_REGISTRY.get(module, []))]
 
 
 def get_action_ids(module: str) -> list[str]:
-    """Get action IDs (strings only) for a module (common + module-specific). For backward-compatible membership checks."""
-    common = ACTION_REGISTRY.get("common", [])
-    module_specific = ACTION_REGISTRY.get(module, [])
+    """Get visible action IDs for an enabled module (common + module-specific)."""
+    if module not in ENABLED_MODULES:
+        return []
+    common = _visible_actions(ACTION_REGISTRY.get("common", []))
+    module_specific = _visible_actions(ACTION_REGISTRY.get(module, []))
     return [entry["id"] for entry in common] + [entry["id"] for entry in module_specific]
 
 
 def get_all_trigger_ids() -> dict[str, list[str]]:
-    """Get all trigger IDs organized by module (strings only)."""
-    return {module: [entry["id"] for entry in entries] for module, entries in TRIGGER_REGISTRY.items()}
+    """Get visible trigger IDs organized by enabled module."""
+    return {module: get_trigger_ids(module) for module in ENABLED_MODULES}
 
 
 def get_all_action_ids() -> dict[str, list[str]]:
-    """Get all action IDs organized by module (strings only)."""
-    return {module: [entry["id"] for entry in entries] for module, entries in ACTION_REGISTRY.items()}
+    """Get visible action IDs organized by enabled module."""
+    return {module: get_action_ids(module) for module in ENABLED_MODULES}
 
 
 # =============================================================================
@@ -303,25 +340,32 @@ def get_all_action_ids() -> dict[str, list[str]]:
 # =============================================================================
 
 def get_triggers_for_module(module: str) -> list[dict[str, str]]:
-    """Get all supported trigger types with descriptions for a module."""
-    return TRIGGER_REGISTRY.get(module, [])
+    """Get visible trigger types with descriptions for an enabled module."""
+    if module not in ENABLED_MODULES:
+        return []
+    return _visible_triggers(TRIGGER_REGISTRY.get(module, []))
 
 
 def get_actions_for_module(module: str) -> list[dict[str, str]]:
-    """Get all supported action types with descriptions for a module (common + module-specific)."""
-    common = ACTION_REGISTRY.get("common", [])
-    module_specific = ACTION_REGISTRY.get(module, [])
+    """Get visible action types with descriptions for an enabled module (common + module-specific)."""
+    if module not in ENABLED_MODULES:
+        return []
+    common = _visible_actions(ACTION_REGISTRY.get("common", []))
+    module_specific = _visible_actions(ACTION_REGISTRY.get(module, []))
     return common + module_specific
 
 
 def get_all_triggers() -> dict[str, list[dict[str, str]]]:
-    """Get all triggers organized by module with descriptions."""
-    return TRIGGER_REGISTRY.copy()
+    """Get visible triggers organized by enabled module with descriptions."""
+    return {module: get_triggers_for_module(module) for module in ENABLED_MODULES}
 
 
 def get_all_actions() -> dict[str, list[dict[str, str]]]:
-    """Get all actions organized by module with descriptions."""
-    return ACTION_REGISTRY.copy()
+    """Get visible actions organized by enabled module (plus the shared 'common' set)."""
+    result = {"common": _visible_actions(ACTION_REGISTRY.get("common", []))}
+    for module in ENABLED_MODULES:
+        result[module] = _visible_actions(ACTION_REGISTRY.get(module, []))
+    return result
 
 
 # =============================================================================

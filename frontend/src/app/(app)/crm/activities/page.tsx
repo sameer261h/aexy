@@ -21,6 +21,7 @@ import {
   Trash,
   Link2,
   Eye,
+  Zap,
   Activity,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
@@ -28,7 +29,7 @@ import { useWorkspace } from "@/hooks/useWorkspace";
 import { SearchInput } from "@/components/ui/search-input";
 import { crmApi, CRMActivity } from "@/lib/api";
 
-type ActivityType = "all" | "email" | "meeting" | "call" | "note" | "task" | "record_created" | "record_updated" | "record_deleted";
+type ActivityType = "all" | "email" | "meeting" | "call" | "note" | "task" | "record_created" | "record_updated" | "record_deleted" | "automation";
 
 const activityTypeConfig: Record<string, { icon: React.ElementType; label: string; color: string; bgColor: string }> = {
   all: { icon: Clock, label: "All", color: "text-muted-foreground", bgColor: "bg-muted-foreground/20" },
@@ -42,10 +43,24 @@ const activityTypeConfig: Record<string, { icon: React.ElementType; label: strin
   record_deleted: { icon: Trash, label: "Deleted", color: "text-red-600 dark:text-red-400", bgColor: "bg-red-500/20" },
   record_viewed: { icon: Eye, label: "Viewed", color: "text-muted-foreground", bgColor: "bg-muted-foreground/20" },
   link_created: { icon: Link2, label: "Linked", color: "text-indigo-600 dark:text-indigo-400", bgColor: "bg-indigo-500/20" },
+  automation: { icon: Zap, label: "Automations", color: "text-orange-600 dark:text-orange-400", bgColor: "bg-orange-500/20" },
 };
 
+// Stored activity types are dotted (e.g. "record.created", "meeting.scheduled").
+// Map them to the category key the config/tabs use so icons + labels resolve
+// instead of falling back to the raw type string.
+function categoryOfType(type: string): string {
+  if (activityTypeConfig[type]) return type;
+  const [head, tail] = type.split(".");
+  if (head === "record") return `record_${tail}`;
+  if (head === "link") return "link_created";
+  if (["meeting", "email", "call", "note", "task"].includes(head)) return head;
+  if (["automation", "sequence", "enrichment"].includes(head)) return "automation";
+  return type;
+}
+
 function getActivityConfig(type: string) {
-  return activityTypeConfig[type] || { icon: Clock, label: type, color: "text-muted-foreground", bgColor: "bg-muted-foreground/20" };
+  return activityTypeConfig[categoryOfType(type)] || { icon: Clock, label: type, color: "text-muted-foreground", bgColor: "bg-muted-foreground/20" };
 }
 
 function formatRelativeTime(dateString: string) {
@@ -182,7 +197,7 @@ export default function ActivitiesPage() {
     );
   });
 
-  const filterTypes: ActivityType[] = ["all", "record_created", "record_updated", "email", "meeting", "call", "note", "task"];
+  const filterTypes: ActivityType[] = ["all", "record_created", "record_updated", "email", "meeting", "call", "note", "task", "automation"];
 
   if (!workspaceId) {
     return (

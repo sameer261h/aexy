@@ -1,9 +1,12 @@
 """Workflow service for visual automation builder."""
 
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
+
+from email_validator import EmailNotValidError, validate_email
 
 from sqlalchemy import select, desc, delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +27,70 @@ from aexy.schemas.workflow import (
     WorkflowValidationError,
     WorkflowValidationResult,
 )
+
+
+# Required fields per action type. Value is (field-alternatives, error_type, message).
+# An action is valid if at least one of the listed fields is present and truthy.
+_ACTION_REQUIRED_FIELDS: dict[str, tuple[tuple[str, ...], str, str]] = {
+    "send_email": (("to", "email_field"), "missing_email_recipient",
+                   "Email action requires a recipient (to or email_field)"),
+    "send_tracked_email": (("to", "email_field"), "missing_email_recipient",
+                           "Email action requires a recipient (to or email_field)"),
+    "webhook_call": (("url",), "missing_webhook_url",
+                     "Webhook action requires a URL"),
+    "create_task": (("title",), "missing_task_title",
+                    "Create-task action requires a title"),
+    "add_to_list": (("list_id",), "missing_list",
+                    "List action requires a list"),
+    "remove_from_list": (("list_id",), "missing_list",
+                          "List action requires a list"),
+}
+
+# Fields whose literal values should be validated as email addresses.
+_EMAIL_LITERAL_FIELDS = ("to", "email_to", "email")
+
+# Namespaces a {{variable}} reference may resolve against at execution time.
+_VARIABLE_NAMESPACES = {"record", "trigger", "variables"}
+
+# Condition operators that require a numeric comparison value.
+_NUMERIC_OPERATORS = {"gt", "gte", "lt", "lte"}
+
+_VARIABLE_RE = re.compile(r"\{\{\s*(.*?)\s*\}\}")
+
+
+def _is_variable(value: str) -> bool:
+    """A value is a template reference (not a literal) if it contains ``{{``."""
+    return "{{" in value or "}}" in value
+
+
+def _is_valid_email(addr: str) -> bool:
+    try:
+        validate_email(addr, check_deliverability=False)
+        return True
+    except EmailNotValidError:
+        return False
+
+
+def _variable_root(expr: str) -> str:
+    """First path segment of a variable expression, e.g. ``record.values.x`` -> ``record``."""
+    return re.split(r"[.\[]", expr.strip(), maxsplit=1)[0].strip()
+
+
+def _is_numeric_literal(value: Any) -> bool:
+    """True if the value is (or parses as) a number. Variables defer to runtime."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return True
+    if isinstance(value, str):
+        if _is_variable(value):
+            return True
+        try:
+            float(value)
+            return True
+        except ValueError:
+            return False
+    return False
 
 
 class WorkflowService:
@@ -541,8 +608,39 @@ class WorkflowService:
                         )
                     )
 
+            # US-6.1: required fields per action type.
+            required = _ACTION_REQUIRED_FIELDS.get(action_type)
+            if required:
+                fields, error_type, message = required
+                if not any(data.get(f) for f in fields):
+                    errors.append(
+                        WorkflowValidationError(
+                            node_id=node["id"],
+                            error_type=error_type,
+                            message=message,
+                        )
+                    )
+
+            # US-6.2: literal email addresses must be well-formed.
+            for field in _EMAIL_LITERAL_FIELDS:
+                value = data.get(field)
+                if (
+                    isinstance(value, str)
+                    and value
+                    and not _is_variable(value)
+                    and not _is_valid_email(value)
+                ):
+                    errors.append(
+                        WorkflowValidationError(
+                            node_id=node["id"],
+                            error_type="invalid_email",
+                            message=f"'{value}' is not a valid email address",
+                        )
+                    )
+
         elif node_type == "condition":
-            if not data.get("conditions"):
+            conditions = data.get("conditions")
+            if not conditions:
                 errors.append(
                     WorkflowValidationError(
                         node_id=node["id"],
@@ -550,16 +648,44 @@ class WorkflowService:
                         message="Condition node must have at least one condition",
                     )
                 )
+            else:
+                # US-6.3: numeric operators require a numeric comparison value.
+                for cond in conditions:
+                    if (
+                        cond.get("operator") in _NUMERIC_OPERATORS
+                        and cond.get("value") is not None
+                        and not _is_numeric_literal(cond.get("value"))
+                    ):
+                        errors.append(
+                            WorkflowValidationError(
+                                node_id=node["id"],
+                                error_type="invalid_condition_value",
+                                message=(
+                                    f"Operator '{cond.get('operator')}' on field "
+                                    f"'{cond.get('field')}' requires a numeric value"
+                                ),
+                            )
+                        )
 
         elif node_type == "wait":
             wait_type = data.get("wait_type", "duration")
             if wait_type == "duration":
-                if not data.get("duration_value"):
+                duration = data.get("duration_value")
+                if not duration:
                     errors.append(
                         WorkflowValidationError(
                             node_id=node["id"],
                             error_type="missing_wait_duration",
                             message="Wait node must specify a duration",
+                        )
+                    )
+                elif not _is_numeric_literal(duration):
+                    # US-6.3: a literal duration must be a number.
+                    errors.append(
+                        WorkflowValidationError(
+                            node_id=node["id"],
+                            error_type="invalid_duration",
+                            message=f"Wait duration '{duration}' must be a number",
                         )
                     )
 
@@ -573,6 +699,39 @@ class WorkflowService:
                     )
                 )
 
+        # US-6.4: {{variable}} references must be well-formed and resolvable.
+        errors.extend(self._validate_variable_references(node))
+
+        return errors
+
+    def _validate_variable_references(self, node: dict) -> list[WorkflowValidationError]:
+        """Flag malformed braces and unknown namespaces in any string config value."""
+        errors = []
+        node_id = node["id"]
+        for value in (node.get("data") or {}).values():
+            if not isinstance(value, str) or ("{{" not in value and "}}" not in value):
+                continue
+            if value.count("{{") != value.count("}}"):
+                errors.append(
+                    WorkflowValidationError(
+                        node_id=node_id,
+                        error_type="malformed_variable",
+                        message=f"Unbalanced '{{{{ }}}}' in: {value}",
+                    )
+                )
+                continue
+            for expr in _VARIABLE_RE.findall(value):
+                if _variable_root(expr) not in _VARIABLE_NAMESPACES:
+                    allowed = ", ".join(sorted(_VARIABLE_NAMESPACES))
+                    errors.append(
+                        WorkflowValidationError(
+                            node_id=node_id,
+                            error_type="unknown_variable_namespace",
+                            message=(
+                                f"'{{{{{expr}}}}}' must start with one of: {allowed}"
+                            ),
+                        )
+                    )
         return errors
 
     # =========================================================================

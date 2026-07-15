@@ -4,10 +4,12 @@ Extracted from processing/email_marketing_tasks.py for the Temporal migration.
 Each method converts the old sync Temporal activity logic to async using self.db (AsyncSession).
 """
 
+import hashlib
 import logging
 from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
+from email_validator import EmailNotValidError, validate_email
 from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -693,6 +695,68 @@ class EmailCampaignService:
     # WORKFLOW EMAIL
     # =========================================================================
 
+    def _build_unsubscribe_url(self, subscriber) -> str:
+        """One-click unsubscribe URL for the recipient's preference token."""
+        from aexy.core.config import get_settings
+
+        base = get_settings().frontend_url.rstrip("/")
+        return f"{base}/preferences/{subscriber.preference_token}"
+
+    async def _ensure_subscriber(
+        self, workspace_id: str, email: str, record_id: str | None = None
+    ):
+        """Get or create a tracked subscriber for this recipient (E2.8 consent basis).
+
+        Every automation recipient becomes a first-class subscriber with an
+        active status + preference token, so a future unsubscribe/bounce is
+        honoured by `_suppression_reason` on subsequent sends.
+        """
+        email_hash = hashlib.sha256(email.lower().encode()).hexdigest()
+        subscriber = (
+            await self.db.execute(
+                select(EmailSubscriber).where(
+                    EmailSubscriber.workspace_id == workspace_id,
+                    EmailSubscriber.email_hash == email_hash,
+                )
+            )
+        ).scalar_one_or_none()
+        if not subscriber:
+            subscriber = EmailSubscriber(
+                id=str(uuid4()),
+                workspace_id=workspace_id,
+                record_id=record_id,
+                email=email,
+                email_hash=email_hash,
+                status=SubscriberStatus.ACTIVE.value,
+                preference_token=uuid4().hex,
+            )
+            self.db.add(subscriber)
+            await self.db.flush()
+        return subscriber
+
+    async def _suppression_reason(self, workspace_id: str, email: str) -> str | None:
+        """Return the suppression reason for an email in a workspace, or None.
+
+        Mirrors the campaign path's suppression check so every send path honours
+        the same unsubscribe/bounce/complaint list.
+        """
+        email_hash = hashlib.sha256(email.lower().encode()).hexdigest()
+        subscriber = (
+            await self.db.execute(
+                select(EmailSubscriber).where(
+                    EmailSubscriber.workspace_id == workspace_id,
+                    EmailSubscriber.email_hash == email_hash,
+                )
+            )
+        ).scalar_one_or_none()
+        if subscriber and subscriber.status in {
+            SubscriberStatus.UNSUBSCRIBED.value,
+            SubscriberStatus.BOUNCED.value,
+            SubscriberStatus.COMPLAINED.value,
+        }:
+            return subscriber.status
+        return None
+
     async def send_workflow_email(
         self,
         workspace_id: str,
@@ -713,6 +777,26 @@ class EmailCampaignService:
         otherwise falls back to the default email service.
         """
         logger.info(f"Sending workflow email to {to_email}")
+
+        # E2.9: never attempt to send to a malformed address.
+        try:
+            validate_email(to_email, check_deliverability=False)
+        except EmailNotValidError:
+            logger.info(f"Skipping workflow email: invalid address {to_email!r}")
+            return {"status": "skipped", "reason": "invalid_email", "to": to_email}
+
+        # E2.7: enforce suppression on the workflow send path too (previously
+        # only the campaign path honoured unsubscribes/bounces/complaints).
+        suppressed = await self._suppression_reason(workspace_id, to_email)
+        if suppressed:
+            logger.info(f"Skipping workflow email to {to_email}: {suppressed}")
+            return {"status": "skipped", "reason": suppressed, "to": to_email}
+
+        # E2.8: register the recipient as a tracked subscriber (consent basis)
+        # and build a one-click unsubscribe URL so automation mail carries a
+        # List-Unsubscribe header, just like campaigns.
+        subscriber = await self._ensure_subscriber(workspace_id, to_email, record_id)
+        unsubscribe_url = self._build_unsubscribe_url(subscriber)
 
         message_id = None
         send_success = False
@@ -747,6 +831,7 @@ class EmailCampaignService:
                         subject=subject,
                         html_body=html_body,
                         text_body="",
+                        unsubscribe_url=unsubscribe_url,
                     )
 
                     if result.get("success"):
@@ -766,6 +851,7 @@ class EmailCampaignService:
                     subject=subject,
                     body_text="",
                     body_html=html_body,
+                    unsubscribe_url=unsubscribe_url,
                 )
                 if log.status == "sent":
                     send_success = True

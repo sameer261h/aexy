@@ -34,6 +34,38 @@ CRMActivityType = Literal[
     "automation.triggered", "sequence.enrolled", "sequence.completed", "enrichment.completed"
 ]
 
+# Maps the CRM activity feed's category tabs (frontend filter keys) to the
+# concrete dotted activity types stored on records, so a "Created"/"Meetings"
+# tab matches record.created / every meeting.* subtype instead of failing an
+# exact-string comparison. Keys mirror the frontend filterTypes.
+ACTIVITY_CATEGORY_TYPES: dict[str, list[str]] = {
+    "record_created": ["record.created"],
+    "record_updated": ["record.updated"],
+    "record_deleted": ["record.deleted"],
+    "record_viewed": ["record.viewed"],
+    "email": ["email.sent", "email.received", "email.opened", "email.clicked", "email.bounced"],
+    "meeting": ["meeting.scheduled", "meeting.completed", "meeting.cancelled"],
+    "call": ["call.made", "call.received", "call.missed"],
+    "note": ["note.added"],
+    "task": ["task.created", "task.completed"],
+    "automation": [
+        "automation.triggered", "sequence.enrolled", "sequence.completed",
+        "enrichment.completed",
+    ],
+}
+
+
+def expand_activity_category(value: str | None) -> list[str] | None:
+    """Expand a feed category key to its dotted activity types.
+
+    - ``None``/``"all"`` -> ``None`` (no filter, show everything).
+    - a known category key -> its list of concrete types.
+    - anything else -> ``[value]`` (already a concrete dotted type; exact match).
+    """
+    if not value or value == "all":
+        return None
+    return ACTIVITY_CATEGORY_TYPES.get(value, [value])
+
 CRMAutomationTriggerType = Literal[
     "record.created", "record.updated", "record.deleted", "field.changed",
     "list_entry.added", "list_entry.removed", "status.changed",

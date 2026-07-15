@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from jinja2 import Environment, BaseLoader, TemplateSyntaxError, UndefinedError
+from jinja2 import Environment, BaseLoader, StrictUndefined, TemplateSyntaxError, UndefinedError
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +48,19 @@ class TemplateService:
         self._jinja_env.filters["title"] = str.title
         self._jinja_env.filters["upper"] = str.upper
         self._jinja_env.filters["lower"] = str.lower
+
+        # Strict variant used ONLY for validation — StrictUndefined raises on
+        # unknown merge tags so validate_template can flag typo'd/undeclared
+        # variables. Rendering still uses the lenient env so a missing optional
+        # var never breaks a real send.
+        self._strict_jinja_env = Environment(
+            loader=BaseLoader(),
+            autoescape=True,
+            undefined=StrictUndefined,
+        )
+        self._strict_jinja_env.filters["title"] = str.title
+        self._strict_jinja_env.filters["upper"] = str.upper
+        self._strict_jinja_env.filters["lower"] = str.lower
 
     # =========================================================================
     # TEMPLATE CRUD
@@ -420,7 +433,7 @@ class TemplateService:
 
         # Try rendering subject
         try:
-            subject_tmpl = self._jinja_env.from_string(template.subject_template)
+            subject_tmpl = self._strict_jinja_env.from_string(template.subject_template)
             subject_tmpl.render(**context)
         except TemplateSyntaxError as e:
             errors.append(f"Subject template syntax error: {e}")
@@ -450,7 +463,7 @@ class TemplateService:
                 pass  # Already reported above
 
         try:
-            html_tmpl = self._jinja_env.from_string(html_body)
+            html_tmpl = self._strict_jinja_env.from_string(html_body)
             html_tmpl.render(**context)
         except TemplateSyntaxError as e:
             errors.append(f"HTML body syntax error: {e}")
@@ -460,7 +473,7 @@ class TemplateService:
         # Try rendering text body
         if template.body_text:
             try:
-                text_tmpl = self._jinja_env.from_string(template.body_text)
+                text_tmpl = self._strict_jinja_env.from_string(template.body_text)
                 text_tmpl.render(**context)
             except TemplateSyntaxError as e:
                 errors.append(f"Text body syntax error: {e}")

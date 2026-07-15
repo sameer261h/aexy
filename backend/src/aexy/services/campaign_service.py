@@ -20,6 +20,7 @@ from aexy.models.email_marketing import (
     SubscriberStatus,
 )
 from aexy.models.crm import CRMList, CRMRecord, CRMListEntry
+from aexy.models.email_infrastructure import DomainStatus, SendingDomain
 from aexy.schemas.email_marketing import (
     EmailCampaignCreate,
     EmailCampaignUpdate,
@@ -745,6 +746,23 @@ class CampaignService:
     # SENDING
     # =========================================================================
 
+    # Domain states that imply DNS has been verified and the domain may send.
+    _SENDABLE_DOMAIN_STATUSES = (
+        DomainStatus.VERIFIED.value,
+        DomainStatus.ACTIVE.value,
+        DomainStatus.WARMING.value,
+    )
+
+    async def _has_verified_sender(self, workspace_id: str) -> bool:
+        """True if the workspace has at least one verified sending domain."""
+        result = await self.db.execute(
+            select(func.count(SendingDomain.id)).where(
+                SendingDomain.workspace_id == workspace_id,
+                SendingDomain.status.in_(self._SENDABLE_DOMAIN_STATUSES),
+            )
+        )
+        return (result.scalar() or 0) > 0
+
     async def start_sending(
         self,
         campaign_id: str,
@@ -765,6 +783,14 @@ class CampaignService:
 
         if not campaign.template:
             raise ValueError("Campaign must have a template")
+
+        # E2.6: refuse to send until the workspace has a verified sending
+        # domain — sending from an unverified domain wrecks deliverability
+        # and enables spoofing. The UI mirrors this by disabling "Send".
+        if not await self._has_verified_sender(workspace_id):
+            raise ValueError(
+                "No verified sending domain — verify a domain before sending"
+            )
 
         # Populate recipients
         recipient_count = await self.populate_recipients(campaign_id, workspace_id)

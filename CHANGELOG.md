@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.50] - 2026-07-15
+
+### CRM automation hardening: CRM-only scope, real send path, workspace isolation
+
+Automations, email, and the CRM activity feed were audited and hardened, and
+the automation surface was officially scoped to CRM only. The recurring finding
+was "visible ≫ wired" — the builder palette exposed triggers and actions that
+nothing dispatched or handled. All changes are covered by 95 new tests (unit +
+integration) plus live E2E specs.
+
+- **CRM-only scope (single source of truth).** The trigger/action registry now
+  filters to `ENABLED_MODULES = ("crm",)` and hides unwired capabilities
+  (`schedule.*`, `date.*`, `webhook.received`, `email.*` triggers;
+  `api_request`/`enrich_record`/`classify_record`/`generate_summary` actions).
+  The palette, generate-workflow endpoint, and generated fixture all consume
+  the filtered registry, so descoped modules disappear everywhere at once.
+  Non-CRM modules are inventoried in `prds/automations-noncrm-deferred.md`.
+- **Workflow validation.** The visual builder now rejects actions missing
+  required fields (e.g. an email node with no recipient), malformed literal
+  email addresses, non-numeric wait durations and numeric-operator condition
+  values, and malformed/unknown-namespace `{{variable}}` references — instead of
+  saving a workflow that fails at execution time.
+- **Real email send path.** `send_workflow_email` now validates the address,
+  honours the unsubscribe/bounce/complaint suppression list (previously only the
+  campaign path did), registers each recipient as a tracked subscriber (consent
+  basis), and carries a one-click `List-Unsubscribe` header (RFC 2369/8058) —
+  on both the multi-domain path and the default-service fallback (SES via
+  `send_raw_email`, SMTP, and Postmark).
+- **Campaign send-gating.** Campaigns refuse to send until the workspace has a
+  verified sending domain (`start_sending` raises); the UI mirrors this by
+  disabling "Send Now" with an explanatory hint.
+- **Template validation** flags typo'd/undeclared merge tags via a strict Jinja
+  environment (rendering stays lenient so a missing optional var never breaks a
+  real send).
+- **CRM activity feed fixes.** Fixed a 500 (`a.metadata` → `a.activity_metadata`,
+  a reserved SQLAlchemy attribute), a silently-dropped activity metadata payload,
+  and a missing actor name; automation runs now surface in the feed
+  (`automation.triggered`), and the feed's category tabs map correctly to the
+  dotted activity types actually stored.
+- **Workspace isolation (P0 security).** Added 36 standing regression tests
+  across CRM records/objects/notes/activities and the automations, campaigns,
+  pipelines, lists, and attributes modules, covering both non-member→403 and
+  cross-tenant IDOR→404 (reads and mutations). No isolation vulnerabilities were
+  found — the tests lock the invariant in place.
+
 ## [0.8.49] - 2026-07-10
 
 ### Fix: ticket→task description, source backlink, and notification polling

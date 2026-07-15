@@ -118,6 +118,7 @@ test.describe("AI / Automation canvas wiring (live)", () => {
           data: {
             label: "Send Welcome",
             action_type: "send_email",
+            email_field: "email",
             email_subject: "Welcome!",
             email_body: "Hi there — glad to have you.",
           },

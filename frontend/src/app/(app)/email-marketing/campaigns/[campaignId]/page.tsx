@@ -41,6 +41,7 @@ import {
   useSendCampaign,
   useDuplicateCampaign,
   useDeleteCampaign,
+  useSendingDomains,
 } from "@/hooks/useEmailMarketing";
 import { CampaignRecipient } from "@/lib/api";
 import { CAMPAIGN_STATUS_COLORS, getStatusColor } from "@/lib/statusColors";
@@ -73,6 +74,14 @@ export default function CampaignDetailPage() {
   const sendCampaign = useSendCampaign(workspaceId);
   const duplicateCampaign = useDuplicateCampaign(workspaceId);
   const deleteCampaign = useDeleteCampaign(workspaceId);
+
+  // E2.6: mirror the backend send-gate — can't send until the workspace has a
+  // verified sending domain. The backend enforces this too (start_sending
+  // raises), this just disables the button and explains why.
+  const { data: sendingDomains } = useSendingDomains(workspaceId);
+  const hasVerifiedSender = (sendingDomains ?? []).some((d) =>
+    ["verified", "active", "warming"].includes(d.status),
+  );
 
   const getRecipientStatusColor = (status: string) => {
     switch (status) {
@@ -264,8 +273,13 @@ export default function CampaignDetailPage() {
                   </button>
                   <button
                     onClick={handleSend}
-                    disabled={sendCampaign.isPending}
-                    className="flex items-center gap-2 px-4 py-2 bg-sky-500 text-white rounded-lg hover:bg-sky-600 transition disabled:opacity-50"
+                    disabled={sendCampaign.isPending || !hasVerifiedSender}
+                    title={
+                      hasVerifiedSender
+                        ? undefined
+                        : "Verify a sending domain before sending"
+                    }
+                    className="flex items-center gap-2 px-4 py-2 bg-sky-500 text-white rounded-lg hover:bg-sky-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {sendCampaign.isPending ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
