@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.53] - 2026-07-15
+
+### Rename "Operations" nav group to "Autopilot" + restore the MCP link
+
+- The AI-section group previously labelled **Operations** is now **Autopilot**,
+  and its "All Operations" entry is renamed to **Overview** (the old label was
+  vague and redundant with its own child). Applied to both the grouped and flat
+  sidebar layouts and the `/operations` page title (en + hi).
+- **Restored the MCP link to the sidebar.** When agents + automations were
+  merged into the unified group, the old nav array that held the MCP entry was
+  orphaned, so MCP silently disappeared from navigation (the page itself was
+  always reachable by URL). MCP is now a sub-item of the Autopilot group:
+  Overview / Agents / Workflows / MCP.
+- Removed the orphaned `aiAgentsItems` / `automationsItems` nav arrays so the
+  dead-link regression can't recur.
+
 ## [0.8.52] - 2026-07-15
 
 ### Fix: more LLM paths ignored LLM_PROVIDER (audit follow-up to 0.8.51)

@@ -148,24 +148,14 @@ const uptimeItems: SidebarItemConfig[] = [
     { href: "/uptime/history", label: "History", icon: History },
 ];
 
-const aiAgentsItems: SidebarItemConfig[] = [
-    { href: "/agents", label: "All Agents", icon: Bot },
-    { href: "/agents/new", label: "Create Agent", icon: UserPlus },
-    { href: "/mcp", label: "MCP", icon: Plug },
-];
-
-const automationsItems: SidebarItemConfig[] = [
-    { href: "/automations", label: "All Automations", icon: Zap },
-    { href: "/automations/new", label: "Create Automation", icon: UserPlus },
-];
-
-// Unified "Operations" view — primary entry for both agents and
-// automations. The focused list pages remain as sub-items so power users
-// who want to filter to a single type still have a direct link.
+// Unified "Autopilot" view — primary entry for agents + automations, plus the
+// MCP connector config. The focused pages remain as sub-items so power users
+// who want a single type still have a direct link.
 const operationsItems: SidebarItemConfig[] = [
-    { href: "/operations", label: "All Operations", icon: Workflow },
+    { href: "/operations", label: "Overview", icon: Workflow },
     { href: "/agents", label: "Agents", icon: Bot },
     { href: "/automations", label: "Workflows", icon: Zap },
+    { href: "/mcp", label: "MCP", icon: Plug },
 ];
 
 const insightsItems: SidebarItemConfig[] = [
@@ -237,7 +227,7 @@ export const GROUPED_LAYOUT: SidebarLayoutConfig = {
             items: [
                 {
                     href: "/operations",
-                    label: "Operations",
+                    label: "Autopilot",
                     icon: Workflow,
                     items: operationsItems,
                 },
@@ -453,7 +443,7 @@ export const FLAT_LAYOUT: SidebarLayoutConfig = {
                 },
                 {
                     href: "/operations",
-                    label: "Operations",
+                    label: "Autopilot",
                     icon: Workflow,
                     items: operationsItems,
                 },

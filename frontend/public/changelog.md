@@ -5,6 +5,119 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.53] - 2026-07-15
+
+### Rename "Operations" nav group to "Autopilot" + restore the MCP link
+
+- The AI-section group previously labelled **Operations** is now **Autopilot**,
+  and its "All Operations" entry is renamed to **Overview** (the old label was
+  vague and redundant with its own child). Applied to both the grouped and flat
+  sidebar layouts and the `/operations` page title (en + hi).
+- **Restored the MCP link to the sidebar.** When agents + automations were
+  merged into the unified group, the old nav array that held the MCP entry was
+  orphaned, so MCP silently disappeared from navigation (the page itself was
+  always reachable by URL). MCP is now a sub-item of the Autopilot group:
+  Overview / Agents / Workflows / MCP.
+- Removed the orphaned `aiAgentsItems` / `automationsItems` nav arrays so the
+  dead-link regression can't recur.
+
+## [0.8.52] - 2026-07-15
+
+### Fix: more LLM paths ignored LLM_PROVIDER (audit follow-up to 0.8.51)
+
+Auditing for the same anti-pattern behind the Ask chat bug turned up two more
+LLM call sites that ignored the configured provider, plus one UI gap:
+
+- **Writing-style email generation** (`writing_style_service.generate_email`)
+  built a hardcoded `AsyncAnthropic` client, so the agent "generate email"
+  action failed on any non-Anthropic deployment. It now goes through the LLM
+  gateway (honours `LLM_PROVIDER`, works on DeepSeek/Gemini/etc., and gets
+  rate-limiting + billing tracking for free).
+- **LangGraph agents** (`agents/base.py`) only handled `gemini` and `lmstudio`;
+  every other provider fell through to `else -> ChatAnthropic`, so an agent
+  configured for `openai`, `ollama`, `deepseek`, or `openrouter` silently ran
+  on Claude. Provider resolution is now an explicit, unit-tested map — DeepSeek/
+  OpenRouter/OpenAI/Ollama route through the OpenAI-compatible client with the
+  correct base URL, and an unknown provider raises instead of masquerading as
+  Claude.
+- **Agent defaults endpoint** (`GET /agents/defaults`) now includes `deepseek`
+  and `openrouter` in `provider_models` so they're selectable in the UI.
+- Added `tests/unit/test_agent_provider_selection.py` (8) and
+  `tests/unit/test_writing_style_generate_email.py` (2).
+
+## [0.8.51] - 2026-07-15
+
+### Fix: Ask AI chat ignored LLM_PROVIDER and hit a suspended Gemini key
+
+The Ask feature (the floating chat widget's "AI" tab and the full `/chat` AI
+panel) failed to return any response in production: it silently routed to
+Gemini and got `403 CONSUMER_SUSPENDED`, so nothing streamed back.
+
+Root cause: `AskService` ignored `settings.llm.llm_provider` and instead picked
+a provider by "first API key present" in the order Anthropic → OpenAI → Gemini,
+with no DeepSeek branch at all. Every other part of the platform honours
+`LLM_PROVIDER` via the LLM gateway — the Ask feature was the one place that
+didn't. A deployment configured for `deepseek` therefore still called Gemini.
+
+- `AskService` now resolves the provider from `LLM_PROVIDER` (the same source of
+  truth the gateway uses). DeepSeek, OpenRouter, and LM Studio reuse the
+  OpenAI-compatible streaming path with the correct base URL; Claude/OpenAI/
+  Gemini keep their existing paths.
+- If the configured provider has no usable credentials, it falls back to the
+  previous auto-detect so deployments that never set `LLM_PROVIDER` are
+  unaffected.
+- Added `tests/unit/test_ask_provider_selection.py` (11 tests) pinning the
+  resolver, including the exact prod scenario (DeepSeek chosen even when a
+  Gemini key is also present).
+
+Note: honouring `deepseek` requires `DEEPSEEK_API_KEY` to be set in the target
+environment; without it the resolver falls back to auto-detect.
+
+## [0.8.50] - 2026-07-15
+
+### CRM automation hardening: CRM-only scope, real send path, workspace isolation
+
+Automations, email, and the CRM activity feed were audited and hardened, and
+the automation surface was officially scoped to CRM only. The recurring finding
+was "visible ≫ wired" — the builder palette exposed triggers and actions that
+nothing dispatched or handled. All changes are covered by 95 new tests (unit +
+integration) plus live E2E specs.
+
+- **CRM-only scope (single source of truth).** The trigger/action registry now
+  filters to `ENABLED_MODULES = ("crm",)` and hides unwired capabilities
+  (`schedule.*`, `date.*`, `webhook.received`, `email.*` triggers;
+  `api_request`/`enrich_record`/`classify_record`/`generate_summary` actions).
+  The palette, generate-workflow endpoint, and generated fixture all consume
+  the filtered registry, so descoped modules disappear everywhere at once.
+  Non-CRM modules are inventoried in `prds/automations-noncrm-deferred.md`.
+- **Workflow validation.** The visual builder now rejects actions missing
+  required fields (e.g. an email node with no recipient), malformed literal
+  email addresses, non-numeric wait durations and numeric-operator condition
+  values, and malformed/unknown-namespace `{{variable}}` references — instead of
+  saving a workflow that fails at execution time.
+- **Real email send path.** `send_workflow_email` now validates the address,
+  honours the unsubscribe/bounce/complaint suppression list (previously only the
+  campaign path did), registers each recipient as a tracked subscriber (consent
+  basis), and carries a one-click `List-Unsubscribe` header (RFC 2369/8058) —
+  on both the multi-domain path and the default-service fallback (SES via
+  `send_raw_email`, SMTP, and Postmark).
+- **Campaign send-gating.** Campaigns refuse to send until the workspace has a
+  verified sending domain (`start_sending` raises); the UI mirrors this by
+  disabling "Send Now" with an explanatory hint.
+- **Template validation** flags typo'd/undeclared merge tags via a strict Jinja
+  environment (rendering stays lenient so a missing optional var never breaks a
+  real send).
+- **CRM activity feed fixes.** Fixed a 500 (`a.metadata` → `a.activity_metadata`,
+  a reserved SQLAlchemy attribute), a silently-dropped activity metadata payload,
+  and a missing actor name; automation runs now surface in the feed
+  (`automation.triggered`), and the feed's category tabs map correctly to the
+  dotted activity types actually stored.
+- **Workspace isolation (P0 security).** Added 36 standing regression tests
+  across CRM records/objects/notes/activities and the automations, campaigns,
+  pipelines, lists, and attributes modules, covering both non-member→403 and
+  cross-tenant IDOR→404 (reads and mutations). No isolation vulnerabilities were
+  found — the tests lock the invariant in place.
+
 ## [0.8.49] - 2026-07-10
 
 ### Fix: ticket→task description, source backlink, and notification polling
