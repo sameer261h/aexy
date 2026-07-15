@@ -1,0 +1,47 @@
+{
+  "apiTokens": {
+    "title": "API Tokens",
+    "subtitle": "Create and manage tokens for MCP servers and external integrations",
+    "createButton": "Create Token",
+    "form": {
+      "heading": "New API Token",
+      "nameLabel": "Token name",
+      "namePlaceholder": "e.g. \"Claude Code local\"",
+      "expiryLabel": "Expiry",
+      "submit": "Create"
+    },
+    "expiry": {
+      "days": "{count} days",
+      "year1": "1 year",
+      "none": "No expiry"
+    },
+    "created": {
+      "banner": "Token \"{name}\" created",
+      "warning": "Copy this token now. It won't be shown again.",
+      "dismiss": "Dismiss"
+    },
+    "table": {
+      "name": "Name",
+      "created": "Created",
+      "lastUsed": "Last used",
+      "status": "Status",
+      "never": "Never"
+    },
+    "status": {
+      "active": "Active",
+      "expired": "Expired",
+      "revoked": "Revoked"
+    },
+    "actions": {
+      "revoke": "Revoke",
+      "revokeTitle": "Revoke token",
+      "delete": "Delete",
+      "deleteTitle": "Delete token"
+    },
+    "empty": {
+      "title": "No API tokens yet",
+      "description": "Create a token to connect AI clients like Claude Code or OpenAI Codex to your Aexy workspace via MCP."
+    },
+    "footer": "Tokens authenticate MCP servers and external integrations with your account. Revoke any token you no longer use."
+  }
+}
