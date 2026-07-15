@@ -25,9 +25,9 @@ import sys
 from pathlib import Path
 
 from aexy.schemas.automation import (
-    ACTION_REGISTRY,
-    AutomationModule,
-    TRIGGER_REGISTRY,
+    ENABLED_MODULES,
+    get_all_actions,
+    get_all_triggers,
 )
 
 
@@ -41,18 +41,17 @@ DEFAULT_OUT = (
 
 
 def build_payload() -> dict:
-    modules = list(AutomationModule.__args__)  # type: ignore[attr-defined]
+    # Enabled (CRM-only) scope — mirrors exactly what the registry API serves
+    # the palette. Non-CRM modules and hidden capabilities are excluded.
+    modules = list(ENABLED_MODULES)
     return {
         "_meta": {
             "source": "backend/src/aexy/schemas/automation.py",
             "generator": "backend/scripts/dump_automation_schema.py",
         },
         "modules": modules,
-        "triggers": {m: TRIGGER_REGISTRY.get(m, []) for m in modules},
-        "actions": {
-            "common": ACTION_REGISTRY.get("common", []),
-            **{m: ACTION_REGISTRY.get(m, []) for m in modules},
-        },
+        "triggers": get_all_triggers(),
+        "actions": get_all_actions(),
     }
 
 

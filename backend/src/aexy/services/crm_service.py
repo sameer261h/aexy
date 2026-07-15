@@ -1169,6 +1169,18 @@ class CRMRecordService:
         metadata: dict | None = None,
     ) -> CRMActivity:
         """Log an activity for a record."""
+        # Resolve a human-readable actor name so the feed shows who acted
+        # instead of a generic "User".
+        actor_name = None
+        if actor_id:
+            from aexy.models.developer import Developer
+
+            actor_name = (
+                await self.db.execute(
+                    select(Developer.name).where(Developer.id == actor_id)
+                )
+            ).scalar_one_or_none()
+
         activity = CRMActivity(
             id=str(uuid4()),
             workspace_id=workspace_id,
@@ -1176,7 +1188,10 @@ class CRMRecordService:
             activity_type=activity_type,
             actor_type="user" if actor_id else "system",
             actor_id=actor_id,
-            metadata=metadata or {},
+            actor_name=actor_name,
+            # Column is `activity_metadata` (SQLAlchemy reserves `metadata`);
+            # passing `metadata=` silently dropped the payload.
+            activity_metadata=metadata or {},
             occurred_at=datetime.now(timezone.utc),
         )
         self.db.add(activity)

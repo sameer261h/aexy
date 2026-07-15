@@ -24,7 +24,7 @@ import {
   REAL_BACKEND_WORKSPACE_ID,
   authHeaders,
 } from "./fixtures/ai-env";
-import { triggersForModule } from "./fixtures/automation-helpers";
+import { moduleEnabled, triggersForModule } from "./fixtures/automation-helpers";
 
 interface ModulePrompt {
   module: string;
@@ -94,6 +94,9 @@ test.describe("AI / Automation generate-workflow per module (live)", () => {
 
   for (const { module, prompt } of PROMPTS) {
     test(`generate-workflow: ${module}`, async ({ request }) => {
+      // Descoped modules (CRM-only scope) have no registry entries to
+      // validate against — skip until the module is re-enabled.
+      test.skip(!moduleEnabled(module), `module "${module}" is descoped`);
       const resp = await request.post(
         `${API_BASE}/workspaces/${REAL_BACKEND_WORKSPACE_ID}/automations/generate-workflow`,
         {

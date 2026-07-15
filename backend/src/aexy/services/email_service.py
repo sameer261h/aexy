@@ -224,8 +224,26 @@ class EmailService:
         subject: str,
         body_text: str,
         body_html: str | None = None,
+        unsubscribe_url: str | None = None,
     ) -> dict[str, Any]:
-        """Send email via AWS SES."""
+        """Send email via AWS SES.
+
+        The plain ``send_email`` API can't carry custom headers, so when an
+        unsubscribe URL is supplied we fall back to ``send_raw_email`` with a
+        List-Unsubscribe header (RFC 2369/8058). Callers with no unsubscribe
+        URL keep the original code path untouched.
+        """
+        if unsubscribe_url:
+            message = self._build_mime_message(
+                recipient_email, subject, body_text, body_html, unsubscribe_url
+            )
+            response = self.ses_client.send_raw_email(
+                Source=self._get_sender_address(),
+                Destinations=[recipient_email],
+                RawMessage={"Data": message.as_string()},
+            )
+            return {"message_id": response.get("MessageId"), "provider": "ses"}
+
         message_body: dict[str, Any] = {
             "Text": {
                 "Data": body_text,
@@ -253,15 +271,15 @@ class EmailService:
         )
         return {"message_id": response.get("MessageId"), "provider": "ses"}
 
-    async def _send_via_smtp(
+    def _build_mime_message(
         self,
         recipient_email: str,
         subject: str,
         body_text: str,
-        body_html: str | None = None,
-    ) -> dict[str, Any]:
-        """Send email via SMTP using aiosmtplib."""
-        # Create message
+        body_html: str | None,
+        unsubscribe_url: str | None,
+    ) -> MIMEMultipart:
+        """Build a MIME message with optional one-click List-Unsubscribe headers."""
         if body_html:
             message = MIMEMultipart("alternative")
             message.attach(MIMEText(body_text, "plain", "utf-8"))
@@ -273,6 +291,24 @@ class EmailService:
         message["Subject"] = subject
         message["From"] = self._get_sender_address()
         message["To"] = recipient_email
+        if unsubscribe_url:
+            message["List-Unsubscribe"] = f"<{unsubscribe_url}>"
+            message["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+        return message
+
+    async def _send_via_smtp(
+        self,
+        recipient_email: str,
+        subject: str,
+        body_text: str,
+        body_html: str | None = None,
+        unsubscribe_url: str | None = None,
+    ) -> dict[str, Any]:
+        """Send email via SMTP using aiosmtplib."""
+        # Create message (carries List-Unsubscribe headers when provided)
+        message = self._build_mime_message(
+            recipient_email, subject, body_text, body_html, unsubscribe_url
+        )
 
         # Determine connection parameters
         use_tls = settings.smtp_use_ssl  # SSL/TLS on connect (port 465)
@@ -313,6 +349,7 @@ class EmailService:
         subject: str,
         body_text: str,
         body_html: str | None = None,
+        unsubscribe_url: str | None = None,
     ) -> dict[str, Any]:
         """Send email via Postmark Server API."""
         from_address = self._get_sender_address()
@@ -328,6 +365,11 @@ class EmailService:
             payload["HtmlBody"] = body_html
         if body_text:
             payload["TextBody"] = body_text
+        if unsubscribe_url:
+            payload["Headers"] = [
+                {"Name": "List-Unsubscribe", "Value": f"<{unsubscribe_url}>"},
+                {"Name": "List-Unsubscribe-Post", "Value": "List-Unsubscribe=One-Click"},
+            ]
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -358,18 +400,19 @@ class EmailService:
         subject: str,
         body_text: str,
         body_html: str | None = None,
+        unsubscribe_url: str | None = None,
     ) -> dict[str, Any]:
         """Send email using the configured provider."""
         logger.info(f"_send_email called with provider={self.provider}, smtp_configured={self.is_smtp_configured}, ses_configured={self.is_ses_configured}")
         if self.provider == "postmark":
             logger.info(f"Using Postmark to send email to {recipient_email}")
-            return await self._send_via_postmark(recipient_email, subject, body_text, body_html)
+            return await self._send_via_postmark(recipient_email, subject, body_text, body_html, unsubscribe_url)
         elif self.provider == "smtp":
             logger.info(f"Using SMTP to send email to {recipient_email}")
-            return await self._send_via_smtp(recipient_email, subject, body_text, body_html)
+            return await self._send_via_smtp(recipient_email, subject, body_text, body_html, unsubscribe_url)
         else:
             logger.info(f"Using SES to send email to {recipient_email}")
-            return await self._send_via_ses(recipient_email, subject, body_text, body_html)
+            return await self._send_via_ses(recipient_email, subject, body_text, body_html, unsubscribe_url)
 
     async def send_notification_email(
         self,
@@ -454,6 +497,7 @@ class EmailService:
         body_text: str,
         body_html: str | None = None,
         notification_id: str | None = None,
+        unsubscribe_url: str | None = None,
     ) -> EmailNotificationLog:
         """Send a custom templated email."""
         log = EmailNotificationLog(
@@ -472,7 +516,7 @@ class EmailService:
             return log
 
         try:
-            result = await self._send_email(recipient_email, subject, body_text, body_html)
+            result = await self._send_email(recipient_email, subject, body_text, body_html, unsubscribe_url)
 
             log.ses_message_id = result.get("message_id")
             log.status = "sent"

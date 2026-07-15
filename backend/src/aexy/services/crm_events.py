@@ -27,7 +27,7 @@ class CRMEventService:
         )
 
         trigger_data = {
-            "trigger_type": "record_created",
+            "trigger_type": CRMAutomationTriggerType.RECORD_CREATED.value,
             "workspace_id": workspace_id,
             "object_id": object_id,
             "record_id": record_id,
@@ -77,7 +77,7 @@ class CRMEventService:
         )
 
         trigger_data = {
-            "trigger_type": "record_updated",
+            "trigger_type": CRMAutomationTriggerType.RECORD_UPDATED.value,
             "workspace_id": workspace_id,
             "object_id": object_id,
             "record_id": record_id,
@@ -149,7 +149,7 @@ class CRMEventService:
         )
 
         trigger_data = {
-            "trigger_type": "record_deleted",
+            "trigger_type": CRMAutomationTriggerType.RECORD_DELETED.value,
             "workspace_id": workspace_id,
             "object_id": object_id,
             "record_id": record_id,
@@ -201,7 +201,7 @@ class CRMEventService:
         )
 
         trigger_data = {
-            "trigger_type": "stage_changed",
+            "trigger_type": CRMAutomationTriggerType.STAGE_CHANGED.value,
             "workspace_id": workspace_id,
             "object_id": object_id,
             "record_id": record_id,
@@ -253,7 +253,7 @@ class CRMEventService:
         )
 
         trigger_data = {
-            "trigger_type": "note_added",
+            "trigger_type": CRMAutomationTriggerType.NOTE_ADDED.value,
             "workspace_id": workspace_id,
             "object_id": object_id,
             "record_id": record_id,
@@ -304,7 +304,7 @@ class CRMEventService:
         )
 
         trigger_data = {
-            "trigger_type": "task_completed",
+            "trigger_type": CRMAutomationTriggerType.TASK_COMPLETED.value,
             "workspace_id": workspace_id,
             "object_id": object_id,
             "record_id": record_id,
@@ -356,7 +356,7 @@ class CRMEventService:
         )
 
         trigger_data = {
-            "trigger_type": "email_replied",
+            "trigger_type": CRMAutomationTriggerType.EMAIL_REPLIED.value,
             "workspace_id": workspace_id,
             "object_id": object_id,
             "record_id": record_id,

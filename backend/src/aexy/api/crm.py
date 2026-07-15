@@ -7,6 +7,7 @@ from aexy.core.database import get_db
 from aexy.api.developers import get_current_developer
 from aexy.models.developer import Developer
 from aexy.schemas.crm import (
+    expand_activity_category,
     # Object schemas
     CRMObjectCreate,
     CRMObjectUpdate,
@@ -1606,7 +1607,7 @@ async def list_workspace_activities(
     await check_workspace_permission(workspace_id, current_user, db)
 
     service = CRMActivityService(db)
-    activity_types = [activity_type] if activity_type else None
+    activity_types = expand_activity_category(activity_type)
     activities, total = await service.list_workspace_activities(
         workspace_id=workspace_id,
         activity_types=activity_types,
@@ -1626,7 +1627,7 @@ async def list_workspace_activities(
                 actor_name=a.actor_name,
                 title=a.title,
                 description=a.description,
-                metadata=a.metadata,
+                metadata=a.activity_metadata,
                 occurred_at=a.occurred_at,
                 created_at=a.created_at,
             )
@@ -1670,7 +1671,7 @@ async def list_activities(
                 actor_name=a.actor_name,
                 title=a.title,
                 description=a.description,
-                metadata=a.metadata,
+                metadata=a.activity_metadata,
                 occurred_at=a.occurred_at,
                 created_at=a.created_at,
             )

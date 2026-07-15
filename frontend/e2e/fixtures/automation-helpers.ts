@@ -64,6 +64,10 @@ export function triggersForModule(module: string): AutomationSchemaEntry[] {
   return loadAutomationSchema().triggers[module] ?? [];
 }
 
+export function moduleEnabled(module: string): boolean {
+  return loadAutomationSchema().modules.includes(module);
+}
+
 /**
  * Actions for a single module + the common bucket, deduped by id.
  *
@@ -75,6 +79,12 @@ export function triggersForModule(module: string): AutomationSchemaEntry[] {
  */
 export function actionsForModule(module: string): AutomationSchemaEntry[] {
   const s = loadAutomationSchema();
+  // Descoped modules (not in the generated fixture's module list) expose no
+  // actions — even the shared "common" set — so their parametrized specs hit
+  // the length===0 skip guard instead of failing on an empty palette. Re-enable
+  // a module (ENABLED_MODULES in schemas/automation.py, then regenerate the
+  // fixture) and its specs light back up automatically.
+  if (!moduleEnabled(module)) return [];
   const merged = [...(s.actions.common ?? []), ...(s.actions[module] ?? [])];
   const seen = new Set<string>();
   return merged.filter((a) => {
