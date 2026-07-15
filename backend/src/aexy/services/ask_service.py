@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta"
 OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+# OpenAI-compatible endpoints reused by the OpenAI streaming path.
+DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 MAX_TOOL_ITERATIONS = 10
 
 SYSTEM_PROMPT = """You are an AI assistant for Aexy, an Engineering OS platform. You help users manage their sprints, tasks, tickets, and other workspace data.
@@ -77,23 +80,73 @@ class AskService:
         self.db = db
         settings = get_settings()
         llm = settings.llm
-        # Prefer Anthropic, then OpenAI, then Gemini
-        if settings.anthropic_api_key:
-            self._provider = "anthropic"
-            self._api_key = settings.anthropic_api_key
-            self._model = "claude-sonnet-4-20250514"
-        elif llm.openai_api_key:
-            self._provider = "openai"
-            self._api_key = llm.openai_api_key
-            self._model = llm.openai_model or "gpt-4o-mini"
-        elif llm.gemini_api_key:
-            self._provider = "gemini"
-            self._api_key = llm.gemini_api_key
-            self._model = llm.gemini_model or "gemini-2.0-flash"
-        else:
-            self._provider = "none"
-            self._api_key = ""
-            self._model = ""
+
+        # API URL for the OpenAI-compatible streaming path. DeepSeek, OpenRouter
+        # and LM Studio all speak the OpenAI wire format, so they reuse
+        # `_stream_openai` with a different base URL.
+        self._api_url = OPENAI_API_URL
+
+        # Honor the configured LLM_PROVIDER (settings.llm.llm_provider). This is
+        # the single source of truth the rest of the platform uses via the LLM
+        # gateway; the Ask feature previously ignored it and auto-picked the
+        # first available key (Anthropic > OpenAI > Gemini), so a deployment set
+        # to `deepseek` still hit Gemini. If the configured provider has no
+        # usable credentials we fall back to auto-detect so deployments that
+        # never set LLM_PROVIDER keep working.
+        anthropic_key = settings.anthropic_api_key or llm.anthropic_api_key
+        resolved = self._resolve_provider(llm.llm_provider, llm, anthropic_key)
+        if resolved is None:
+            resolved = self._auto_detect(llm, anthropic_key)
+
+        self._provider, self._api_key, self._model, api_url = resolved
+        if api_url:
+            self._api_url = api_url
+
+    @staticmethod
+    def _resolve_provider(provider: str, llm, anthropic_key: str):
+        """Map the configured provider to (stream_family, api_key, model, api_url).
+
+        `stream_family` is the internal streaming path to use — one of
+        "anthropic", "openai" or "gemini". Returns None when the requested
+        provider has no usable credentials, so the caller can fall back.
+        """
+        provider = (provider or "").lower().strip()
+        if provider in ("claude", "anthropic"):
+            if not anthropic_key:
+                return None
+            return ("anthropic", anthropic_key, llm.llm_model or "claude-sonnet-4-20250514", None)
+        if provider == "openai":
+            if not llm.openai_api_key:
+                return None
+            return ("openai", llm.openai_api_key, llm.openai_model or "gpt-4o-mini", OPENAI_API_URL)
+        if provider == "gemini":
+            if not llm.gemini_api_key:
+                return None
+            return ("gemini", llm.gemini_api_key, llm.gemini_model or "gemini-2.0-flash", None)
+        if provider == "deepseek":
+            if not llm.deepseek_api_key:
+                return None
+            return ("openai", llm.deepseek_api_key, llm.llm_model or "deepseek-chat", DEEPSEEK_API_URL)
+        if provider == "openrouter":
+            if not llm.openrouter_api_key:
+                return None
+            return ("openai", llm.openrouter_api_key, llm.openrouter_model or "openai/gpt-4o", OPENROUTER_API_URL)
+        if provider == "lmstudio":
+            # Local server — no key required unless fronted by an auth proxy.
+            base = (llm.lmstudio_base_url or "http://localhost:1234/v1").rstrip("/")
+            return ("openai", llm.lmstudio_api_key or "not-needed", llm.lmstudio_model, f"{base}/chat/completions")
+        return None
+
+    @staticmethod
+    def _auto_detect(llm, anthropic_key: str):
+        """Legacy fallback: first available key wins (Anthropic > OpenAI > Gemini)."""
+        if anthropic_key:
+            return ("anthropic", anthropic_key, "claude-sonnet-4-20250514", None)
+        if llm.openai_api_key:
+            return ("openai", llm.openai_api_key, llm.openai_model or "gpt-4o-mini", OPENAI_API_URL)
+        if llm.gemini_api_key:
+            return ("gemini", llm.gemini_api_key, llm.gemini_model or "gemini-2.0-flash", None)
+        return ("none", "", "", None)
 
     # --- CRUD ---
 
@@ -622,7 +675,7 @@ class AskService:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 async with client.stream(
                     "POST",
-                    OPENAI_API_URL,
+                    self._api_url,
                     json=payload,
                     headers={
                         "Authorization": f"Bearer {self._api_key}",
