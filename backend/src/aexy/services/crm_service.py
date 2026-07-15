@@ -4,6 +4,7 @@ CRM-specific logic (events, automations, activity logging) lives here.
 Core table/record/field CRUD is delegated to the shared DataTableService.
 """
 
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -51,6 +52,9 @@ def generate_attribute_slug(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "_", slug)
     slug = slug.strip("_")
     return slug[:100]
+
+
+logger = logging.getLogger(__name__)
 
 
 class CRMObjectService:
@@ -781,7 +785,15 @@ class CRMRecordService:
                 created_by_id=created_by_id,
             )
         except Exception:
-            pass
+            # Best-effort: never fail record creation because an automation or
+            # webhook errored — but don't swallow it silently (a bare `pass` here
+            # is what made a broken trigger invisible: record saved, 0 runs, no
+            # error anywhere).
+            logger.exception(
+                "record.created automation/webhook dispatch failed "
+                "(workspace=%s object=%s record=%s)",
+                workspace_id, object_id, record.id,
+            )
 
         # Route new leads to a rep (best-effort).
         try:
@@ -905,7 +917,11 @@ class CRMRecordService:
                     updated_by_id=updated_by_id,
                 )
             except Exception:
-                pass
+                logger.exception(
+                    "record.updated automation/webhook dispatch failed "
+                    "(workspace=%s object=%s record=%s)",
+                    record.workspace_id, record.object_id, record.id,
+                )
 
             # Record queryable stage history + fire the stage-change automation
             # trigger/webhook for each changed managed status field.
@@ -1105,7 +1121,11 @@ class CRMRecordService:
                 deleted_by_id=deleted_by_id,
             )
         except Exception:
-            pass
+            logger.exception(
+                "record.deleted automation/webhook dispatch failed "
+                "(workspace=%s object=%s record=%s)",
+                workspace_id, object_id, record_id,
+            )
 
         return True
 
