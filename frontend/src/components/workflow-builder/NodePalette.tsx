@@ -968,24 +968,15 @@ const FIXED_SUBTYPES: Record<string, { value: string; label: string; icon: React
 
 // Fallback triggers for when API fails or during loading
 const FALLBACK_TRIGGERS: Record<string, string[]> = {
+  // US-1.5: only triggers with a real dispatch path. Unwired triggers
+  // (list/status entry, schedule/date, webhook/form/email-engagement) are
+  // hidden here to match the backend registry (PALETTE_HIDDEN_TRIGGERS).
   crm: [
     "record.created",
     "record.updated",
     "record.deleted",
     "field.changed",
-    "list_entry.added",
-    "list_entry.removed",
-    "status.changed",
     "stage.changed",
-    "schedule.daily",
-    "schedule.weekly",
-    "date.approaching",
-    "date.passed",
-    "webhook.received",
-    "form.submitted",
-    "email.opened",
-    "email.clicked",
-    "email.replied",
   ],
   tickets: [
     "ticket.created",
@@ -1104,27 +1095,23 @@ const FALLBACK_TRIGGERS: Record<string, string[]> = {
 // Fallback actions for when API fails or during loading
 // These match the backend ACTION_REGISTRY: common actions + module-specific
 const FALLBACK_ACTIONS: Record<string, string[]> = {
+  // US-1.5: only actions with a real handler in the live executor. Shells
+  // (send_sms, api_request, delete_record, link_records, remove_from_sequence,
+  // enrich/classify/generate_summary) are hidden to match the backend registry
+  // (PALETTE_HIDDEN_ACTIONS).
   crm: [
     "send_email",
     "send_slack",
-    "send_sms",
     "webhook_call",
-    "api_request",
     "run_agent",
     "create_task",
     "notify_user",
     "notify_team",
     "create_record",
     "update_record",
-    "delete_record",
-    "link_records",
     "add_to_list",
     "remove_from_list",
     "enroll_in_sequence",
-    "remove_from_sequence",
-    "enrich_record",
-    "classify_record",
-    "generate_summary",
   ],
   tickets: [
     "send_email",

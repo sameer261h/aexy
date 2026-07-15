@@ -271,6 +271,52 @@ ACTION_REGISTRY: dict[str, list[dict[str, str]]] = {
 
 
 # =============================================================================
+# PALETTE HONESTY TRIM (US-1.5)
+# These node types are defined in the registries above (so their ids stay VALID
+# for validation, membership checks, and any already-saved automations) but are
+# hidden from the builder palette because they have no working execution path on
+# a real trigger yet. Re-enable a node by deleting its id from the set below,
+# in the same PR that wires its handler/emitter.
+#
+#   Triggers hidden: no event ever dispatches them (list/status entry events,
+#   schedule & date triggers have no scheduler, inbound webhook/form/email-
+#   engagement are unwired for CRM).
+#   Actions hidden: no handler in the live executor (falls to "not implemented"):
+#   send_sms, api_request, delete_record, link_records, remove_from_sequence,
+#   and the AI enrich/classify/summarize actions.
+# =============================================================================
+
+PALETTE_HIDDEN_TRIGGERS: dict[str, set[str]] = {
+    "crm": {
+        "list_entry.added",
+        "list_entry.removed",
+        "status.changed",
+        "schedule.daily",
+        "schedule.weekly",
+        "date.approaching",
+        "date.passed",
+        "webhook.received",
+        "form.submitted",
+        "email.opened",
+        "email.clicked",
+        "email.replied",
+    },
+}
+
+PALETTE_HIDDEN_ACTIONS: dict[str, set[str]] = {
+    "common": {"send_sms", "api_request"},
+    "crm": {
+        "delete_record",
+        "link_records",
+        "remove_from_sequence",
+        "enrich_record",
+        "classify_record",
+        "generate_summary",
+    },
+}
+
+
+# =============================================================================
 # BACKWARD-COMPATIBLE HELPER FUNCTIONS
 # These extract just the string IDs for code that does membership checks
 # =============================================================================
@@ -303,14 +349,26 @@ def get_all_action_ids() -> dict[str, list[str]]:
 # =============================================================================
 
 def get_triggers_for_module(module: str) -> list[dict[str, str]]:
-    """Get all supported trigger types with descriptions for a module."""
-    return TRIGGER_REGISTRY.get(module, [])
+    """Get palette-visible trigger types with descriptions for a module.
+
+    Hides US-1.5 unwired triggers (see PALETTE_HIDDEN_TRIGGERS) so the builder
+    only offers triggers that actually fire. Validation/membership helpers
+    (get_trigger_ids) are intentionally NOT filtered."""
+    hidden = PALETTE_HIDDEN_TRIGGERS.get(module, set())
+    return [t for t in TRIGGER_REGISTRY.get(module, []) if t["id"] not in hidden]
 
 
 def get_actions_for_module(module: str) -> list[dict[str, str]]:
-    """Get all supported action types with descriptions for a module (common + module-specific)."""
-    common = ACTION_REGISTRY.get("common", [])
-    module_specific = ACTION_REGISTRY.get(module, [])
+    """Get palette-visible action types with descriptions for a module
+    (common + module-specific).
+
+    Hides US-1.5 shell actions (see PALETTE_HIDDEN_ACTIONS) that have no handler
+    in the live executor. Validation/membership helpers (get_action_ids) are
+    intentionally NOT filtered."""
+    hidden_common = PALETTE_HIDDEN_ACTIONS.get("common", set())
+    hidden_module = PALETTE_HIDDEN_ACTIONS.get(module, set())
+    common = [a for a in ACTION_REGISTRY.get("common", []) if a["id"] not in hidden_common]
+    module_specific = [a for a in ACTION_REGISTRY.get(module, []) if a["id"] not in hidden_module]
     return common + module_specific
 
 
