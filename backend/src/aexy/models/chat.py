@@ -16,8 +16,27 @@ if TYPE_CHECKING:
 
 
 class ChannelVisibility(str, Enum):
-    PUBLIC = "public"
     PRIVATE = "private"
+    WORKSPACE = "workspace"  # any workspace member (formerly "public")
+    WEB_PUBLIC = "web_public"  # indexable on the internet
+
+
+class ChannelKind(str, Enum):
+    CHANNEL = "channel"
+    DM = "dm"
+
+
+class TopicVisibility(str, Enum):
+    INHERIT = "inherit"  # follow the channel
+    PRIVATE = "private"  # channel members only, even in a web_public channel
+    RESTRICTED = "restricted"  # explicit allow-list (chat_topic_access_grants)
+    WEB_PUBLIC = "web_public"
+
+
+class PublicDisplayMode(str, Enum):
+    NAME = "name"
+    ALIAS = "alias"
+    ANONYMOUS = "anonymous"
 
 
 class ChannelMemberRole(str, Enum):
@@ -46,7 +65,18 @@ class ChatChannel(Base):
     name: Mapped[str] = mapped_column(String(255))
     slug: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    visibility: Mapped[str] = mapped_column(String(20), default=ChannelVisibility.PUBLIC.value)
+    visibility: Mapped[str] = mapped_column(String(20), default=ChannelVisibility.WORKSPACE.value)
+    # channel | dm. DMs are 2-person private channels, deduped by dm_key, and are
+    # structurally excluded from every public query.
+    kind: Mapped[str] = mapped_column(String(20), default=ChannelKind.CHANNEL.value)
+    # When a channel is flipped web_public, only messages at/after this cutoff are
+    # exposed publicly (null once full history is opted in).
+    web_public_since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Sorted ":"-joined member-id pair, set only for DM channels; NULL for regular
+    # channels. Backed by a partial unique index (uq_chat_dm_key).
+    dm_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_by_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), ForeignKey("developers.id", ondelete="SET NULL"), nullable=True
     )
@@ -105,6 +135,11 @@ class ChatTopic(Base):
         UUID(as_uuid=False), ForeignKey("chat_channels.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(255))
+    # Per-topic override of the channel's reach; can only narrow, never widen.
+    visibility: Mapped[str] = mapped_column(String(20), default=TopicVisibility.INHERIT.value)
+    # URL slug + immutable short id so public permalinks survive topic renames.
+    slug: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    public_short_id: Mapped[str | None] = mapped_column(String(12), nullable=True)
     message_count: Mapped[int] = mapped_column(Integer, default=0)
     last_message_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -159,6 +194,12 @@ class ChatMessage(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Moderator redaction from the *public* view only — still visible internally.
+    # Distinct from is_deleted (which removes it everywhere).
+    hidden_from_public: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Community post awaiting admin approval (pre-moderation). Held posts are also
+    # hidden_from_public; this flag marks them for the moderation queue.
+    pending_review: Mapped[bool] = mapped_column(Boolean, default=False)
     mentions: Mapped[list] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -218,3 +259,94 @@ class ChatUserPresence(Base):
     )
     status_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status_emoji: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+
+class ChatTopicAccessGrant(Base):
+    """Allow-list entry for a ``restricted`` topic — one row per granted developer."""
+
+    __tablename__ = "chat_topic_access_grants"
+    __table_args__ = (
+        UniqueConstraint("topic_id", "developer_id", name="uq_chat_topic_access"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4())
+    )
+    topic_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("chat_topics.id", ondelete="CASCADE"), index=True
+    )
+    developer_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("developers.id", ondelete="CASCADE"), index=True
+    )
+    granted_by_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("developers.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class ChatPublicMemberPref(Base):
+    """How a member appears on the public forum (name / alias / anonymous)."""
+
+    __tablename__ = "chat_public_member_prefs"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "developer_id", name="uq_chat_public_member_prefs"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4())
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    developer_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("developers.id", ondelete="CASCADE"), index=True
+    )
+    public_display: Mapped[str] = mapped_column(
+        String(20), default=PublicDisplayMode.NAME.value
+    )
+    public_alias: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class WorkspaceCommunity(Base):
+    """Master switch + public branding for a workspace's community forum.
+
+    One row per workspace; an absent row means the community is disabled. Nothing
+    in chat is exposed publicly unless ``enabled`` is true here.
+    """
+
+    __tablename__ = "workspace_community"
+
+    workspace_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Public URL segment: /community/{community_slug}. Defaults to the workspace
+    # slug but is independently unique so it can diverge.
+    community_slug: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    logo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    theme: Mapped[dict] = mapped_column(JSONB, default=dict)
+    default_public_display: Mapped[str] = mapped_column(
+        String(20), default=PublicDisplayMode.NAME.value
+    )
+    noindex: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Whether outsiders may post at all, and how their posts are handled.
+    allow_participation: Mapped[bool] = mapped_column(Boolean, default=False)
+    post_moderation: Mapped[str] = mapped_column(String(10), default="post")  # post | pre
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

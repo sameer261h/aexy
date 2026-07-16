@@ -22012,7 +22012,7 @@ export const chatApi = {
     const response = await api.get(`/workspaces/${workspaceId}/chat/channels/${channelId}`);
     return response.data;
   },
-  updateChannel: async (workspaceId: string, channelId: string, data: { name?: string; description?: string; is_archived?: boolean }): Promise<ChatChannel> => {
+  updateChannel: async (workspaceId: string, channelId: string, data: { name?: string; description?: string; is_archived?: boolean; visibility?: string; web_public_since?: string | null }): Promise<ChatChannel> => {
     const response = await api.patch(`/workspaces/${workspaceId}/chat/channels/${channelId}`, data);
     return response.data;
   },
@@ -22084,6 +22084,97 @@ export const chatApi = {
     const response = await api.post(`/workspaces/${workspaceId}/chat/upload`, formData, {
       headers: { "Content-Type": "multipart/form-data" },
     });
+    return response.data;
+  },
+};
+
+// ── Community (public forum opt-in) Types + API ──────────────────────
+
+export interface CommunitySettings {
+  workspace_id: string;
+  enabled: boolean;
+  community_slug: string;
+  title: string | null;
+  description: string | null;
+  logo_url: string | null;
+  theme: Record<string, unknown>;
+  default_public_display: string;
+  noindex: boolean;
+  allow_participation: boolean;
+  post_moderation: string;
+}
+
+export interface MemberPublicPref {
+  public_display: string;
+  public_alias: string | null;
+}
+
+export const communityApi = {
+  getSettings: async (workspaceId: string): Promise<CommunitySettings> => {
+    const response = await api.get(`/workspaces/${workspaceId}/chat/community/settings`);
+    return response.data;
+  },
+  updateSettings: async (
+    workspaceId: string,
+    data: Partial<Omit<CommunitySettings, "workspace_id">>,
+  ): Promise<CommunitySettings> => {
+    const response = await api.put(`/workspaces/${workspaceId}/chat/community/settings`, data);
+    return response.data;
+  },
+  getMyPref: async (workspaceId: string): Promise<MemberPublicPref> => {
+    const response = await api.get(`/workspaces/${workspaceId}/chat/community/my-prefs`);
+    return response.data;
+  },
+  setMyPref: async (workspaceId: string, data: MemberPublicPref): Promise<MemberPublicPref> => {
+    const response = await api.put(`/workspaces/${workspaceId}/chat/community/my-prefs`, data);
+    return response.data;
+  },
+  setTopicVisibility: async (
+    workspaceId: string,
+    topicId: string,
+    data: { visibility: string; allowed_developer_ids?: string[] },
+  ): Promise<unknown> => {
+    const response = await api.patch(
+      `/workspaces/${workspaceId}/chat/topics/${topicId}/visibility`,
+      data,
+    );
+    return response.data;
+  },
+  hideMessage: async (workspaceId: string, messageId: string): Promise<void> => {
+    await api.post(`/workspaces/${workspaceId}/chat/messages/${messageId}/hide-public`);
+  },
+  unhideMessage: async (workspaceId: string, messageId: string): Promise<void> => {
+    await api.post(`/workspaces/${workspaceId}/chat/messages/${messageId}/unhide-public`);
+  },
+
+  // ── Moderation queue (admin) ──
+  listModerationQueue: async (
+    workspaceId: string,
+  ): Promise<{ pending: Array<{ id: string; content: string; created_at: string; channel_name: string; topic_name: string; sender_id: string }> }> => {
+    const response = await api.get(`/workspaces/${workspaceId}/chat/community/moderation`);
+    return response.data;
+  },
+  approvePost: async (workspaceId: string, messageId: string): Promise<void> => {
+    await api.post(`/workspaces/${workspaceId}/chat/community/moderation/${messageId}/approve`);
+  },
+  rejectPost: async (workspaceId: string, messageId: string): Promise<void> => {
+    await api.post(`/workspaces/${workspaceId}/chat/community/moderation/${messageId}/reject`);
+  },
+};
+
+// Public community participation (uses the shared axios client, which attaches
+// the auth token when the visitor is signed in).
+export const communityPublicApi = {
+  postReply: async (
+    communitySlug: string,
+    channelSlug: string,
+    topicParam: string,
+    content: string,
+  ): Promise<{ id: string; pending_review: boolean }> => {
+    const response = await api.post(
+      `/public/community/${communitySlug}/channels/${channelSlug}/topics/${topicParam}/replies`,
+      { content },
+    );
     return response.data;
   },
 };

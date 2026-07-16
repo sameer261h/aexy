@@ -23,6 +23,7 @@ import {
   Settings2,
   Receipt,
   Fingerprint,
+  Globe,
   type LucideIcon,
 } from "lucide-react";
 
@@ -173,6 +174,15 @@ export const settingsNavigation: SettingsNavCategory[] = [
     id: "communication",
     label: "Communication",
     items: [
+      {
+        id: "community",
+        label: "Public Community",
+        href: "/settings/community",
+        icon: Globe,
+        description: "Publish chat channels as a public, SEO-friendly forum",
+        adminOnly: true,
+        keywords: ["community", "public", "forum", "seo", "chat", "channels", "discourse", "slack"],
+      },
       {
         id: "crm-settings",
         label: "CRM Settings",

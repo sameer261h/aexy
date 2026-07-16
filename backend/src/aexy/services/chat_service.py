@@ -5,18 +5,22 @@ import re
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import and_, func, or_, select, update as sql_update
+from sqlalchemy import and_, delete as sql_delete, func, or_, select, update as sql_update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, joinedload
 
 from aexy.models.chat import (
+    ChannelKind,
+    ChannelVisibility,
     ChatChannel,
     ChatChannelMember,
     ChatMessage,
     ChatTopic,
+    ChatTopicAccessGrant,
     ChatTopicReadState,
     ChatUserPresence,
+    TopicVisibility,
 )
 from aexy.models.developer import Developer
 
@@ -61,12 +65,14 @@ class ChatService:
 
     async def list_channels(self, workspace_id: str, developer_id: str) -> list[dict]:
         """List channels: user's joined channels + public non-archived channels."""
-        # Get all public non-archived channels in workspace
+        # Get all non-archived regular channels in workspace (DMs are surfaced
+        # separately via list_dms and must never appear in the channel list).
         q = (
             select(ChatChannel)
             .where(
                 ChatChannel.workspace_id == workspace_id,
                 ChatChannel.is_archived.is_(False),
+                ChatChannel.kind == ChannelKind.CHANNEL.value,
             )
             .order_by(ChatChannel.name)
         )
@@ -115,7 +121,7 @@ class ChatService:
 
     async def create_channel(
         self, workspace_id: str, developer_id: str, name: str,
-        description: str | None = None, visibility: str = "public",
+        description: str | None = None, visibility: str = ChannelVisibility.WORKSPACE.value,
     ) -> ChatChannel:
         slug = _slugify(name)
         # Ensure unique slug in workspace
@@ -158,6 +164,101 @@ class ChatService:
         )
         return result.scalar_one_or_none()
 
+    # ── Public permalink identifiers (slug + short id) ────────────────
+
+    async def _unique_topic_slug(self, channel_id: str, name: str) -> str:
+        base = _slugify(name) if name else "topic"
+        # Slugs are unique per channel; collisions get a short random suffix.
+        existing = await self.db.execute(
+            select(ChatTopic.id).where(
+                ChatTopic.channel_id == channel_id, ChatTopic.slug == base
+            )
+        )
+        if existing.scalar_one_or_none() is None:
+            return base
+        return f"{base}-{uuid4().hex[:6]}"
+
+    async def ensure_public_identifiers(self, channel_id: str) -> None:
+        """Backfill slug/public_short_id for any topics in a channel that lack
+        them — called when a channel is flipped web-public so pre-existing topics
+        become linkable."""
+        result = await self.db.execute(
+            select(ChatTopic).where(
+                ChatTopic.channel_id == channel_id,
+                or_(ChatTopic.slug.is_(None), ChatTopic.public_short_id.is_(None)),
+            )
+        )
+        topics = result.scalars().all()
+        for topic in topics:
+            if not topic.slug:
+                topic.slug = await self._unique_topic_slug(channel_id, topic.name)
+            if not topic.public_short_id:
+                topic.public_short_id = uuid4().hex[:10]
+        if topics:
+            await self.db.flush()
+
+    async def set_topic_visibility(
+        self,
+        topic_id: str,
+        visibility: str,
+        *,
+        allowed_developer_ids: list[str] | None = None,
+        granted_by_id: str | None = None,
+    ) -> ChatTopic | None:
+        """Set a topic's visibility. For 'restricted', replace its access grants
+        with the given developer ids. Ensures a public permalink exists once the
+        topic can be reached from the web."""
+        topic = await self.get_topic(topic_id)
+        if topic is None:
+            return None
+
+        topic.visibility = visibility
+
+        # Sync the allow-list for restricted topics; clear it otherwise.
+        if visibility == TopicVisibility.RESTRICTED.value:
+            await self.db.execute(
+                sql_delete(ChatTopicAccessGrant).where(
+                    ChatTopicAccessGrant.topic_id == topic_id
+                )
+            )
+            for dev_id in (allowed_developer_ids or []):
+                self.db.add(
+                    ChatTopicAccessGrant(
+                        id=str(uuid4()),
+                        topic_id=topic_id,
+                        developer_id=dev_id,
+                        granted_by_id=granted_by_id,
+                    )
+                )
+        else:
+            await self.db.execute(
+                sql_delete(ChatTopicAccessGrant).where(
+                    ChatTopicAccessGrant.topic_id == topic_id
+                )
+            )
+
+        if visibility == TopicVisibility.WEB_PUBLIC.value:
+            if not topic.slug:
+                topic.slug = await self._unique_topic_slug(topic.channel_id, topic.name)
+            if not topic.public_short_id:
+                topic.public_short_id = uuid4().hex[:10]
+
+        await self.db.flush()
+        await self.db.refresh(topic)
+        return topic
+
+    async def set_message_hidden(self, message_id: str, hidden: bool) -> ChatMessage | None:
+        """Toggle a message's public redaction (still visible internally)."""
+        result = await self.db.execute(
+            select(ChatMessage).where(ChatMessage.id == message_id)
+        )
+        message = result.scalar_one_or_none()
+        if message is None:
+            return None
+        message.hidden_from_public = hidden
+        await self.db.flush()
+        return message
+
     async def get_channel_by_slug(self, workspace_id: str, slug: str) -> ChatChannel | None:
         result = await self.db.execute(
             select(ChatChannel).where(
@@ -167,7 +268,9 @@ class ChatService:
         )
         return result.scalar_one_or_none()
 
-    ALLOWED_UPDATE_FIELDS = {"name", "description", "is_archived"}
+    ALLOWED_UPDATE_FIELDS = {
+        "name", "description", "is_archived", "visibility", "web_public_since",
+    }
 
     async def update_channel(self, channel_id: str, **kwargs) -> ChatChannel | None:
         channel = await self.get_channel(channel_id)
@@ -179,6 +282,107 @@ class ChatService:
         await self.db.flush()
         await self.db.refresh(channel)
         return channel
+
+    # ── Direct messages ──────────────────────────────────────────────
+    #
+    # DMs are modelled as 2-person private channels (kind='dm') deduped by a
+    # sorted member-id key. They reuse the topic/message machinery but are hidden
+    # from the channel list and structurally excluded from every public query.
+
+    @staticmethod
+    def _dm_key(dev_a: str, dev_b: str) -> str:
+        return ":".join(sorted([str(dev_a), str(dev_b)]))
+
+    async def get_or_create_dm(
+        self, workspace_id: str, developer_id: str, other_developer_id: str
+    ) -> ChatChannel:
+        """Return the existing DM channel between two members, or create it."""
+        if str(developer_id) == str(other_developer_id):
+            raise ValueError("Cannot open a DM with yourself")
+
+        dm_key = self._dm_key(developer_id, other_developer_id)
+        existing = await self.db.execute(
+            select(ChatChannel).where(
+                ChatChannel.workspace_id == workspace_id,
+                ChatChannel.dm_key == dm_key,
+            )
+        )
+        channel = existing.scalar_one_or_none()
+        if channel is not None:
+            return channel
+
+        channel = ChatChannel(
+            id=str(uuid4()),
+            workspace_id=workspace_id,
+            name="",  # DMs render from participant names, not a stored name
+            slug=f"dm-{uuid4().hex[:12]}",  # slug is NOT NULL; never user-facing
+            visibility=ChannelVisibility.PRIVATE.value,
+            kind=ChannelKind.DM.value,
+            dm_key=dm_key,
+            created_by_id=developer_id,
+        )
+        self.db.add(channel)
+        try:
+            await self.db.flush()
+        except IntegrityError:
+            # A concurrent open won the uq_chat_dm_key race — fall back to it.
+            await self.db.rollback()
+            existing = await self.db.execute(
+                select(ChatChannel).where(
+                    ChatChannel.workspace_id == workspace_id,
+                    ChatChannel.dm_key == dm_key,
+                )
+            )
+            found = existing.scalar_one_or_none()
+            if found is not None:
+                return found
+            raise
+
+        for member_id in (developer_id, other_developer_id):
+            self.db.add(
+                ChatChannelMember(
+                    id=str(uuid4()),
+                    channel_id=channel.id,
+                    developer_id=member_id,
+                    role="member",
+                )
+            )
+        await self.db.flush()
+        await self.db.refresh(channel)
+        return channel
+
+    async def list_dms(self, workspace_id: str, developer_id: str) -> list[dict]:
+        """List the DM channels the developer participates in, most-recent first."""
+        my_dm_channel_ids = select(ChatChannelMember.channel_id).where(
+            ChatChannelMember.developer_id == developer_id
+        )
+        q = (
+            select(ChatChannel)
+            .where(
+                ChatChannel.workspace_id == workspace_id,
+                ChatChannel.kind == ChannelKind.DM.value,
+                ChatChannel.id.in_(my_dm_channel_ids),
+            )
+            .order_by(ChatChannel.updated_at.desc())
+        )
+        result = await self.db.execute(q)
+        channels = result.scalars().all()
+
+        out: list[dict] = []
+        for ch in channels:
+            members = await self.list_members(ch.id)
+            others = [m for m in members if str(m["developer_id"]) != str(developer_id)]
+            out.append(
+                {
+                    "id": ch.id,
+                    "workspace_id": ch.workspace_id,
+                    "kind": ch.kind,
+                    "participants": others,
+                    "created_at": ch.created_at,
+                    "updated_at": ch.updated_at,
+                }
+            )
+        return out
 
     async def is_channel_owner(self, channel_id: str, developer_id: str) -> bool:
         result = await self.db.execute(
@@ -337,8 +541,8 @@ class ChatService:
         if not channel:
             raise ValueError("Channel not found")
 
-        # Auto-join public channel if not member
-        if channel.visibility == "public":
+        # Auto-join non-private channels (workspace + web_public) if not a member.
+        if channel.visibility != ChannelVisibility.PRIVATE.value:
             await self.join_channel(channel_id, developer_id)
 
         mentions = _extract_mentions(first_message)
@@ -347,6 +551,10 @@ class ChatService:
             id=topic_id,
             channel_id=channel_id,
             name=name,
+            # Generate a stable public permalink up front (slug + immutable short
+            # id) so the topic is linkable the moment it becomes web-public.
+            slug=await self._unique_topic_slug(channel_id, name),
+            public_short_id=uuid4().hex[:10],
             message_count=1,
             last_message_at=now,
             last_message_id=message_id,

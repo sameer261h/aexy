@@ -458,7 +458,10 @@ class WorkspaceService:
         if not member or member.status != "active":
             return False
 
-        role_hierarchy = {"owner": 4, "admin": 3, "member": 2, "viewer": 1}
+        # "community" ranks below everything: outside participants who joined via
+        # a public forum. They only ever use the public endpoints; this keeps
+        # them below "member" so they can never pass an internal permission gate.
+        role_hierarchy = {"owner": 4, "admin": 3, "member": 2, "viewer": 1, "community": 0}
         member_level = role_hierarchy.get(member.role, 0)
         required_level = role_hierarchy.get(required_role, 0)
 

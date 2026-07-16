@@ -40,7 +40,7 @@ class AlertIntegrationService:
         await self.db.refresh(integration)
         return integration, signing_secret
 
-    async def list(self, workspace_id: str) -> list[AlertIntegration]:
+    async def list_integrations(self, workspace_id: str) -> list[AlertIntegration]:
         stmt = (
             select(AlertIntegration)
             .where(AlertIntegration.workspace_id == workspace_id)

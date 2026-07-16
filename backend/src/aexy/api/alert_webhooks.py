@@ -187,7 +187,7 @@ async def list_integrations(
     db: AsyncSession = Depends(get_db),
 ) -> list[AlertIntegrationResponse]:
     await _verify_access(workspace_id, current_user, db)
-    integrations = await AlertIntegrationService(db).list(workspace_id)
+    integrations = await AlertIntegrationService(db).list_integrations(workspace_id)
     return [_to_response(i) for i in integrations]
 
 

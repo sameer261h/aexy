@@ -86,6 +86,7 @@ from aexy.api.ticket_forms import router as ticket_forms_router
 from aexy.api.tickets import router as tickets_router
 from aexy.api.public_forms import router as public_forms_router
 from aexy.api.public_tickets import router as public_tickets_router
+from aexy.api.public_community import router as public_community_router
 from aexy.api.escalation import router as escalation_router
 from aexy.api.escalation import escalation_ticket_router
 # Forms (Standalone Module)
@@ -286,6 +287,7 @@ api_router.include_router(ticket_forms_router, tags=["ticket-forms"], dependenci
 api_router.include_router(tickets_router, tags=["tickets"], dependencies=[Depends(require_app_access("tickets"))])
 api_router.include_router(public_forms_router, tags=["public-forms"])
 api_router.include_router(public_tickets_router, tags=["public-tickets"])
+api_router.include_router(public_community_router, tags=["public-community"])
 api_router.include_router(escalation_router, tags=["escalation"], dependencies=[Depends(require_app_access("tickets"))])
 api_router.include_router(escalation_ticket_router, tags=["escalation"], dependencies=[Depends(require_app_access("tickets"))])
 # Forms (Standalone Module with CRM/Ticketing integration)
