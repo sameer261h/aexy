@@ -24,10 +24,11 @@ import {
   ToggleLeft,
   ToggleRight,
   Layers,
+  Globe,
 } from "lucide-react";
 import { useWorkspace, useWorkspaceMembers, useWorkspaceBilling, usePendingInvites, useWorkspaceAppSettings } from "@/hooks/useWorkspace";
 import { useAuth } from "@/hooks/useAuth";
-import { WorkspaceMember, WorkspacePendingInvite, repositoriesApi, Organization } from "@/lib/api";
+import { WorkspaceMember, WorkspacePendingInvite, repositoriesApi, Organization, communityApi } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
 import { TeamReviewCard } from "@/components/code-insights";
@@ -65,6 +66,65 @@ function getStatusBadgeColor(status: string) {
     default:
       return "bg-muted text-muted-foreground";
   }
+}
+
+/**
+ * Surfaces the Public Community feature from the org settings page. The full
+ * controls live at /settings/community; this card shows the current on/off
+ * state and links there, so owners can find and enable it from here.
+ */
+function CommunitySettingsCard({
+  workspaceId,
+  canManage,
+}: {
+  workspaceId: string | null | undefined;
+  canManage: boolean;
+}) {
+  const { data: settings, isLoading } = useQuery({
+    queryKey: ["communitySettings", workspaceId],
+    queryFn: () => communityApi.getSettings(workspaceId!),
+    enabled: !!workspaceId && canManage,
+    retry: false,
+  });
+
+  if (!canManage) return null;
+
+  const enabled = settings?.enabled ?? false;
+
+  return (
+    <div className="bg-card rounded-xl p-4 mb-6">
+      <div className="flex items-center gap-3">
+        <div className="p-2 bg-muted rounded-lg">
+          <Globe className="h-5 w-5 text-blue-500" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="text-foreground font-medium">Public community</h3>
+            {!isLoading && (
+              <span
+                className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                  enabled
+                    ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+                    : "bg-muted text-muted-foreground"
+                }`}
+              >
+                {enabled ? "Enabled" : "Disabled"}
+              </span>
+            )}
+          </div>
+          <p className="text-muted-foreground text-sm">
+            Publish selected chat channels as a public, SEO-friendly forum.
+          </p>
+        </div>
+        <Link
+          href="/settings/community"
+          className="shrink-0 text-sm rounded-lg bg-primary px-3 py-1.5 text-primary-foreground hover:opacity-90 transition"
+        >
+          {enabled ? "Manage" : "Enable"}
+        </Link>
+      </div>
+    </div>
+  );
 }
 
 interface MemberRowProps {
@@ -1066,6 +1126,9 @@ export default function OrganizationSettingsPage() {
               isUpdating={isUpdatingAppSettings}
               isOwner={isOwner}
             />
+
+            {/* Public Community */}
+            <CommunitySettingsCard workspaceId={currentWorkspaceId} canManage={isOwner} />
 
             {/* Quick Links */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

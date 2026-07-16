@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { MessagesSquare } from "lucide-react";
 import { getCommunityDirectory, siteBaseUrl } from "@/lib/community-api";
+import { CommunityAuthButton } from "@/components/community/CommunityAuthButton";
 
 export const revalidate = 300;
 
@@ -33,12 +34,7 @@ export default async function CommunityDirectoryPage() {
       <header className="border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
         <div className="mx-auto max-w-4xl px-4 py-4 flex items-center justify-between">
           <span className="font-semibold text-gray-900 dark:text-white">Communities</span>
-          <Link
-            href="/"
-            className="text-sm rounded-lg bg-blue-600 px-3 py-1.5 text-white hover:bg-blue-700"
-          >
-            Sign in
-          </Link>
+          <CommunityAuthButton />
         </div>
       </header>
 
