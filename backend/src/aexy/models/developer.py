@@ -76,6 +76,13 @@ class Developer(Base):
     # Onboarding state
     has_completed_onboarding: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Account isolation: "internal" = a normal product user; "community" = an
+    # outside participant who signed in solely to post on a public community
+    # forum. Community accounts are walled off from the entire internal product
+    # (enforced in the API isolation guard + the frontend app-shell guard) and
+    # are upgraded to "internal" only if later invited to a workspace.
+    account_type: Mapped[str] = mapped_column(String(20), default="internal", server_default="internal")
+
     # Repository auto-sync settings: {"enabled": bool, "frequency": "1h"|"30m"|"6h"|"12h"|"24h"}
     repo_sync_settings: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 

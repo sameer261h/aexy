@@ -62,6 +62,7 @@ export default function CommunitySettingsPage() {
             theme: {},
             default_public_display: "name",
             noindex: false,
+            listed: false,
             allow_participation: false,
             post_moderation: "post",
           });
@@ -230,6 +231,19 @@ export default function CommunitySettingsPage() {
           />
           <span className="text-gray-700 dark:text-gray-300">
             Public but <strong>not</strong> indexed by search engines (noindex)
+          </span>
+        </label>
+
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={settings?.listed ?? false}
+            disabled={saving}
+            onChange={(e) => saveSettings({ listed: e.target.checked })}
+          />
+          <span className="text-gray-700 dark:text-gray-300">
+            List this community in the public directory at{" "}
+            <code>/community</code>
           </span>
         </label>
       </section>

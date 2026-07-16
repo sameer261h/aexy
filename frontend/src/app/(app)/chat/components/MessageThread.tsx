@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useMessages, useSendMessage, useUploadFile } from "@/hooks/useChat";
-import { chatApi } from "@/lib/api";
+import { chatApi, communityApi } from "@/lib/api";
 import { MessageItem } from "./MessageItem";
 import { MessageComposer } from "./MessageComposer";
 import { MeetLinkButton } from "./MeetLinkButton";
 import { TypingIndicator } from "./TypingIndicator";
-import { Loader2 } from "lucide-react";
+import { Loader2, ChevronDown } from "lucide-react";
+import { toast } from "sonner";
 
 interface MessageThreadProps {
   workspaceId: string;
@@ -29,6 +31,23 @@ export function MessageThread({
   onStopTyping,
 }: MessageThreadProps) {
   const { data: messages, isLoading } = useMessages(workspaceId, topicId);
+  const queryClient = useQueryClient();
+
+  const handleToggleHidden = useCallback(
+    async (messageId: string, hide: boolean) => {
+      try {
+        if (hide) await communityApi.hideMessage(workspaceId, messageId);
+        else await communityApi.unhideMessage(workspaceId, messageId);
+        queryClient.invalidateQueries({ queryKey: ["chat", "messages", workspaceId, topicId] });
+        toast.success(hide ? "Message hidden from the public forum" : "Message restored to the public forum");
+      } catch (e: unknown) {
+        const status = (e as { response?: { status?: number } })?.response?.status;
+        if (status === 403) toast.error("A workspace admin is required to moderate public messages.");
+        else toast.error("Could not update the message.");
+      }
+    },
+    [workspaceId, topicId, queryClient],
+  );
   const sendMessage = useSendMessage(workspaceId, topicId);
   const sendMessageRef = useRef(sendMessage);
   sendMessageRef.current = sendMessage;
@@ -40,6 +59,22 @@ export function MessageThread({
   const lastMarkReadRef = useRef("");
   const [sendError, setSendError] = useState<string | null>(null);
   const [messageQueue, setMessageQueue] = useState<string[]>([]);
+  const [visMenuOpen, setVisMenuOpen] = useState(false);
+
+  const setTopicVisibility = useCallback(
+    async (visibility: string) => {
+      setVisMenuOpen(false);
+      try {
+        await communityApi.setTopicVisibility(workspaceId, topicId, { visibility });
+        toast.success(`Thread visibility set to ${visibility.replace("_", "-")}`);
+      } catch (e: unknown) {
+        const status = (e as { response?: { status?: number } })?.response?.status;
+        if (status === 403) toast.error("A workspace admin is required to publish a thread to the web.");
+        else toast.error("Could not update thread visibility.");
+      }
+    },
+    [workspaceId, topicId],
+  );
 
   // Track scroll position to only auto-scroll when user is at bottom
   const handleScroll = useCallback(() => {
@@ -122,8 +157,37 @@ export function MessageThread({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex-shrink-0 border-b border-border px-4 py-3">
+      <div className="flex-shrink-0 border-b border-border px-4 py-3 flex items-center justify-between gap-2">
         <h3 className="font-semibold text-sm truncate">{topicName}</h3>
+        <div className="relative flex-shrink-0">
+          <button
+            onClick={() => setVisMenuOpen((v) => !v)}
+            className="flex items-center gap-1 text-xs text-muted-foreground rounded px-1.5 py-1 hover:bg-accent"
+            title="Thread visibility"
+          >
+            Visibility <ChevronDown className="h-3 w-3" />
+          </button>
+          {visMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setVisMenuOpen(false)} />
+              <div className="absolute right-0 mt-1 z-20 w-52 rounded-lg border border-border bg-card shadow-lg py-1 text-sm">
+                {[
+                  { v: "inherit", label: "Inherit from channel" },
+                  { v: "private", label: "Private (members only)" },
+                  { v: "web_public", label: "Public on the web" },
+                ].map((o) => (
+                  <button
+                    key={o.v}
+                    onClick={() => setTopicVisibility(o.v)}
+                    className="w-full text-left px-3 py-1.5 hover:bg-accent/60"
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Queued messages indicator */}
@@ -142,7 +206,7 @@ export function MessageThread({
         ) : messages && messages.length > 0 ? (
           <div className="py-2">
             {messages.map((msg) => (
-              <MessageItem key={msg.id} message={msg} />
+              <MessageItem key={msg.id} message={msg} onToggleHidden={handleToggleHidden} />
             ))}
             <div ref={bottomRef} />
           </div>

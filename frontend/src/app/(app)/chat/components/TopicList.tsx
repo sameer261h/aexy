@@ -3,25 +3,28 @@
 import { useState } from "react";
 import { useTopics, useCreateTopic } from "@/hooks/useChat";
 import { useChatStore } from "@/stores/chatStore";
-import { ChatTopic } from "@/lib/api";
+import { ChatChannel, ChatTopic } from "@/lib/api";
 import { formatDistanceToNow } from "date-fns";
-import { MessageSquare, Plus, CheckCircle } from "lucide-react";
+import { MessageSquare, Plus, CheckCircle, Settings2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ChannelSettingsDialog } from "./ChannelSettingsDialog";
 
 interface TopicListProps {
   workspaceId: string;
   channelId: string;
   channelName: string;
+  channel?: ChatChannel | null;
   onSelectTopic: (topic: ChatTopic) => void;
 }
 
-export function TopicList({ workspaceId, channelId, channelName, onSelectTopic }: TopicListProps) {
+export function TopicList({ workspaceId, channelId, channelName, channel, onSelectTopic }: TopicListProps) {
   const { data: topics, isLoading } = useTopics(workspaceId, channelId);
   const activeTopicId = useChatStore((s) => s.activeTopicId);
   const [showNewTopic, setShowNewTopic] = useState(false);
   const [newTopicName, setNewTopicName] = useState("");
   const [newTopicMessage, setNewTopicMessage] = useState("");
   const createTopic = useCreateTopic(workspaceId, channelId);
+  const [showChannelSettings, setShowChannelSettings] = useState(false);
 
   const handleCreateTopic = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,15 +45,35 @@ export function TopicList({ workspaceId, channelId, channelName, onSelectTopic }
       <div className="flex-shrink-0 p-3 border-b border-border">
         <div className="flex items-center justify-between">
           <h2 className="font-semibold text-sm truncate">#{channelName}</h2>
-          <button
-            onClick={() => setShowNewTopic(!showNewTopic)}
-            className="p-1 rounded hover:bg-accent text-muted-foreground"
-            title="New topic"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            {channel && (
+              <button
+                onClick={() => setShowChannelSettings(true)}
+                className="p-1 rounded hover:bg-accent text-muted-foreground"
+                title="Channel settings & visibility"
+              >
+                <Settings2 className="h-4 w-4" />
+              </button>
+            )}
+            <button
+              onClick={() => setShowNewTopic(!showNewTopic)}
+              className="p-1 rounded hover:bg-accent text-muted-foreground"
+              title="New topic"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </div>
+
+      {channel && (
+        <ChannelSettingsDialog
+          workspaceId={workspaceId}
+          channel={channel}
+          open={showChannelSettings}
+          onClose={() => setShowChannelSettings(false)}
+        />
+      )}
 
       {/* New topic form */}
       {showNewTopic && (

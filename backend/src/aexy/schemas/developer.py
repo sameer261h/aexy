@@ -101,6 +101,7 @@ class DeveloperResponse(DeveloperBase):
 
     id: str
     avatar_url: str | None = None
+    account_type: str = "internal"
     skill_fingerprint: SkillFingerprint | None = None
     work_patterns: WorkPatterns | None = None
     growth_trajectory: GrowthTrajectory | None = None

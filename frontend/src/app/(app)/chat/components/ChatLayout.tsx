@@ -209,6 +209,7 @@ export function ChatLayout({ workspaceId, initialChannelSlug, initialTopicId }: 
             workspaceId={workspaceId}
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
+            channel={selectedChannel}
             onSelectTopic={handleSelectTopic}
           />
         ) : (

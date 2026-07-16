@@ -36,8 +36,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             // happened in another tab won't have cleared this tab's cache.
             queryClient.clear();
             router.push("/");
+            return;
         }
-    }, [isResolved, isAuthenticated, router, queryClient]);
+        // Community-only accounts (signed in via a public forum) are walled off
+        // from the internal app. The API enforces this server-side; here we just
+        // avoid rendering the app shell for them and send them to the forum.
+        if (isResolved && isAuthenticated && user?.account_type === "community") {
+            router.replace("/community");
+        }
+    }, [isResolved, isAuthenticated, user?.account_type, router, queryClient]);
 
     // Show skeleton until auth state is definitively resolved
     if (!isResolved || isLoading) {

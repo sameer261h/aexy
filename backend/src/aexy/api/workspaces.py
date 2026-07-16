@@ -98,6 +98,15 @@ async def create_workspace(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new workspace."""
+    # Defense in depth: the isolation middleware already blocks this path for
+    # community accounts, but creating a workspace makes the caller its owner —
+    # the single most dangerous escalation — so guard it explicitly too.
+    if getattr(current_user, "account_type", "internal") == "community":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Community accounts cannot create workspaces",
+        )
+
     service = WorkspaceService(db)
 
     workspace = await service.create_workspace(

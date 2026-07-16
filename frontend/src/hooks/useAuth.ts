@@ -86,6 +86,19 @@ export function useSetToken() {
       // to /sprints would just bounce them right back.
       const nextPath = consumePostLoginRedirect();
 
+      // Community-only accounts have no internal app. Route them to the forum
+      // (their stashed community path, or the directory) and skip onboarding —
+      // the onboarding-status call would be 403'd by the isolation guard anyway.
+      try {
+        const me = await developerApi.getMe();
+        if (me?.account_type === "community") {
+          router.push(nextPath && nextPath.startsWith("/community") ? nextPath : "/community");
+          return;
+        }
+      } catch {
+        // fall through to the normal internal-user flow
+      }
+
       // Check if onboarding is complete
       const status = await repositoriesApi.getOnboardingStatus();
       if (status.completed) {

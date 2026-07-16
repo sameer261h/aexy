@@ -40,6 +40,28 @@ def get_redis_client():
 # OAuth state TTL (10 minutes)
 OAUTH_STATE_TTL = 600
 
+
+async def _join_community_after_login(db: AsyncSession, developer_id: str, community_slug: str) -> None:
+    """Best-effort: enrol a fresh community sign-in into the target community.
+
+    Failure here must never break login — the participant is also enrolled on
+    their first reply (post_reply → ensure_community_member), so this is only a
+    convenience to give them a membership row up front.
+    """
+    try:
+        from aexy.services.community_service import CommunityService
+        from aexy.services.community_participation_service import CommunityParticipationService
+
+        community = await CommunityService(db).get_by_slug(community_slug)
+        if community is None or not community.enabled:
+            return
+        await CommunityParticipationService(db).ensure_community_member(
+            community.workspace_id, developer_id
+        )
+        await db.commit()
+    except Exception:
+        logger.warning("Community auto-join after login failed", exc_info=True)
+
 # --------------------------------------------------------------------------- #
 # Post-OAuth redirect allowlist
 # --------------------------------------------------------------------------- #
@@ -91,14 +113,21 @@ def _validate_redirect_or_400(redirect_url: str | None) -> None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "redirect_url not allowed")
 
 
-def _post_oauth_redirect(custom_redirect_url: str | None, token: str) -> RedirectResponse:
-    """Deliver the JWT to an allowlisted redirect, else the default frontend
-    callback. Single chokepoint so the token can never reach a disallowed URL."""
+def _post_oauth_redirect(
+    custom_redirect_url: str | None, token: str, *, default_path: str = "/auth/callback"
+) -> RedirectResponse:
+    """Deliver the JWT to an allowlisted redirect, else a default frontend path.
+    Single chokepoint so the token can never reach a disallowed URL.
+
+    ``default_path`` lets a community sign-in land on the forum (``/community/…``)
+    instead of the internal app callback when no explicit redirect was given.
+    """
     frontend_url = settings.frontend_url or "http://localhost:3000"
     if custom_redirect_url and is_allowed_redirect_url(custom_redirect_url):
         separator = "&" if "?" in custom_redirect_url else "?"
         return RedirectResponse(url=f"{custom_redirect_url}{separator}token={token}")
-    return RedirectResponse(url=f"{frontend_url}/auth/callback?token={token}")
+    sep = "&" if "?" in default_path else "?"
+    return RedirectResponse(url=f"{frontend_url}{default_path}{sep}token={token}")
 
 # Google OAuth configuration
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -159,13 +188,20 @@ MICROSOFT_CRM_SCOPES = MICROSOFT_AUTH_SCOPES + [
 OAUTH_STATE_PREFIX = "oauth_state:"
 
 
-def create_access_token(developer_id: str) -> str:
-    """Create a JWT access token."""
+def create_access_token(developer_id: str, account_type: str = "internal") -> str:
+    """Create a JWT access token.
+
+    ``account_type`` is embedded as a claim so the isolation middleware can
+    cheaply (no DB hit) block community-only accounts from internal endpoints.
+    Only ``"community"`` is acted on; anything else (incl. legacy tokens without
+    the claim) is treated as a normal internal user.
+    """
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
     to_encode = {
         "sub": developer_id,
         "exp": expire,
         "type": "access",
+        "account_type": account_type,
     }
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
 
@@ -194,8 +230,17 @@ async def device_login(provider: str, port: int) -> RedirectResponse:
 
 
 @router.get("/github/login")
-async def github_login(redirect_url: str | None = None) -> RedirectResponse:
-    """Initiate GitHub OAuth flow."""
+async def github_login(
+    redirect_url: str | None = None,
+    context: str | None = None,
+    community: str | None = None,
+) -> RedirectResponse:
+    """Initiate GitHub OAuth flow.
+
+    ``context=community`` (with the community slug) flags a sign-in that came
+    from a public forum, so a brand-new account is created community-only and
+    the user is returned to the forum rather than the internal app.
+    """
     _validate_redirect_or_400(redirect_url)
     state = secrets.token_urlsafe(32)
 
@@ -205,6 +250,8 @@ async def github_login(redirect_url: str | None = None) -> RedirectResponse:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "type": "github",
         "redirect_url": redirect_url,
+        "context": context,
+        "community": community,
     }
     redis_client.setex(f"{OAUTH_STATE_PREFIX}{state}", OAUTH_STATE_TTL, json.dumps(state_data))
 
@@ -235,6 +282,8 @@ async def github_callback(
 
     # For OAuth flow, verify state and get redirect URL
     custom_redirect_url = None
+    signup_context = None
+    community_slug = None
     if not is_installation_callback:
         redis_client = get_redis_client()
         state_key = f"{OAUTH_STATE_PREFIX}{state}"
@@ -243,6 +292,8 @@ async def github_callback(
             return RedirectResponse(url=f"{frontend_url}/?error=invalid_state")
         state_data = json.loads(state_data_raw)
         custom_redirect_url = state_data.get("redirect_url")
+        signup_context = state_data.get("context")
+        community_slug = state_data.get("community")
         redis_client.delete(state_key)
 
     github_service = GitHubService()
@@ -294,7 +345,13 @@ async def github_callback(
         scopes=scopes,
         refresh_token=auth_response.refresh_token,
         token_expires_at=token_expires_at,
+        signup_context=signup_context,
     )
+
+    # A community sign-in auto-joins the target community (non-billable), so the
+    # participant has a stable identity + display prefs from the first visit.
+    if signup_context == "community" and community_slug:
+        await _join_community_after_login(db, developer.id, community_slug)
 
     # If this is an installation callback, sync the installation and fetch repos
     if is_installation_callback and installation_id:
@@ -326,9 +383,11 @@ async def github_callback(
             print(f"Failed to sync installation: {e}")
 
     # Create JWT
-    access_token = create_access_token(developer.id)
+    access_token = create_access_token(developer.id, account_type=developer.account_type)
 
-    # Redirect to an allowlisted redirect_url (else the default frontend callback).
+    # Always deliver the token to /auth/callback (single secure token-storage
+    # chokepoint). Where a community account goes next is decided client-side in
+    # useSetToken from the account_type, so no community-specific redirect here.
     return _post_oauth_redirect(custom_redirect_url, access_token)
 
 
@@ -343,8 +402,16 @@ def _clean_old_oauth_states():
 
 
 @router.get("/google/login")
-async def google_login(redirect_url: str | None = None) -> RedirectResponse:
-    """Initiate Google OAuth flow for authentication."""
+async def google_login(
+    redirect_url: str | None = None,
+    context: str | None = None,
+    community: str | None = None,
+) -> RedirectResponse:
+    """Initiate Google OAuth flow for authentication.
+
+    ``context=community`` (with the community slug) flags a public-forum sign-in
+    — a brand-new account is created community-only and returned to the forum.
+    """
     if not settings.google_client_id:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -360,6 +427,8 @@ async def google_login(redirect_url: str | None = None) -> RedirectResponse:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "scope_type": "login",
         "redirect_url": redirect_url,
+        "context": context,
+        "community": community,
     }
     redis_client.setex(f"{OAUTH_STATE_PREFIX}{state}", OAUTH_STATE_TTL, json.dumps(state_data))
 
@@ -444,6 +513,8 @@ async def google_callback(
     state_meta = json.loads(state_data_raw)
     scope_type = state_meta.get("scope_type", "login")
     custom_redirect_url = state_meta.get("redirect_url")
+    signup_context = state_meta.get("context")
+    community_slug = state_meta.get("community")
 
     # Determine which scopes to store
     scopes_to_store = GOOGLE_CRM_SCOPES if scope_type == "crm" else GOOGLE_AUTH_SCOPES
@@ -505,15 +576,20 @@ async def google_callback(
                 google_name=name,
                 google_avatar_url=picture,
                 scopes=scopes_to_store,
+                signup_context=signup_context,
             )
 
             # Commit the transaction
             await db.commit()
 
-            # Create JWT
-            jwt_token = create_access_token(developer.id)
+            if signup_context == "community" and community_slug:
+                await _join_community_after_login(db, developer.id, community_slug)
 
-            # Deliver the token only to an allowlisted redirect.
+            # Create JWT
+            jwt_token = create_access_token(developer.id, account_type=developer.account_type)
+
+            # Deliver the token to /auth/callback (secure token-storage
+            # chokepoint); community routing is decided client-side in useSetToken.
             return _post_oauth_redirect(custom_redirect_url, jwt_token)
 
     except httpx.RequestError as e:
@@ -671,7 +747,7 @@ async def microsoft_callback(
 
             await db.commit()
 
-            jwt_token = create_access_token(developer.id)
+            jwt_token = create_access_token(developer.id, account_type=developer.account_type)
 
             # Deliver the token only to an allowlisted redirect.
             return _post_oauth_redirect(custom_redirect_url, jwt_token)

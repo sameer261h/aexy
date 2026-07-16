@@ -16,6 +16,8 @@ from aexy.schemas.chat import (
     PublicChannelResponse,
     PublicCommunityChannel,
     PublicCommunityResponse,
+    PublicDirectoryItem,
+    PublicDirectoryResponse,
     PublicMessage,
     PublicReplyCreate,
     PublicTopicResponse,
@@ -43,6 +45,16 @@ def _split_topic_param(topic_param: str) -> tuple[str, str]:
     if not sep or not slug or not short_id:
         raise HTTPException(status_code=404, detail="Topic not found")
     return slug, short_id
+
+
+@router.get("", response_model=PublicDirectoryResponse)
+async def list_directory(db: AsyncSession = Depends(get_db)):
+    """Public directory of communities that opted in (enabled AND listed)."""
+    service = PublicCommunityService(db)
+    items = await service.list_directory()
+    return PublicDirectoryResponse(
+        communities=[PublicDirectoryItem(**i) for i in items]
+    )
 
 
 @router.get("/{community_slug}", response_model=PublicCommunityResponse)

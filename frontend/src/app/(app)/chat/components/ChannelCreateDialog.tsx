@@ -13,7 +13,7 @@ interface ChannelCreateDialogProps {
 export function ChannelCreateDialog({ workspaceId, open, onClose }: ChannelCreateDialogProps) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [visibility, setVisibility] = useState<"public" | "private">("public");
+  const [visibility, setVisibility] = useState<"workspace" | "private">("workspace");
   const createChannel = useCreateChannel(workspaceId);
 
   if (!open) return null;
@@ -24,7 +24,7 @@ export function ChannelCreateDialog({ workspaceId, open, onClose }: ChannelCreat
     await createChannel.mutateAsync({ name: name.trim(), description: description.trim() || undefined, visibility });
     setName("");
     setDescription("");
-    setVisibility("public");
+    setVisibility("workspace");
     onClose();
   };
 
@@ -66,11 +66,11 @@ export function ChannelCreateDialog({ workspaceId, open, onClose }: ChannelCreat
               <label className="flex items-center gap-2 text-sm cursor-pointer">
                 <input
                   type="radio"
-                  checked={visibility === "public"}
-                  onChange={() => setVisibility("public")}
+                  checked={visibility === "workspace"}
+                  onChange={() => setVisibility("workspace")}
                   className="accent-primary"
                 />
-                Public
+                Workspace
               </label>
               <label className="flex items-center gap-2 text-sm cursor-pointer">
                 <input
@@ -82,6 +82,9 @@ export function ChannelCreateDialog({ workspaceId, open, onClose }: ChannelCreat
                 Private
               </label>
             </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Publish a channel to the public web later from its settings.
+            </p>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">

@@ -163,3 +163,31 @@ async def test_sitemap_lists_public_paths_only(client, seeded):
     # The private topic and channel never appear.
     assert "/general/hush-def1234567" not in paths
     assert "/secret" not in paths
+
+
+async def test_directory_excludes_unlisted(client, seeded):
+    # The seeded community is enabled but has not opted into the directory
+    # (listed defaults to False), so it must not appear.
+    resp = await client.get("/api/v1/public/community")
+    assert resp.status_code == 200
+    slugs = {c["community_slug"] for c in resp.json()["communities"]}
+    assert seeded["community"].community_slug not in slugs
+
+
+async def test_directory_lists_opted_in_with_public_counts(client, db_session, seeded):
+    seeded["community"].listed = True
+    await db_session.commit()
+
+    resp = await client.get("/api/v1/public/community")
+    assert resp.status_code == 200
+    items = {c["community_slug"]: c for c in resp.json()["communities"]}
+
+    slug = seeded["community"].community_slug
+    assert slug in items
+    entry = items[slug]
+    assert entry["title"] == "Acme Community"
+    # Only the one web-public channel and its one public topic are counted;
+    # the private topic (in the public channel), the private channel, and the
+    # DM channel are all excluded by the visibility predicates.
+    assert entry["channel_count"] == 1
+    assert entry["topic_count"] == 1

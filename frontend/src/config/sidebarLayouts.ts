@@ -219,6 +219,7 @@ export const GROUPED_LAYOUT: SidebarLayoutConfig = {
                 { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
                 { href: "/activity", label: "Activity", icon: Activity },
                 { href: "/chat", label: "Chat", icon: MessageCircle },
+                { href: "/community", label: "Community", icon: Globe },
             ],
         },
         {
@@ -380,6 +381,7 @@ export const FLAT_LAYOUT: SidebarLayoutConfig = {
                 { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
                 { href: "/activity", label: "Activity", icon: Activity },
                 { href: "/chat", label: "Chat", icon: MessageCircle },
+                { href: "/community", label: "Community", icon: Globe },
                 {
                     href: "/tracking",
                     label: "Tracking",

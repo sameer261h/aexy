@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from aexy.api import api_router
 from aexy.core.config import get_settings
 from aexy.core.database import engine, Base
-from aexy.middleware import UsageTrackingMiddleware
+from aexy.middleware import CommunityIsolationMiddleware, UsageTrackingMiddleware
 
 settings = get_settings()
 
@@ -100,6 +100,15 @@ def create_app() -> FastAPI:
     app.add_middleware(
         UsageTrackingMiddleware,
         redis_url=settings.redis_url,
+        secret_key=settings.secret_key,
+        algorithm=settings.algorithm,
+    )
+
+    # Wall off community-only accounts from every internal endpoint. Added last
+    # so it runs before UsageTracking (Starlette runs middleware LIFO) — a
+    # blocked community request is rejected without being metered.
+    app.add_middleware(
+        CommunityIsolationMiddleware,
         secret_key=settings.secret_key,
         algorithm=settings.algorithm,
     )
