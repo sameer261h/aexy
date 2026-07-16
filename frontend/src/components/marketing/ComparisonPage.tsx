@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowRight, CheckCircle2, GitBranch } from "lucide-react";
 import { LandingHeader, LandingFooter } from "@/components/landing/LandingHeader";
+import { AuthorByline, defaultAuthor, organizationJsonLd, personJsonLd } from "@/components/marketing/AuthorByline";
 
 export interface ComparisonPageProps {
   competitor: string;
@@ -35,12 +36,25 @@ export function ComparisonPage({
 
   const jsonLd = {
     "@context": "https://schema.org",
-    "@type": "FAQPage",
-    mainEntity: pageFaqs.map(([name, text]) => ({
-      "@type": "Question",
-      name,
-      acceptedAnswer: { "@type": "Answer", text },
-    })),
+    "@graph": [
+      {
+        "@type": "FAQPage",
+        mainEntity: pageFaqs.map(([name, text]) => ({
+          "@type": "Question",
+          name,
+          acceptedAnswer: { "@type": "Answer", text },
+        })),
+      },
+      {
+        "@type": "Article",
+        headline: title,
+        description,
+        author: { "@id": `https://aexy.io/about#${defaultAuthor.slug}` },
+        publisher: { "@id": "https://aexy.io/#organization" },
+      },
+      personJsonLd(),
+      organizationJsonLd(),
+    ],
   };
 
   return (
@@ -126,6 +140,13 @@ export function ComparisonPage({
                 </div>
               ))}
             </div>
+          </div>
+        </section>
+
+        <section className="px-4 pb-4 sm:px-6">
+          <div className="mx-auto max-w-4xl">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-white/35">Written by</p>
+            <AuthorByline />
           </div>
         </section>
 

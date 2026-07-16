@@ -32,8 +32,6 @@ import {
 } from "@/components/ui/sheet";
 import { SiGithub } from "@icons-pack/react-simple-icons";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
-
 const productLinks = [
   { href: "/products/tracking", label: "Activity Tracking", icon: Target, desc: "Real-time team visibility", color: "from-emerald-500 to-teal-500" },
   { href: "/products/planning", label: "Sprint Planning", icon: Calendar, desc: "AI-powered capacity planning", color: "from-green-500 to-emerald-500" },
@@ -69,8 +67,6 @@ export function LandingHeader({ showGetStarted = true }: LandingHeaderProps) {
   const [showSolutionsMenu, setShowSolutionsMenu] = useState(false);
   const productsRef = useRef<HTMLDivElement>(null);
   const solutionsRef = useRef<HTMLDivElement>(null);
-  const googleLoginUrl = `${API_BASE_URL}/auth/google/login`;
-  const githubLoginUrl = `${API_BASE_URL}/auth/github/login`;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -179,17 +175,8 @@ export function LandingHeader({ showGetStarted = true }: LandingHeaderProps) {
             )}
           </div>
 
-          <Link href="/#platform" className="text-white/60 hover:text-white transition text-sm">
-            Platform
-          </Link>
-          <Link href="/ai-company-os" className="text-white/60 hover:text-white transition text-sm">
-            Company OS
-          </Link>
-          <Link href="/products/ai-agents" className="text-white/60 hover:text-white transition text-sm">
+          <Link href="/products/ai-agents" className="text-white/60 hover:text-white transition text-sm whitespace-nowrap">
             AI Agents
-          </Link>
-          <Link href="/products/gtm-intelligence" className="text-white/60 hover:text-white transition text-sm">
-            GTM
           </Link>
           <Link href="/pricing" className="text-white/60 hover:text-white transition text-sm">
             Pricing
@@ -203,24 +190,15 @@ export function LandingHeader({ showGetStarted = true }: LandingHeaderProps) {
           </a>
         </nav>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           {showGetStarted && (
-            <>
-              <a
-                href={githubLoginUrl}
-                className="hidden sm:flex text-white/70 hover:text-white transition text-sm font-medium items-center gap-1"
-              >
-                <SiGithub className="h-4 w-4" />
-                Sign In
-              </a>
-              <a
-                href={googleLoginUrl}
-                className="group relative bg-white text-black px-3 sm:px-5 py-2 sm:py-2.5 rounded-full transition text-xs sm:text-sm font-semibold flex items-center gap-2 hover:bg-white/90"
-              >
-                Get Started
-                <ArrowRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform" />
-              </a>
-            </>
+            <Link
+              href="/login"
+              className="group inline-flex items-center gap-2 whitespace-nowrap rounded-full bg-white px-4 sm:px-5 py-2 sm:py-2.5 text-xs sm:text-sm font-semibold text-black transition hover:bg-white/90"
+            >
+              Get started
+              <ArrowRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform" />
+            </Link>
           )}
 
           {/* Mobile hamburger menu */}
@@ -282,21 +260,15 @@ export function LandingHeader({ showGetStarted = true }: LandingHeaderProps) {
                   </a>
                 </div>
                 {showGetStarted && (
-                  <div className="pt-4 border-t border-white/10 space-y-3">
-                    <a
-                      href={githubLoginUrl}
-                      className="flex items-center justify-center gap-2 w-full px-4 py-2.5 border border-white/20 rounded-full text-white text-sm font-medium hover:bg-white/5 transition"
-                    >
-                      <SiGithub className="h-4 w-4" />
-                      Sign In with GitHub
-                    </a>
-                    <a
-                      href={googleLoginUrl}
+                  <div className="pt-4 border-t border-white/10">
+                    <Link
+                      href="/login"
+                      onClick={() => setMobileOpen(false)}
                       className="flex items-center justify-center gap-2 w-full px-4 py-2.5 bg-white text-black rounded-full text-sm font-semibold hover:bg-white/90 transition"
                     >
-                      Get Started
+                      Get started
                       <ArrowRight className="h-4 w-4" />
-                    </a>
+                    </Link>
                   </div>
                 )}
               </nav>
@@ -321,7 +293,7 @@ export function LandingFooter() {
               <span className="text-lg font-bold text-white">Aexy</span>
             </div>
             <p className="text-white/40 text-sm mb-4">
-              The AI superapp for companies. Open source, self-hostable, and built for modern teams.
+              The open-source AI company OS. One workspace for CRM, engineering, workflows, people, and AI agents.
             </p>
             <div className="flex items-center gap-3">
               <a href="https://github.com/aexy-io/aexy" className="p-2 bg-white/5 border border-white/10 rounded-lg hover:bg-white/10 transition">
@@ -362,6 +334,10 @@ export function LandingFooter() {
           <div>
             <h4 className="text-white font-semibold mb-4">Resources</h4>
             <ul className="space-y-2 text-white/40 text-sm">
+              <li><Link href="/guides/what-is-an-ai-company-operating-system" className="hover:text-white transition">What is a Company OS?</Link></li>
+              <li><Link href="/guides/best-ai-company-operating-systems-2026" className="hover:text-white transition">Best Company OS 2026</Link></li>
+              <li><Link href="/guides/ai-agents-for-business-workflows" className="hover:text-white transition">AI Agents Guide</Link></li>
+              <li><Link href="/guides/self-hosted-ai-company-os" className="hover:text-white transition">Self-Hosting Guide</Link></li>
               <li><Link href="/story" className="hover:text-white transition">Our Story</Link></li>
               <li><Link href="/mission" className="hover:text-white transition">Mission</Link></li>
               <li><Link href="/manifesto" className="hover:text-white transition">Company OS Manifesto</Link></li>

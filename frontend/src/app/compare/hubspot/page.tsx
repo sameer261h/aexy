@@ -26,6 +26,8 @@ export default function HubSpotComparisonPage() {
       rows={[
         ["Primary focus", "Company OS with CRM, GTM, engineering, docs, workflows, people, and agents.", "CRM, marketing, sales, and service suite."],
         ["Engineering context", "Tasks, sprints, tickets, docs, and developer insights can connect to customer records.", "Usually handled in separate engineering tools."],
+        ["Visitor identification", "Anonymous visitors resolve to CRM records via email, form, tracking-link, and company-IP matching — triggering automatic lead rescoring.", "Available through add-ons and higher tiers."],
+        ["Email deliverability", "Built-in sending-domain warming with bounce/complaint monitoring and auto-pause.", "Deliverability reporting exists; domain warming typically needs third-party tools."],
         ["Agent governance", "Policy gates, approvals, tool access, and audit history for AI agents.", "AI features are mostly within HubSpot's CRM/marketing surface."],
         ["Control", "Open-source and self-hostable path.", "Commercial SaaS platform."],
       ]}

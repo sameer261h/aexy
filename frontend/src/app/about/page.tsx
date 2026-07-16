@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { ArrowRight, Heart, Code2, Globe, Sparkles } from "lucide-react";
 import { LandingHeader, LandingFooter } from "@/components/landing/LandingHeader";
+import { SiGithub } from "@icons-pack/react-simple-icons";
+import { defaultAuthor, organizationJsonLd, personJsonLd } from "@/components/marketing/AuthorByline";
 
 const VALUES = [
   {
@@ -31,9 +33,15 @@ const VALUES = [
   },
 ];
 
+const aboutJsonLd = {
+  "@context": "https://schema.org",
+  "@graph": [organizationJsonLd(), personJsonLd()],
+};
+
 export default function AboutPage() {
   return (
     <div className="min-h-screen bg-[#0a0a0f] overflow-hidden">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(aboutJsonLd) }} />
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-0 left-1/4 w-[600px] h-[600px] bg-primary-500/10 rounded-full blur-[120px] animate-pulse" />
         <div className="absolute top-1/3 right-1/4 w-[500px] h-[500px] bg-purple-500/10 rounded-full blur-[120px] animate-pulse" />
@@ -97,6 +105,43 @@ export default function AboutPage() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      <section id={defaultAuthor.slug} className="py-16 px-6 relative">
+        <div className="max-w-3xl mx-auto">
+          <div className="text-center mb-10">
+            <h2 className="text-3xl md:text-4xl font-bold text-white mb-4 tracking-tight">
+              Who&apos;s building this
+            </h2>
+          </div>
+          <div className="relative bg-white/5 backdrop-blur-sm border border-white/10 rounded-3xl p-8 md:p-10">
+            <div className="flex flex-col sm:flex-row items-start gap-6">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={defaultAuthor.avatarUrl}
+                alt={defaultAuthor.name}
+                className="h-20 w-20 rounded-2xl border border-white/15"
+                loading="lazy"
+              />
+              <div>
+                <h3 className="text-xl font-bold text-white">{defaultAuthor.name}</h3>
+                <p className="text-white/40 text-sm mb-3">{defaultAuthor.role}</p>
+                <p className="text-white/60 leading-relaxed">{defaultAuthor.bio}</p>
+                <div className="mt-4 flex items-center gap-4 text-sm">
+                  <a href={defaultAuthor.githubUrl} className="flex items-center gap-2 text-white/60 hover:text-white transition">
+                    <SiGithub className="h-4 w-4" />
+                    GitHub
+                  </a>
+                  {defaultAuthor.websiteUrl && (
+                    <a href={defaultAuthor.websiteUrl} className="text-white/60 hover:text-white transition">
+                      bhanu.io
+                    </a>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>

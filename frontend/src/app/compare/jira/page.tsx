@@ -25,6 +25,8 @@ export default function JiraComparisonPage() {
       ]}
       rows={[
         ["Core model", "Company OS spanning engineering, CRM, GTM, docs, workflows, people, and agents.", "Issue and project tracking for software teams."],
+        ["Git awareness", "Commits and PRs auto-link to tasks (“fixes #123”), with AI analysis of how well each PR matches its task.", "Commit linking via GitHub/Bitbucket apps; no AI alignment analysis."],
+        ["Incident automation", "Uptime monitors and observability alerts auto-create tickets, dedupe recurring alerts, and auto-resolve on recovery.", "Requires Jira Service Management or separate incident tooling."],
         ["AI agents", "Governed agents can use CRM, email, docs, workflows, and company context.", "AI features depend on Atlassian ecosystem and issue context."],
         ["Customer context", "CRM, GTM intelligence, visitor identification, sequences, and routing are built in.", "Usually requires separate CRM and integration work."],
         ["Open source", "Open-source core and self-hosting path.", "Commercial SaaS/on-prem enterprise product."],

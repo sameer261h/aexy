@@ -2,12 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowRight, Bot, Building2, Calendar, CheckCircle2, Database, Mail, Network, Rows3, Workflow } from "lucide-react";
 import { LandingHeader, LandingFooter } from "@/components/landing/LandingHeader";
+import { AuthorByline, defaultAuthor, organizationJsonLd, personJsonLd } from "@/components/marketing/AuthorByline";
 import type { IconCapability, IconRow } from "@/components/landing/marketing-types";
 
 export const metadata: Metadata = {
-  title: "Agent-Native CRM",
+  title: "Agent-Native CRM — Open-Source Alternative to Attio & HubSpot",
   description:
-    "A flexible CRM for humans and AI agents with custom objects, Gmail and calendar sync, activity timelines, automations, sequences, and GTM intelligence.",
+    "A flexible CRM for humans and AI agents with custom objects, Gmail and calendar sync, activity timelines, automations, sequences, and GTM intelligence. Open source and self-hostable.",
 };
 
 const capabilities: readonly IconCapability[] = [
@@ -32,6 +33,19 @@ const faqs = [
   ["Is Aexy CRM open source?", "Aexy has an open-source core and can be self-hosted. Teams can inspect and extend the system instead of locking relationship data inside a black box."],
   ["How is this different from a sales-only CRM?", "Aexy CRM is part of a company OS. Records can connect to GTM, docs, workflows, tickets, engineering work, email, and AI agents."],
   ["Can AI agents update CRM records?", "Yes. Agents can use CRM tools, but access can be restricted with policies, approvals, field limits, and audit logs."],
+  ["How does Aexy CRM compare to Attio or HubSpot?", "Like Attio, Aexy has a schema-flexible data model with custom objects. Like HubSpot, it includes sequences, routing, and GTM signals. Unlike both, it is open source, self-hostable, agent-native, and connected to engineering, docs, and workflows in the same workspace."],
+  ["What does Aexy CRM cost?", "Self-hosting the open-source core is free. Cloud plans add managed infrastructure, and enterprise plans add advanced controls — see the pricing page for current tiers."],
+];
+
+const comparisonRows: ReadonlyArray<readonly [string, string, string, string]> = [
+  ["Data model", "Schema-flexible custom objects", "Flexible objects", "Fixed objects; custom objects on paid tiers"],
+  ["AI agents on records", "Governed agents: search, enrich, update, draft — with policy gates and audit logs", "AI research assistants", "AI assists in CRM surface"],
+  ["AI-computed fields", "LLM-computed attributes from your own prompt templates", "AI enrichment features", "AI within Breeze features"],
+  ["Engineering context", "Tickets, sprints, releases link to customer records", "Not included", "Not included"],
+  ["Visitor ID & lead scoring", "Built in — anonymous visitors resolve to CRM records with auto rescoring", "Via integrations", "Higher tiers / add-ons"],
+  ["Email deliverability", "Domain warming, bounce/complaint monitoring, auto-pause built in", "Not included", "Third-party tools"],
+  ["Email & calendar sync", "Gmail and calendar sync included", "Included", "Included"],
+  ["Open source / self-host", "Yes — free self-hosted option", "No", "No"],
 ];
 
 export default function CRMProductPage() {
@@ -128,6 +142,53 @@ export default function CRMProductPage() {
         </section>
 
         <section className="px-4 py-20 sm:px-6">
+          <div className="mx-auto max-w-7xl">
+            <div className="max-w-3xl">
+              <h2 className="text-4xl font-semibold tracking-tight">Aexy CRM vs Attio vs HubSpot</h2>
+              <p className="mt-5 text-lg leading-8 text-white/58">
+                Evaluating CRMs? Here is where Aexy differs from the tools revenue teams usually shortlist.
+              </p>
+            </div>
+            <div className="mt-10 overflow-x-auto rounded-2xl border border-white/10">
+              <table className="w-full min-w-[720px] text-left text-sm">
+                <thead>
+                  <tr className="border-b border-white/10 bg-white/[0.05]">
+                    <th className="px-5 py-4 font-semibold text-white/45"> </th>
+                    <th className="px-5 py-4 font-semibold text-violet-300">Aexy</th>
+                    <th className="px-5 py-4 font-semibold text-white/70">Attio</th>
+                    <th className="px-5 py-4 font-semibold text-white/70">HubSpot</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {comparisonRows.map(([dimension, aexy, attio, hubspot]) => (
+                    <tr key={dimension} className="border-b border-white/10 last:border-b-0">
+                      <td className="px-5 py-4 font-medium text-white/70">{dimension}</td>
+                      <td className="px-5 py-4 leading-6 text-white/85">{aexy}</td>
+                      <td className="px-5 py-4 leading-6 text-white/50">{attio}</td>
+                      <td className="px-5 py-4 leading-6 text-white/50">{hubspot}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-6 flex flex-wrap gap-x-6 gap-y-2 text-sm">
+              <Link href="/compare/attio" className="inline-flex items-center gap-1.5 font-semibold text-white/60 transition hover:text-white">
+                Full Attio comparison
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+              <Link href="/compare/hubspot" className="inline-flex items-center gap-1.5 font-semibold text-white/60 transition hover:text-white">
+                Full HubSpot comparison
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+              <Link href="/pricing" className="inline-flex items-center gap-1.5 font-semibold text-white/60 transition hover:text-white">
+                Pricing
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            </div>
+          </div>
+        </section>
+
+        <section className="px-4 py-20 sm:px-6">
           <div className="mx-auto max-w-4xl">
             <h2 className="text-center text-4xl font-semibold tracking-tight">CRM FAQs</h2>
             <div className="mt-10 space-y-4">
@@ -138,6 +199,8 @@ export default function CRMProductPage() {
                 </div>
               ))}
             </div>
+            <p className="mb-3 mt-12 text-xs font-semibold uppercase tracking-[0.18em] text-white/35">Written by</p>
+            <AuthorByline author={defaultAuthor} />
           </div>
         </section>
       </main>
@@ -149,10 +212,31 @@ export default function CRMProductPage() {
 
 const jsonLd = {
   "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  name: "Aexy CRM",
-  applicationCategory: "BusinessApplication",
-  description:
-    "Agent-native CRM with custom objects, Gmail and calendar sync, activity timelines, automations, sequences, and GTM intelligence.",
-  url: "https://aexy.io/products/crm",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      name: "Aexy CRM",
+      applicationCategory: "BusinessApplication",
+      operatingSystem: "Web",
+      description:
+        "Agent-native CRM with custom objects, Gmail and calendar sync, activity timelines, automations, sequences, and GTM intelligence. Open-source alternative to Attio and HubSpot.",
+      url: "https://aexy.io/products/crm",
+      offers: {
+        "@type": "Offer",
+        price: "0",
+        priceCurrency: "USD",
+        description: "Open-source self-hosted option available.",
+      },
+    },
+    {
+      "@type": "FAQPage",
+      mainEntity: faqs.map(([question, answer]) => ({
+        "@type": "Question",
+        name: question,
+        acceptedAnswer: { "@type": "Answer", text: answer },
+      })),
+    },
+    personJsonLd(),
+    organizationJsonLd(),
+  ],
 };
