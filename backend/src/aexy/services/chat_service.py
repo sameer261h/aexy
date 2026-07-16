@@ -651,6 +651,7 @@ class ChatService:
                 "is_edited": m.is_edited,
                 "edited_at": m.edited_at,
                 "is_deleted": m.is_deleted,
+                "hidden_from_public": bool(m.hidden_from_public),
                 "mentions": visible_mentions,
                 "created_at": m.created_at,
                 "sender": sender,

@@ -174,6 +174,21 @@ class WorkspaceService:
         return True
 
     # Member management
+    async def _promote_community_account(self, developer_id: str, role: str) -> None:
+        """When a community-only account is granted a real workspace role, lift
+        the isolation flag so they become a normal internal user.
+
+        No-op for the ``community`` role itself (that path never runs through
+        ``add_member`` anyway) and for accounts that are already internal. The
+        change takes effect on their next login-issued token.
+        """
+        if role == "community":
+            return
+        developer = await self.db.get(Developer, developer_id)
+        if developer is not None and getattr(developer, "account_type", "internal") == "community":
+            developer.account_type = "internal"
+            await self.db.flush()
+
     async def add_member(
         self,
         workspace_id: str,
@@ -183,6 +198,7 @@ class WorkspaceService:
         status: str = "active",
     ) -> WorkspaceMember:
         """Add a member to a workspace."""
+        await self._promote_community_account(developer_id, role)
         # Check if already a member
         existing = await self.get_member(workspace_id, developer_id)
         if existing:

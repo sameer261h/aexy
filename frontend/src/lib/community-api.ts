@@ -17,6 +17,19 @@ const SERVER_API_BASE =
 // on-demand revalidateTag on new public messages.
 const REVALIDATE_SECONDS = 300;
 
+export interface DirectoryItem {
+  community_slug: string;
+  title: string | null;
+  description: string | null;
+  logo_url: string | null;
+  channel_count: number;
+  topic_count: number;
+}
+
+export interface CommunityDirectory {
+  communities: DirectoryItem[];
+}
+
 export interface PublicChannelSummary {
   slug: string;
   name: string;
@@ -94,6 +107,10 @@ async function getJson<T>(path: string): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+export function getCommunityDirectory(): Promise<CommunityDirectory | null> {
+  return getJson<CommunityDirectory>("");
 }
 
 export function getCommunity(slug: string): Promise<PublicCommunity | null> {

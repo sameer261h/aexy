@@ -57,6 +57,22 @@ export function useCreateChannel(workspaceId: string) {
   });
 }
 
+export function useUpdateChannel(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      channelId,
+      data,
+    }: {
+      channelId: string;
+      data: { name?: string; description?: string; is_archived?: boolean; visibility?: string; web_public_since?: string | null };
+    }) => chatApi.updateChannel(workspaceId, channelId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["chat", "channels", workspaceId] });
+    },
+  });
+}
+
 export function useCreateTopic(workspaceId: string, channelId: string) {
   const queryClient = useQueryClient();
   return useMutation({

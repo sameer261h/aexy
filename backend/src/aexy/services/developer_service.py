@@ -930,8 +930,15 @@ class DeveloperService:
         scopes: list[str] | None = None,
         refresh_token: str | None = None,
         token_expires_at: datetime | None = None,
+        signup_context: str | None = None,
     ) -> Developer:
-        """Get or create developer from GitHub OAuth."""
+        """Get or create developer from GitHub OAuth.
+
+        ``signup_context="community"`` marks a *brand-new* account as a
+        community-only participant (walled off from the internal product). It
+        never downgrades an existing developer — the early-return branches above
+        the creation path leave established accounts untouched.
+        """
         # Try to find by GitHub ID first
         developer = await self.get_by_github_id(github_id)
         if developer:
@@ -976,6 +983,7 @@ class DeveloperService:
             email=email,
             name=github_name,
             avatar_url=github_avatar_url,
+            account_type="community" if signup_context == "community" else "internal",
         )
         self.db.add(developer)
         await self.db.flush()
@@ -1101,8 +1109,13 @@ class DeveloperService:
         google_name: str | None = None,
         google_avatar_url: str | None = None,
         scopes: list[str] | None = None,
+        signup_context: str | None = None,
     ) -> Developer:
-        """Get or create developer from Google OAuth."""
+        """Get or create developer from Google OAuth.
+
+        ``signup_context="community"`` marks a *brand-new* account as a
+        community-only participant; existing developers are never downgraded.
+        """
         # Try to find by Google ID first
         developer = await self.get_by_google_id(google_id)
         if developer:
@@ -1160,6 +1173,7 @@ class DeveloperService:
             email=google_email,
             name=google_name,
             avatar_url=google_avatar_url,
+            account_type="community" if signup_context == "community" else "internal",
         )
         self.db.add(developer)
         await self.db.flush()

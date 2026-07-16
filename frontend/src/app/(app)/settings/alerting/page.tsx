@@ -15,6 +15,7 @@ import {
   ChevronRight,
   Play,
   X,
+  BookOpen,
 } from "lucide-react";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import {
@@ -87,6 +88,82 @@ function SecretBanner({ integration }: { integration: AlertIntegrationWithSecret
           </code>
         </div>
       </div>
+    </div>
+  );
+}
+
+function SetupGuide() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg border border-border bg-muted/30">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium"
+      >
+        <BookOpen className="h-4 w-4 text-muted-foreground" />
+        How to connect OpenObserve
+        {open ? (
+          <ChevronDown className="ml-auto h-4 w-4 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="ml-auto h-4 w-4 text-muted-foreground" />
+        )}
+      </button>
+      {open && (
+        <div className="space-y-3 border-t border-border px-4 py-3 text-sm text-muted-foreground">
+          <ol className="list-decimal space-y-2 pl-5">
+            <li>
+              <span className="text-foreground">Create an integration</span> below.
+              On save, Aexy shows a <strong>Webhook URL</strong> and a{" "}
+              <strong>signing secret</strong> — copy both (the secret is shown only once).
+            </li>
+            <li>
+              In OpenObserve, go to{" "}
+              <span className="text-foreground">Alerts → Destinations → Add</span> and set:
+              <div className="mt-1.5 overflow-x-auto">
+                <table className="text-xs">
+                  <tbody>
+                    <tr>
+                      <td className="pr-3 py-0.5 text-muted-foreground">URL</td>
+                      <td className="text-foreground">the Webhook URL from step 1</td>
+                    </tr>
+                    <tr>
+                      <td className="pr-3 py-0.5 text-muted-foreground">Method</td>
+                      <td className="text-foreground"><code>POST</code></td>
+                    </tr>
+                    <tr>
+                      <td className="pr-3 py-0.5 text-muted-foreground">Header</td>
+                      <td className="text-foreground">
+                        <code>X-Aexy-Signature: &lt;signing secret&gt;</code>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              The header is accepted as the raw secret or an HMAC-SHA256 of the body
+              (<code>sha256=</code> prefix optional).
+            </li>
+            <li>
+              Point the alert&apos;s <span className="text-foreground">Template</span> at a JSON
+              body with <code>service</code>, <code>severity</code>{" "}
+              (<code>critical|high|medium|low</code>), <code>environment</code>,{" "}
+              <code>alert_url</code>, and <code>rows</code> (the matched log lines →
+              ticket log context + trace links). Send <code>&quot;status&quot;:&quot;resolved&quot;</code>{" "}
+              on recovery to auto-resolve.
+            </li>
+            <li>
+              Use <span className="text-foreground">Send test</span> on the integration
+              to run the full pipeline, then check its event history to see{" "}
+              <code>created / updated / throttled / reopened / resolved</code>.
+            </li>
+          </ol>
+          <p className="text-xs">
+            Recurring alerts of the same kind collapse into one ticket
+            (fingerprint = provider:service:normalized alert name). Full reference:{" "}
+            <code>docs/integrations/openobserve.md</code>.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -406,6 +483,8 @@ export default function AlertingSettingsPage() {
           </button>
         )}
       </div>
+
+      <SetupGuide />
 
       {creating && currentWorkspaceId && (
         <CreateForm workspaceId={currentWorkspaceId} onDone={() => setCreating(false)} />

@@ -3,12 +3,15 @@
 import { memo } from "react";
 import { ChatMessage } from "@/lib/api";
 import { formatDistanceToNow } from "date-fns";
-import { Reply, FileText, Download, Bot } from "lucide-react";
+import { Reply, FileText, Download, Bot, EyeOff, Eye } from "lucide-react";
 
 interface MessageItemProps {
   message: ChatMessage;
   onReply?: (messageId: string) => void;
   compact?: boolean;
+  // Present when the viewer can moderate the public forum. Toggles the message's
+  // redaction from the public view (still visible internally).
+  onToggleHidden?: (messageId: string, hide: boolean) => void;
 }
 
 function isSafeUrl(url: string): boolean {
@@ -128,7 +131,7 @@ function renderContent(content: string) {
   return parts.length > 0 ? parts : content;
 }
 
-export const MessageItem = memo(function MessageItem({ message, onReply, compact }: MessageItemProps) {
+export const MessageItem = memo(function MessageItem({ message, onReply, compact, onToggleHidden }: MessageItemProps) {
   const time = formatDistanceToNow(new Date(message.created_at), { addSuffix: true });
   const senderName = message.sender?.name || "Unknown";
   const isAgent = !!(message.sender as Record<string, unknown>)?.is_agent;
@@ -180,21 +183,37 @@ export const MessageItem = memo(function MessageItem({ message, onReply, compact
             <span className={compact ? "text-[10px] text-muted-foreground" : "text-xs text-muted-foreground"}>(edited)</span>
           )}
         </div>
-        <div className={`whitespace-pre-wrap break-words mt-0.5 ${compact ? "text-xs" : "text-sm"}`}>
+        <div className={`whitespace-pre-wrap break-words mt-0.5 ${compact ? "text-xs" : "text-sm"} ${message.hidden_from_public ? "opacity-60" : ""}`}>
           {renderContent(message.content)}
         </div>
+        {message.hidden_from_public && (
+          <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-500">
+            <EyeOff className="h-3 w-3" /> Hidden from public forum
+          </span>
+        )}
       </div>
 
       {/* Actions */}
-      {onReply && (
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-          <button
-            onClick={() => onReply(message.id)}
-            className="p-1 rounded hover:bg-accent text-muted-foreground"
-            title="Reply"
-          >
-            <Reply className="h-3.5 w-3.5" />
-          </button>
+      {(onReply || onToggleHidden) && (
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 flex items-start gap-1">
+          {onReply && (
+            <button
+              onClick={() => onReply(message.id)}
+              className="p-1 rounded hover:bg-accent text-muted-foreground"
+              title="Reply"
+            >
+              <Reply className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {onToggleHidden && (
+            <button
+              onClick={() => onToggleHidden(message.id, !message.hidden_from_public)}
+              className="p-1 rounded hover:bg-accent text-muted-foreground"
+              title={message.hidden_from_public ? "Unhide from public forum" : "Hide from public forum"}
+            >
+              {message.hidden_from_public ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+            </button>
+          )}
         </div>
       )}
     </div>

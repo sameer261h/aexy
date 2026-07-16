@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { communityPublicApi } from "@/lib/api";
+import { stashPostLoginRedirect } from "@/lib/oauth";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
 /**
  * Reply box on a public topic. Anonymous visitors see a "sign in" CTA; signed-in
@@ -59,18 +61,35 @@ export function CommunityReply({
   };
 
   if (!signedIn) {
+    // Return the visitor to this exact topic after login. The context=community
+    // marker tells the backend to create a community-only account (walled off
+    // from the internal app) for brand-new sign-ins. The OAuthInflightTagger at
+    // the app root auto-marks the inflight gate for these /auth/*/login links.
+    const topicPath = `/community/${communitySlug}/${channelSlug}/${topicParam}`;
+    const q = `context=community&community=${encodeURIComponent(communitySlug)}`;
+    const onSignIn = () => stashPostLoginRedirect(topicPath);
     return (
       <div
         data-testid="community-signin-cta"
         className="mt-8 rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 text-center"
       >
         <p className="text-gray-600 dark:text-gray-400">Want to join the conversation?</p>
-        <Link
-          href="/"
-          className="mt-3 inline-block rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-        >
-          Sign in to reply
-        </Link>
+        <div className="mt-3 flex items-center justify-center gap-3">
+          <a
+            href={`${API_BASE_URL}/auth/github/login?${q}`}
+            onClick={onSignIn}
+            className="inline-block rounded-lg bg-gray-900 px-4 py-2 text-white hover:bg-black dark:bg-white dark:text-gray-900 dark:hover:bg-gray-200"
+          >
+            Sign in with GitHub
+          </a>
+          <a
+            href={`${API_BASE_URL}/auth/google/login?${q}`}
+            onClick={onSignIn}
+            className="inline-block rounded-lg border border-gray-300 dark:border-gray-700 px-4 py-2 text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800"
+          >
+            Sign in with Google
+          </a>
+        </div>
       </div>
     );
   }

@@ -149,6 +149,9 @@ class MessageResponse(BaseModel):
     is_edited: bool
     edited_at: datetime | None = None
     is_deleted: bool
+    # Whether a moderator has redacted this from the public forum view (still
+    # visible internally). Lets the chat UI show a hide/unhide toggle + state.
+    hidden_from_public: bool = False
     mentions: list = Field(default_factory=list)
     created_at: datetime
     sender: SenderInfo | None = None
@@ -216,6 +219,7 @@ class CommunitySettingsUpdate(BaseModel):
     theme: dict | None = None
     default_public_display: str | None = None
     noindex: bool | None = None
+    listed: bool | None = None
     allow_participation: bool | None = None
     post_moderation: str | None = Field(None, pattern="^(post|pre)$")
 
@@ -232,6 +236,7 @@ class CommunitySettingsResponse(BaseModel):
     theme: dict = Field(default_factory=dict)
     default_public_display: str
     noindex: bool
+    listed: bool = False
     allow_participation: bool = False
     post_moderation: str = "post"
 
@@ -280,6 +285,19 @@ class PublicCommunityResponse(BaseModel):
     noindex: bool = False
     allow_participation: bool = False
     channels: list[PublicCommunityChannel] = Field(default_factory=list)
+
+
+class PublicDirectoryItem(BaseModel):
+    community_slug: str
+    title: str | None = None
+    description: str | None = None
+    logo_url: str | None = None
+    channel_count: int = 0
+    topic_count: int = 0
+
+
+class PublicDirectoryResponse(BaseModel):
+    communities: list[PublicDirectoryItem] = Field(default_factory=list)
 
 
 class PublicTopicSummary(BaseModel):

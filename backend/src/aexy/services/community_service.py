@@ -70,7 +70,7 @@ class CommunityService:
 
         allowed = {
             "enabled", "title", "description", "logo_url", "theme",
-            "default_public_display", "noindex", "community_slug",
+            "default_public_display", "noindex", "listed", "community_slug",
             "allow_participation", "post_moderation",
         }
         for key, value in fields.items():

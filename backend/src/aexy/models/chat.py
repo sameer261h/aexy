@@ -341,6 +341,10 @@ class WorkspaceCommunity(Base):
         String(20), default=PublicDisplayMode.NAME.value
     )
     noindex: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Opt-in to the global public directory at /community. Separate from
+    # `enabled`: a community can be live (addressable by its slug) without
+    # advertising itself in the directory.
+    listed: Mapped[bool] = mapped_column(Boolean, default=False)
     # Whether outsiders may post at all, and how their posts are handled.
     allow_participation: Mapped[bool] = mapped_column(Boolean, default=False)
     post_moderation: Mapped[str] = mapped_column(String(10), default="post")  # post | pre

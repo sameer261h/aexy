@@ -194,6 +194,9 @@ export interface Developer {
   email: string;
   name: string | null;
   avatar_url: string | null;
+  // "internal" = normal product user; "community" = public-forum-only account
+  // that must be kept out of the app shell (see the (app) layout guard).
+  account_type?: string;
   skill_fingerprint: SkillFingerprint | null;
   work_patterns: WorkPatterns | null;
   growth_trajectory: GrowthTrajectory | null;
@@ -21901,7 +21904,11 @@ export interface ChatChannel {
   name: string;
   slug: string;
   description: string | null;
-  visibility: "public" | "private";
+  // Three-tier: private (members only) | workspace (any member) | web_public
+  // (indexable on the public community forum). "public" is the legacy value the
+  // backend maps to "workspace".
+  visibility: "private" | "workspace" | "web_public" | "public";
+  web_public_since?: string | null;
   created_by_id: string | null;
   is_archived: boolean;
   created_at: string;
@@ -21955,6 +21962,7 @@ export interface ChatMessage {
   is_edited: boolean;
   edited_at: string | null;
   is_deleted: boolean;
+  hidden_from_public?: boolean;
   mentions: string[];
   created_at: string;
   sender?: ChatSender;
@@ -22100,6 +22108,7 @@ export interface CommunitySettings {
   theme: Record<string, unknown>;
   default_public_display: string;
   noindex: boolean;
+  listed: boolean;
   allow_participation: boolean;
   post_moderation: string;
 }

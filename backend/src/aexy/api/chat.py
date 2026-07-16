@@ -799,6 +799,7 @@ def _community_to_response(c) -> CommunitySettingsResponse:
         theme=c.theme or {},
         default_public_display=c.default_public_display,
         noindex=c.noindex,
+        listed=c.listed,
         allow_participation=c.allow_participation,
         post_moderation=c.post_moderation,
     )

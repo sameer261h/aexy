@@ -82,6 +82,60 @@ class PublicCommunityService:
         )
         return result.scalar_one_or_none()
 
+    async def list_directory(self) -> list[dict]:
+        """Communities that opted into the public directory (enabled AND listed),
+        each with a count of its web-public channels and topics.
+
+        Single grouped query (no per-community fan-out): LEFT JOIN each community
+        to its public-eligible channels and their web-public topics, applying the
+        visibility predicates in the join ON clauses so a community with zero
+        public topics still comes back with 0 counts.
+        """
+        rows = (
+            await self.db.execute(
+                select(
+                    WorkspaceCommunity,
+                    func.count(func.distinct(ChatTopic.channel_id)),
+                    func.count(ChatTopic.id),
+                )
+                .select_from(WorkspaceCommunity)
+                .outerjoin(
+                    ChatChannel,
+                    and_(
+                        ChatChannel.workspace_id == WorkspaceCommunity.workspace_id,
+                        self._public_channel_pred(),
+                    ),
+                )
+                .outerjoin(
+                    ChatTopic,
+                    and_(
+                        ChatTopic.channel_id == ChatChannel.id,
+                        self._topic_public_pred(),
+                    ),
+                )
+                .where(
+                    WorkspaceCommunity.enabled.is_(True),
+                    WorkspaceCommunity.listed.is_(True),
+                )
+                .group_by(WorkspaceCommunity.workspace_id)
+            )
+        ).all()
+
+        out = [
+            {
+                "community_slug": c.community_slug,
+                "title": c.title,
+                "description": c.description,
+                "logo_url": c.logo_url,
+                "channel_count": int(channel_count or 0),
+                "topic_count": int(topic_count or 0),
+            }
+            for c, channel_count, topic_count in rows
+        ]
+        # Most active (by topic count) first.
+        out.sort(key=lambda d: d["topic_count"], reverse=True)
+        return out
+
     async def list_public_channels(self, workspace_id: str) -> list[dict]:
         """Channels that have at least one web-public topic, with counts."""
         # Base: channels whose (channel-level) visibility is web_public, OR that

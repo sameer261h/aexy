@@ -14,6 +14,24 @@ community forum — a crawlable, workspace-scoped `/community/{slug}` site for
 community building and SEO — while DMs stay strictly private. Nothing is public
 unless a workspace explicitly enables it.
 
+**Community-only account isolation.** Signing in from a public forum ("Sign in
+to reply") creates a walled-off `community` account (`developers.account_type`),
+carried as a JWT claim. A `CommunityIsolationMiddleware` restricts these accounts
+to auth, `/public/*`, and their own `/developers/me` — every other internal
+endpoint returns 403 (workspace creation is additionally blocked explicitly).
+The frontend app shell redirects such accounts to the forum. Accounts are
+promoted to `internal` automatically when invited to a workspace at viewer+.
+`migrate_2026_07_17_developer_account_type.sql`.
+
+**Discoverability.** A public directory at `/community` lists communities that
+opted in (`enabled` AND a new `listed` flag; `migrate_2026_07_17_community_directory.sql`);
+unknown slugs get a friendly `not-found`. In-chat, admins publish a channel to
+the web from a new channel-settings dialog (3-tier visibility + "view public
+forum" link), set per-thread visibility from the message header, and hide/unhide
+individual messages from the public view (redaction, still visible internally);
+the create dialog uses the workspace/private model. A "Community" sidebar entry
+and the Settings → Public Community page round out the entry points.
+
 - **Three-tier visibility.** Channels are `private | workspace | web_public`;
   topics can override with `inherit | private | restricted | web_public` (can
   only ever *narrow* the channel's reach, never widen it). Effective public

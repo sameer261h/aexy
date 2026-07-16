@@ -5,7 +5,7 @@ import { useChannels, useJoinChannel, useInbox, useSetupChat } from "@/hooks/use
 import { useChatStore } from "@/stores/chatStore";
 import { ChannelCreateDialog } from "./ChannelCreateDialog";
 import { ChatChannel } from "@/lib/api";
-import { Hash, Lock, Plus, Inbox, MessageCircle, Bot } from "lucide-react";
+import { Hash, Lock, Globe, Plus, Inbox, MessageCircle, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface ChannelListProps {
@@ -42,7 +42,9 @@ export function ChannelList({ workspaceId, onSelectChannel, onSelectInbox, onSel
   }, [unreadCounts]);
 
   const handleSelect = (channel: ChatChannel) => {
-    if (!channel.is_member && channel.visibility === "public") {
+    // Auto-join any non-private channel (workspace + web_public). "public" is
+    // the legacy alias for "workspace".
+    if (!channel.is_member && channel.visibility !== "private") {
       joinChannel.mutate(channel.id);
     }
     onSelectChannel(channel);
@@ -113,6 +115,8 @@ export function ChannelList({ workspaceId, onSelectChannel, onSelectInbox, onSel
               >
                 {ch.visibility === "private" ? (
                   <Lock className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                ) : ch.visibility === "web_public" ? (
+                  <Globe className="h-3.5 w-3.5 text-blue-500 flex-shrink-0" />
                 ) : (
                   <Hash className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                 )}
