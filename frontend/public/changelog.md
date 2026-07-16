@@ -5,6 +5,120 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.57] - 2026-07-16
+
+### Feature: Public community forum (opt-in, SEO-friendly, Slack/Discord-style)
+
+Turns workspace-internal chat into the substrate for an **opt-in** public
+community forum — a crawlable, workspace-scoped `/community/{slug}` site for
+community building and SEO — while DMs stay strictly private. Nothing is public
+unless a workspace explicitly enables it.
+
+- **Three-tier visibility.** Channels are `private | workspace | web_public`;
+  topics can override with `inherit | private | restricted | web_public` (can
+  only ever *narrow* the channel's reach, never widen it). Effective public
+  visibility is the floor of the chain, gated behind a per-workspace master
+  switch (`workspace_community.enabled`). A single resolver
+  (`services/chat_visibility.py`) is the source of truth, mirrored as SQL
+  predicates in the public read model so nothing leaks even if a caller forgets
+  to filter.
+- **DMs are structurally excluded.** Direct messages are modelled as 2-person
+  private channels (`kind='dm'`, deduped by a partial unique index
+  `uq_chat_dm_key`) and are excluded from every public query by predicate, not
+  by caller-side filtering.
+- **Anonymous public read API** (`/public/community/{slug}/...`) + **SSR
+  frontend** with ISR (`revalidate=300`), canonical/OG metadata,
+  `DiscussionForumPosting` + `BreadcrumbList` JSON-LD, and a per-community
+  `sitemap.xml`. `noindex` and thin-content topics are excluded from indexing.
+- **External participation** (optional). With `allow_participation` on, any
+  signed-in Aexy user can reply to web-public topics; brand-new posters
+  auto-join the host workspace as a non-billable `community` role that ranks
+  below every internal permission gate. Posts are rate-limited (Redis,
+  fail-open) and support `post` (visible immediately) or `pre` (held for admin
+  approval) moderation, with a moderation queue in settings.
+- **Per-member public identity.** Each member chooses how they appear publicly:
+  real name, alias, or anonymous. Mention markup is stripped to plain `@Name`
+  and internal fields are never emitted.
+- New tables `chat_topic_access_grants`, `chat_public_member_prefs`,
+  `workspace_community` + visibility/kind/permalink columns on
+  `chat_channels`/`chat_topics`/`chat_messages`
+  (`migrate_2026_07_16_public_community_chat.sql`); admin settings UI at
+  `/settings/community`; SSR wiring (`INTERNAL_API_URL`, `NEXT_PUBLIC_SITE_URL`)
+  added to dev and prod compose.
+
+### Fixed
+
+- **Stored XSS on public topic pages** — JSON-LD structured data embedded
+  user-authored content via `JSON.stringify` + `dangerouslySetInnerHTML`, which
+  does not escape `<`/`>`, allowing a `</script>` breakout. Now serialized
+  through a `safeJsonLd()` helper that escapes `<`, `>`, and U+2028/U+2029.
+- **Community settings response dropped `allow_participation` /
+  `post_moderation`** — the hand-built response omitted both fields, so the API
+  always reported participation off regardless of what was saved, making the
+  settings toggle appear to revert. Both fields are now returned.
+- **Public message list inner-join dropped messages** whose sender was a
+  system/agent identity or a since-deleted developer (and desynced the paging
+  `total`). Switched to a left outer join with null-safe author resolution.
+- **Moderation approval regressed topic ordering** — approving a held post
+  unconditionally overwrote `last_message_at`; it now only advances the
+  last-message pointers when the approved post is genuinely the newest.
+- **`AlertIntegrationService.list` shadowed the builtin `list`**, breaking a
+  `list[...]` annotation under Python 3.13's eager annotation evaluation.
+  Renamed to `list_integrations` (root fix, replacing the `from __future__
+  import annotations` band-aid).
+
+## [0.8.56] - 2026-07-16
+
+### Feature: OpenObserve → ticketing integration (deduplicated incident tickets)
+
+Connects online logging/observability platforms (OpenObserve first; the design
+generalizes to Grafana/Datadog/Sentry) to the ticketing system, so a recurring
+error collapses to a **single** ticket instead of one per firing.
+
+- **Inbound webhook** `POST /webhooks/alerts/{inbound_token}` — token-addressed,
+  HMAC-or-shared-secret authenticated (fail-closed), Redis rate-limited, and
+  offloaded to a Temporal `process_alert_event` activity so a slow ticket write
+  can't time out the webhook and trigger duplicate upstream deliveries.
+- **Routing rules** (first match wins) map an alert's service/severity/env to a
+  team, assignee, form, and priority.
+- **Dedup via a fingerprint** (`provider:service:normalized_alert_name`, or a
+  per-integration template). Volatile tokens (UUIDs, timestamps, hex/pod
+  suffixes) are stripped so recurrences of one error share a fingerprint while
+  `5xx`/`sev2`-style tokens stay distinct. The one-open-ticket-per-fingerprint
+  guarantee is enforced by a **partial unique index** `uq_tickets_open_dedup`,
+  not app logic alone — recurrences bump an occurrence counter + throttled
+  comment, recently-closed tickets reopen (flapping), and recovery alerts
+  auto-resolve.
+- **Auto-populated custom fields** — severity, affected microservice, log
+  context, and trace deep-links land as structured fields via a new
+  `incident_auto` form template.
+- New `alert_integrations` / `alert_events` tables + dedup columns on `tickets`
+  (`migrate_alert_ticketing.sql`); `alert.ticket_created` / `alert.ticket_updated`
+  automation triggers; settings UI at `/settings/alerting`; operator docs at
+  `docs/integrations/openobserve.md`.
+
+### Fix: concurrency hardening in the alert ingestion pipeline
+
+Found in review of the above, before first ship:
+
+- **Concurrent distinct alerts could be silently dropped.** The create path's
+  `except IntegrityError` assumed the only constraint that could fire was the
+  dedup index, but a `uq_ticket_number` collision (two concurrent deliveries for
+  *different* alerts computing the same `max()+1`) was misread as a dedup race
+  and finished as `ERROR` with no Temporal retry — losing the alert in exactly
+  the alert-storm scenario the feature targets. It now re-raises when no
+  same-fingerprint ticket surfaces, so the activity retries and picks a fresh
+  number.
+- **`_maybe_reopen` now scopes its reopen in a SAVEPOINT**, so a race with a
+  concurrent open ticket rolls back only the reopen and falls through to the
+  create path's bump-existing fallback instead of raising an unhandled error.
+- **The "send test alert" endpoint no longer fires automations** — it still
+  creates a real ticket for setup verification but skips `alert.ticket_*`
+  dispatch, so a test can't page on-call or trigger escalation.
+- Tests: 22 SQLite unit tests + 4 Postgres-only tests (partial-index invariant,
+  close-then-reopen, service race fallback, and the ticket-number-collision
+  regression).
+
 ## [0.8.55] - 2026-07-15
 
 ### Fix: CRM record-triggered automations never fired (0 runs)

@@ -158,6 +158,10 @@ services:
       - ./frontend/.env
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+      # Server-side (SSR) fetches can't use localhost:8000 — that's the frontend
+      # container itself. Reach the backend over the compose network instead.
+      - INTERNAL_API_URL=http://backend:8000/api/v1
+      - NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
       - NEXT_PUBLIC_GTM_WORKSPACE_ID=${NEXT_PUBLIC_GTM_WORKSPACE_ID:-}
       - NEXT_PUBLIC_GTM_API_URL=${NEXT_PUBLIC_GTM_API_URL:-http://localhost:8000/api/v1}
       - NEXT_PUBLIC_STRIPE_ENABLED=${NEXT_PUBLIC_STRIPE_ENABLED:-false}

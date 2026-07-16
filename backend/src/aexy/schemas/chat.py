@@ -3,12 +3,13 @@
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ChannelVisibility(str, Enum):
-    PUBLIC = "public"
     PRIVATE = "private"
+    WORKSPACE = "workspace"  # any workspace member (formerly "public")
+    WEB_PUBLIC = "web_public"  # indexable on the internet
 
 
 class ChannelMemberRole(str, Enum):
@@ -27,13 +28,33 @@ class PresenceStatus(str, Enum):
 class ChannelCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = None
-    visibility: ChannelVisibility = ChannelVisibility.PUBLIC
+    visibility: ChannelVisibility = ChannelVisibility.WORKSPACE
+
+    @field_validator("visibility", mode="before")
+    @classmethod
+    def _map_legacy_public(cls, v):
+        # Older clients (and the pre-community UI) send "public"; it now maps to
+        # the workspace-wide tier. web_public is never set at create time.
+        if v == "public":
+            return "workspace"
+        return v
 
 
 class ChannelUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=1000)
     is_archived: bool | None = None
+    # Community controls (validated further in the service: web_public requires
+    # channel owner + workspace admin).
+    visibility: ChannelVisibility | None = None
+    web_public_since: datetime | None = None
+
+    @field_validator("visibility", mode="before")
+    @classmethod
+    def _map_legacy_public(cls, v):
+        if v == "public":
+            return "workspace"
+        return v
 
 
 class ChannelResponse(BaseModel):
@@ -182,6 +203,119 @@ class PresenceListResponse(BaseModel):
 
 class MeetLinkResponse(BaseModel):
     meet_link: str
+
+
+# ── Community management schemas (authed) ────────────────────────────
+
+class CommunitySettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    community_slug: str | None = Field(None, min_length=1, max_length=100)
+    title: str | None = Field(None, max_length=200)
+    description: str | None = None
+    logo_url: str | None = Field(None, max_length=500)
+    theme: dict | None = None
+    default_public_display: str | None = None
+    noindex: bool | None = None
+    allow_participation: bool | None = None
+    post_moderation: str | None = Field(None, pattern="^(post|pre)$")
+
+
+class CommunitySettingsResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    workspace_id: str
+    enabled: bool
+    community_slug: str
+    title: str | None = None
+    description: str | None = None
+    logo_url: str | None = None
+    theme: dict = Field(default_factory=dict)
+    default_public_display: str
+    noindex: bool
+    allow_participation: bool = False
+    post_moderation: str = "post"
+
+
+class PublicReplyCreate(BaseModel):
+    content: str = Field(..., min_length=1, max_length=10_000)
+
+
+class MemberPublicPrefUpdate(BaseModel):
+    public_display: str = Field(..., pattern="^(name|alias|anonymous)$")
+    public_alias: str | None = Field(None, max_length=80)
+
+
+class MemberPublicPrefResponse(BaseModel):
+    public_display: str
+    public_alias: str | None = None
+
+
+class TopicVisibilityUpdate(BaseModel):
+    visibility: str = Field(..., pattern="^(inherit|private|restricted|web_public)$")
+    # For 'restricted': the developer ids allowed to see the topic.
+    allowed_developer_ids: list[str] | None = None
+
+
+class DMCreate(BaseModel):
+    developer_id: str
+
+
+# ── Public (anonymous) community read schemas ────────────────────────
+
+class PublicCommunityChannel(BaseModel):
+    slug: str
+    name: str
+    description: str | None = None
+    topic_count: int = 0
+    message_count: int = 0
+    last_message_at: datetime | None = None
+
+
+class PublicCommunityResponse(BaseModel):
+    community_slug: str
+    title: str | None = None
+    description: str | None = None
+    logo_url: str | None = None
+    theme: dict = Field(default_factory=dict)
+    noindex: bool = False
+    allow_participation: bool = False
+    channels: list[PublicCommunityChannel] = Field(default_factory=list)
+
+
+class PublicTopicSummary(BaseModel):
+    slug: str | None = None
+    short_id: str | None = None
+    name: str
+    message_count: int = 0
+    last_message_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class PublicChannelResponse(BaseModel):
+    slug: str
+    name: str
+    description: str | None = None
+    topics: list[PublicTopicSummary] = Field(default_factory=list)
+    total: int = 0
+
+
+class PublicMessage(BaseModel):
+    id: str
+    author: str
+    content: str
+    is_edited: bool = False
+    created_at: datetime
+
+
+class PublicTopicResponse(BaseModel):
+    channel_slug: str
+    channel_name: str
+    topic_slug: str | None = None
+    short_id: str | None = None
+    name: str
+    messages: list[PublicMessage] = Field(default_factory=list)
+    total: int = 0
+    allow_participation: bool = False
 
 
 # ── WebSocket event schemas ──────────────────────────────────────────

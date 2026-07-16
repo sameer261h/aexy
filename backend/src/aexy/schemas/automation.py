@@ -66,6 +66,8 @@ TRIGGER_REGISTRY: dict[str, list[dict[str, str]]] = {
         {"id": "ticket.priority_changed", "description": "When a ticket priority level changes"},
         {"id": "ticket.escalated", "description": "When a ticket is escalated to a higher tier"},
         {"id": "ticket.reopened", "description": "When a resolved or closed ticket is reopened"},
+        {"id": "alert.ticket_created", "description": "When an observability alert (e.g. OpenObserve) opens a new ticket"},
+        {"id": "alert.ticket_updated", "description": "When a recurring observability alert updates an existing ticket"},
         {"id": "sla.warning", "description": "When an SLA deadline is approaching"},
         {"id": "sla.breached", "description": "When an SLA deadline has been breached"},
         {"id": "response.received", "description": "When a customer response is received on a ticket"},

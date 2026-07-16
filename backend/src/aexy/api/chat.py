@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,9 +18,14 @@ from aexy.schemas.chat import (
     ChannelMemberResponse,
     ChannelResponse,
     ChannelUpdate,
+    CommunitySettingsResponse,
+    CommunitySettingsUpdate,
+    DMCreate,
     InboxResponse,
     MarkReadRequest,
     MeetLinkResponse,
+    MemberPublicPrefResponse,
+    MemberPublicPrefUpdate,
     MessageCreate,
     MessageListResponse,
     MessageResponse,
@@ -28,9 +34,12 @@ from aexy.schemas.chat import (
     TopicCreate,
     TopicListResponse,
     TopicResponse,
+    TopicVisibilityUpdate,
 )
 from aexy.services.chat_pubsub import get_chat_pubsub
 from aexy.services.chat_service import ChatService
+from aexy.services.community_participation_service import CommunityParticipationService
+from aexy.services.community_service import CommunityService
 from aexy.services.workspace_service import WorkspaceService
 
 logger = logging.getLogger(__name__)
@@ -258,9 +267,47 @@ async def update_channel(
             raise HTTPException(status_code=403, detail="Only channel owner can update settings")
 
     updates = data.model_dump(exclude_unset=True)
+
+    # Making a channel web-public is a heavier, workspace-admin-gated action: it
+    # exposes content to the internet, so it needs more than channel ownership.
+    going_public = (
+        updates.get("visibility") == "web_public"
+        and channel.visibility != "web_public"
+    )
+    if going_public:
+        ws = WorkspaceService(db)
+        if not await ws.check_permission(workspace_id, str(current_user.id), "admin"):
+            raise HTTPException(
+                status_code=403,
+                detail="Publishing a channel to the web requires a workspace admin",
+            )
+        # Default to exposing history "from now on" unless a cutoff was passed
+        # explicitly (full backfill = send web_public_since=null).
+        if "web_public_since" not in updates:
+            updates["web_public_since"] = datetime.now(timezone.utc)
+
     channel = await service.update_channel(channel_id, **updates)
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
+
+    if going_public:
+        # Backfill permalink parts for pre-existing topics so they're linkable,
+        # and tell members the channel is now public.
+        await service.ensure_public_identifiers(channel_id)
+        try:
+            await service.create_topic_with_message(
+                channel_id=channel_id,
+                developer_id=str(current_user.id),
+                name="This channel is now public on the web",
+                first_message=(
+                    "This channel has been made public. New messages here are "
+                    "visible to anyone on the internet and may be indexed by "
+                    "search engines."
+                ),
+            )
+        except Exception:
+            logger.exception("Failed to post public-notice topic for %s", channel_id)
+
     await db.commit()
 
     pubsub = get_chat_pubsub()
@@ -737,6 +784,264 @@ async def create_meet_link(
         raise HTTPException(status_code=500, detail="Meet link not found in calendar response")
 
     return MeetLinkResponse(meet_link=meet_link)
+
+
+# ── Community settings + public-display prefs ─────────────────────────
+
+def _community_to_response(c) -> CommunitySettingsResponse:
+    return CommunitySettingsResponse(
+        workspace_id=c.workspace_id,
+        enabled=c.enabled,
+        community_slug=c.community_slug,
+        title=c.title,
+        description=c.description,
+        logo_url=c.logo_url,
+        theme=c.theme or {},
+        default_public_display=c.default_public_display,
+        noindex=c.noindex,
+        allow_participation=c.allow_participation,
+        post_moderation=c.post_moderation,
+    )
+
+
+@router.get("/community/settings", response_model=CommunitySettingsResponse)
+async def get_community_settings(
+    workspace_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    await _check_workspace(db, workspace_id, str(current_user.id))
+    service = CommunityService(db)
+    settings = await service.get_settings(workspace_id)
+    if settings is None:
+        # Not yet configured — report a disabled shell so the UI can render.
+        raise HTTPException(status_code=404, detail="Community not configured")
+    return _community_to_response(settings)
+
+
+@router.put("/community/settings", response_model=CommunitySettingsResponse)
+async def update_community_settings(
+    workspace_id: str,
+    data: CommunitySettingsUpdate,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    # Community configuration (including the public master switch) is admin-only.
+    ws = WorkspaceService(db)
+    if not await ws.check_permission(workspace_id, str(current_user.id), "admin"):
+        raise HTTPException(status_code=403, detail="Workspace admin required")
+    service = CommunityService(db)
+    try:
+        settings = await service.upsert_settings(
+            workspace_id, **data.model_dump(exclude_unset=True)
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await db.commit()
+    return _community_to_response(settings)
+
+
+@router.get("/community/my-prefs", response_model=MemberPublicPrefResponse)
+async def get_my_public_pref(
+    workspace_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    await _check_workspace(db, workspace_id, str(current_user.id))
+    service = CommunityService(db)
+    pref = await service.get_member_pref(workspace_id, str(current_user.id))
+    if pref is None:
+        return MemberPublicPrefResponse(public_display="name", public_alias=None)
+    return MemberPublicPrefResponse(
+        public_display=pref.public_display, public_alias=pref.public_alias
+    )
+
+
+@router.put("/community/my-prefs", response_model=MemberPublicPrefResponse)
+async def set_my_public_pref(
+    workspace_id: str,
+    data: MemberPublicPrefUpdate,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    await _check_workspace(db, workspace_id, str(current_user.id))
+    service = CommunityService(db)
+    try:
+        pref = await service.set_member_pref(
+            workspace_id, str(current_user.id), data.public_display, data.public_alias
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await db.commit()
+    return MemberPublicPrefResponse(
+        public_display=pref.public_display, public_alias=pref.public_alias
+    )
+
+
+# ── Community moderation queue (pre-moderated participant posts) ──────
+
+@router.get("/community/moderation")
+async def list_moderation_queue(
+    workspace_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    ws = WorkspaceService(db)
+    if not await ws.check_permission(workspace_id, str(current_user.id), "admin"):
+        raise HTTPException(status_code=403, detail="Workspace admin required")
+    service = CommunityParticipationService(db)
+    return {"pending": await service.list_pending(workspace_id)}
+
+
+@router.post("/community/moderation/{message_id}/approve", status_code=200)
+async def approve_pending_post(
+    workspace_id: str,
+    message_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    ws = WorkspaceService(db)
+    if not await ws.check_permission(workspace_id, str(current_user.id), "admin"):
+        raise HTTPException(status_code=403, detail="Workspace admin required")
+    service = CommunityParticipationService(db)
+    if not await service.approve(workspace_id, message_id):
+        raise HTTPException(status_code=404, detail="Pending post not found")
+    await db.commit()
+    return {"status": "approved"}
+
+
+@router.post("/community/moderation/{message_id}/reject", status_code=200)
+async def reject_pending_post(
+    workspace_id: str,
+    message_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    ws = WorkspaceService(db)
+    if not await ws.check_permission(workspace_id, str(current_user.id), "admin"):
+        raise HTTPException(status_code=403, detail="Workspace admin required")
+    service = CommunityParticipationService(db)
+    if not await service.reject(workspace_id, message_id):
+        raise HTTPException(status_code=404, detail="Pending post not found")
+    await db.commit()
+    return {"status": "rejected"}
+
+
+# ── Topic visibility + message moderation ─────────────────────────────
+
+@router.patch("/topics/{topic_id}/visibility", response_model=TopicResponse)
+async def update_topic_visibility(
+    workspace_id: str,
+    topic_id: str,
+    data: TopicVisibilityUpdate,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    await _check_workspace(db, workspace_id, str(current_user.id))
+    service = ChatService(db)
+    topic = await service.get_topic(topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    await _check_channel_access(service, topic.channel_id, str(current_user.id), workspace_id)
+
+    # Exposing a topic to the web is admin-gated, like publishing a channel.
+    if data.visibility == "web_public":
+        ws = WorkspaceService(db)
+        if not await ws.check_permission(workspace_id, str(current_user.id), "admin"):
+            raise HTTPException(
+                status_code=403,
+                detail="Publishing a topic to the web requires a workspace admin",
+            )
+
+    topic = await service.set_topic_visibility(
+        topic_id,
+        data.visibility,
+        allowed_developer_ids=data.allowed_developer_ids,
+        granted_by_id=str(current_user.id),
+    )
+    await db.commit()
+    return TopicResponse(
+        id=topic.id, channel_id=topic.channel_id, name=topic.name,
+        message_count=topic.message_count, last_message_at=topic.last_message_at,
+        created_by_id=topic.created_by_id, is_resolved=topic.is_resolved,
+        created_at=topic.created_at, updated_at=topic.updated_at,
+        creator_name=None,
+    )
+
+
+@router.post("/messages/{message_id}/hide-public", status_code=200)
+async def hide_message_from_public(
+    workspace_id: str,
+    message_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Redact a message from the public forum view (still visible internally)."""
+    ws = WorkspaceService(db)
+    if not await ws.check_permission(workspace_id, str(current_user.id), "admin"):
+        raise HTTPException(status_code=403, detail="Workspace admin required")
+    service = ChatService(db)
+    message = await service.set_message_hidden(message_id, True)
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    await db.commit()
+    return {"status": "hidden"}
+
+
+@router.post("/messages/{message_id}/unhide-public", status_code=200)
+async def unhide_message_from_public(
+    workspace_id: str,
+    message_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    ws = WorkspaceService(db)
+    if not await ws.check_permission(workspace_id, str(current_user.id), "admin"):
+        raise HTTPException(status_code=403, detail="Workspace admin required")
+    service = ChatService(db)
+    message = await service.set_message_hidden(message_id, False)
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    await db.commit()
+    return {"status": "visible"}
+
+
+# ── Direct messages ───────────────────────────────────────────────────
+
+@router.post("/dms", status_code=201)
+async def create_dm(
+    workspace_id: str,
+    data: DMCreate,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Open (or fetch) a direct-message channel with another workspace member."""
+    await _check_workspace(db, workspace_id, str(current_user.id))
+    # The other participant must also belong to the workspace.
+    ws = WorkspaceService(db)
+    if not await ws.check_permission(workspace_id, data.developer_id, "member"):
+        raise HTTPException(status_code=404, detail="Member not found in workspace")
+    service = ChatService(db)
+    try:
+        channel = await service.get_or_create_dm(
+            workspace_id, str(current_user.id), data.developer_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await db.commit()
+    return {"id": channel.id, "kind": channel.kind}
+
+
+@router.get("/dms")
+async def list_dms(
+    workspace_id: str,
+    current_user: Developer = Depends(get_current_developer),
+    db: AsyncSession = Depends(get_db),
+):
+    await _check_workspace(db, workspace_id, str(current_user.id))
+    service = ChatService(db)
+    dms = await service.list_dms(workspace_id, str(current_user.id))
+    return {"dms": dms}
 
 
 # ═══════════════════════════════════════════════════════════════════════

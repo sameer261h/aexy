@@ -18,10 +18,12 @@ import {
   Webhook,
   KeyRound,
   Activity,
+  Siren,
   Bell,
   Settings2,
   Receipt,
   Fingerprint,
+  Globe,
   type LucideIcon,
 } from "lucide-react";
 
@@ -158,12 +160,29 @@ export const settingsNavigation: SettingsNavCategory[] = [
         description: "Create and manage public forms for collecting tickets",
         keywords: ["form", "ticket", "public", "submission", "template"],
       },
+      {
+        id: "alerting",
+        label: "Alert Integrations",
+        href: "/settings/alerting",
+        icon: Siren,
+        description: "Turn observability alerts (OpenObserve, etc.) into deduplicated tickets",
+        keywords: ["alert", "openobserve", "observability", "logging", "incident", "dedup", "monitoring", "webhook"],
+      },
     ],
   },
   {
     id: "communication",
     label: "Communication",
     items: [
+      {
+        id: "community",
+        label: "Public Community",
+        href: "/settings/community",
+        icon: Globe,
+        description: "Publish chat channels as a public, SEO-friendly forum",
+        adminOnly: true,
+        keywords: ["community", "public", "forum", "seo", "chat", "channels", "discourse", "slack"],
+      },
       {
         id: "crm-settings",
         label: "CRM Settings",

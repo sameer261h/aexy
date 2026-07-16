@@ -86,6 +86,7 @@ from aexy.api.ticket_forms import router as ticket_forms_router
 from aexy.api.tickets import router as tickets_router
 from aexy.api.public_forms import router as public_forms_router
 from aexy.api.public_tickets import router as public_tickets_router
+from aexy.api.public_community import router as public_community_router
 from aexy.api.escalation import router as escalation_router
 from aexy.api.escalation import escalation_ticket_router
 # Forms (Standalone Module)
@@ -147,6 +148,11 @@ from aexy.api.booking import rsvp_booking_router
 from aexy.api.booking import calendar_callback_booking_router
 # Uptime Monitoring
 from aexy.api.uptime import router as uptime_router
+# Alert Integrations (observability → tickets)
+from aexy.api.alert_webhooks import (
+    router as alert_integrations_router,
+    webhook_router as alert_webhook_router,
+)
 # GitHub Intelligence
 from aexy.api.intelligence import router as intelligence_router
 # Developer Insights
@@ -281,6 +287,7 @@ api_router.include_router(ticket_forms_router, tags=["ticket-forms"], dependenci
 api_router.include_router(tickets_router, tags=["tickets"], dependencies=[Depends(require_app_access("tickets"))])
 api_router.include_router(public_forms_router, tags=["public-forms"])
 api_router.include_router(public_tickets_router, tags=["public-tickets"])
+api_router.include_router(public_community_router, tags=["public-community"])
 api_router.include_router(escalation_router, tags=["escalation"], dependencies=[Depends(require_app_access("tickets"))])
 api_router.include_router(escalation_ticket_router, tags=["escalation"], dependencies=[Depends(require_app_access("tickets"))])
 # Forms (Standalone Module with CRM/Ticketing integration)
@@ -345,6 +352,14 @@ api_router.include_router(rsvp_booking_router, tags=["booking-rsvp"])
 api_router.include_router(calendar_callback_booking_router, tags=["booking-calendar-callback"])
 # Uptime Monitoring
 api_router.include_router(uptime_router, tags=["uptime"], dependencies=[Depends(require_app_access("uptime"))])
+# Alert Integrations (observability → tickets). Management routes require the
+# tickets app; the inbound webhook is public (token + signature authenticated).
+api_router.include_router(
+    alert_integrations_router,
+    tags=["alert-integrations"],
+    dependencies=[Depends(require_app_access("tickets"))],
+)
+api_router.include_router(alert_webhook_router, tags=["alert-webhooks"])
 # GitHub Intelligence
 api_router.include_router(intelligence_router, tags=["intelligence"])
 # Developer Insights

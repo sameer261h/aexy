@@ -306,11 +306,19 @@ services:
       args:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
         - NEXT_PUBLIC_STRIPE_ENABLED=${NEXT_PUBLIC_STRIPE_ENABLED:-false}
+        # Baked into the client bundle for canonical/OG links on public pages.
+        - NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
     container_name: aexy-frontend
     restart: unless-stopped
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
       - NEXT_PUBLIC_STRIPE_ENABLED=${NEXT_PUBLIC_STRIPE_ENABLED:-false}
+      # Public origin for server-rendered canonical/OG/sitemap URLs.
+      - NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
+      # SSR (server components) reach the backend over the compose network — the
+      # browser-facing NEXT_PUBLIC_API_URL host isn't resolvable inside this
+      # container. Used by the public community forum pages.
+      - INTERNAL_API_URL=${INTERNAL_API_URL:-http://backend:8000/api/v1}
     depends_on:
       - backend
     networks:

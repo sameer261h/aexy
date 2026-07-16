@@ -100,6 +100,9 @@ ACTIVITY_CONFIG: dict[str, dict[str, Any]] = {
     # Webhooks
     "deliver_webhook": {"retry": WEBHOOK_RETRY, "timeout": timedelta(minutes=2)},
 
+    # Observability alerts (OpenObserve etc.) → deduplicated tickets
+    "process_alert_event": {"retry": WEBHOOK_RETRY, "timeout": timedelta(minutes=2)},
+
     # Short activities (notifications, SMS, etc.)
     "send_notification_email": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=2)},
     "send_notification_slack": {"retry": STANDARD_RETRY, "timeout": timedelta(minutes=2)},
