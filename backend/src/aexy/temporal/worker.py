@@ -187,6 +187,7 @@ def get_all_activities() -> list:
         run_test_check,
         send_uptime_notification,
     )
+    from aexy.temporal.activities.alerting import process_alert_event
     from aexy.temporal.activities.warming import (
         check_warming_thresholds,
         process_warming_day,
@@ -338,6 +339,8 @@ def get_all_activities() -> list:
         send_uptime_notification,
         cleanup_old_checks,
         run_test_check,
+        # Alerting (observability → tickets)
+        process_alert_event,
         # Notifications
         send_notification_email,
         send_notification_slack,

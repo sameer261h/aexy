@@ -32,6 +32,7 @@ class TicketFormTemplateType(str, Enum):
     SUPPORT = "support"
     GENERAL_INQUIRY = "general_inquiry"
     INCIDENT_REPORT = "incident_report"
+    INCIDENT_AUTO = "incident_auto"
     FEEDBACK = "feedback"
     SALES_DEMO = "sales_demo"
     CHANGE_REQUEST = "change_request"
@@ -381,6 +382,19 @@ class Ticket(Base):
         default=list,
         nullable=False,
     )  # [{platform, issue_id, issue_url, synced_at}]
+
+    # Alert/observability dedup tracking. `source` marks how the ticket was
+    # created ('form' by default, or an alert provider like 'openobserve').
+    # `dedup_key` is the alert fingerprint; a partial unique index (see
+    # migrate_alert_ticketing.sql) enforces at most one *open* ticket per
+    # (workspace_id, dedup_key) so a recurring error collapses to one ticket.
+    source: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    dedup_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     # Linked sprint task
     linked_task_id: Mapped[str | None] = mapped_column(

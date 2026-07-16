@@ -147,6 +147,11 @@ from aexy.api.booking import rsvp_booking_router
 from aexy.api.booking import calendar_callback_booking_router
 # Uptime Monitoring
 from aexy.api.uptime import router as uptime_router
+# Alert Integrations (observability → tickets)
+from aexy.api.alert_webhooks import (
+    router as alert_integrations_router,
+    webhook_router as alert_webhook_router,
+)
 # GitHub Intelligence
 from aexy.api.intelligence import router as intelligence_router
 # Developer Insights
@@ -345,6 +350,14 @@ api_router.include_router(rsvp_booking_router, tags=["booking-rsvp"])
 api_router.include_router(calendar_callback_booking_router, tags=["booking-calendar-callback"])
 # Uptime Monitoring
 api_router.include_router(uptime_router, tags=["uptime"], dependencies=[Depends(require_app_access("uptime"))])
+# Alert Integrations (observability → tickets). Management routes require the
+# tickets app; the inbound webhook is public (token + signature authenticated).
+api_router.include_router(
+    alert_integrations_router,
+    tags=["alert-integrations"],
+    dependencies=[Depends(require_app_access("tickets"))],
+)
+api_router.include_router(alert_webhook_router, tags=["alert-webhooks"])
 # GitHub Intelligence
 api_router.include_router(intelligence_router, tags=["intelligence"])
 # Developer Insights

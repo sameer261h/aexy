@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.56] - 2026-07-16
+
+### Feature: OpenObserve → ticketing integration (deduplicated incident tickets)
+
+Connects online logging/observability platforms (OpenObserve first; the design
+generalizes to Grafana/Datadog/Sentry) to the ticketing system, so a recurring
+error collapses to a **single** ticket instead of one per firing.
+
+- **Inbound webhook** `POST /webhooks/alerts/{inbound_token}` — token-addressed,
+  HMAC-or-shared-secret authenticated (fail-closed), Redis rate-limited, and
+  offloaded to a Temporal `process_alert_event` activity so a slow ticket write
+  can't time out the webhook and trigger duplicate upstream deliveries.
+- **Routing rules** (first match wins) map an alert's service/severity/env to a
+  team, assignee, form, and priority.
+- **Dedup via a fingerprint** (`provider:service:normalized_alert_name`, or a
+  per-integration template). Volatile tokens (UUIDs, timestamps, hex/pod
+  suffixes) are stripped so recurrences of one error share a fingerprint while
+  `5xx`/`sev2`-style tokens stay distinct. The one-open-ticket-per-fingerprint
+  guarantee is enforced by a **partial unique index** `uq_tickets_open_dedup`,
+  not app logic alone — recurrences bump an occurrence counter + throttled
+  comment, recently-closed tickets reopen (flapping), and recovery alerts
+  auto-resolve.
+- **Auto-populated custom fields** — severity, affected microservice, log
+  context, and trace deep-links land as structured fields via a new
+  `incident_auto` form template.
+- New `alert_integrations` / `alert_events` tables + dedup columns on `tickets`
+  (`migrate_alert_ticketing.sql`); `alert.ticket_created` / `alert.ticket_updated`
+  automation triggers; settings UI at `/settings/alerting`; operator docs at
+  `docs/integrations/openobserve.md`.
+
+### Fix: concurrency hardening in the alert ingestion pipeline
+
+Found in review of the above, before first ship:
+
+- **Concurrent distinct alerts could be silently dropped.** The create path's
+  `except IntegrityError` assumed the only constraint that could fire was the
+  dedup index, but a `uq_ticket_number` collision (two concurrent deliveries for
+  *different* alerts computing the same `max()+1`) was misread as a dedup race
+  and finished as `ERROR` with no Temporal retry — losing the alert in exactly
+  the alert-storm scenario the feature targets. It now re-raises when no
+  same-fingerprint ticket surfaces, so the activity retries and picks a fresh
+  number.
+- **`_maybe_reopen` now scopes its reopen in a SAVEPOINT**, so a race with a
+  concurrent open ticket rolls back only the reopen and falls through to the
+  create path's bump-existing fallback instead of raising an unhandled error.
+- **The "send test alert" endpoint no longer fires automations** — it still
+  creates a real ticket for setup verification but skips `alert.ticket_*`
+  dispatch, so a test can't page on-call or trigger escalation.
+- Tests: 22 SQLite unit tests + 4 Postgres-only tests (partial-index invariant,
+  close-then-reopen, service race fallback, and the ticket-number-collision
+  regression).
+
 ## [0.8.55] - 2026-07-15
 
 ### Fix: CRM record-triggered automations never fired (0 runs)

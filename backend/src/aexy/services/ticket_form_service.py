@@ -258,6 +258,76 @@ FORM_TEMPLATES = {
             _attachments_field("Attach logs, dashboards, or screenshots"),
         ],
     },
+    "incident_auto": {
+        "name": "Automated Incident",
+        "description": "Tickets opened automatically from observability alerts (OpenObserve, etc.)",
+        "icon": "Siren",
+        "color": "bg-rose-100 dark:bg-rose-900/30 border-rose-800/50",
+        "category": "ops",
+        # Field keys mirror the field_values written by AlertIngestionService so
+        # alert tickets render as structured fields instead of opaque JSONB.
+        "fields": [
+            _title_field("Title", "Auto-generated: [SEVERITY] service: alert"),
+            {
+                "name": "Affected service",
+                "field_key": "service_name",
+                "field_type": "text",
+                "is_required": False,
+                "help_text": "The microservice the alert fired for.",
+            },
+            {
+                "name": "Severity",
+                "field_key": "severity",
+                "field_type": "select",
+                "is_required": False,
+                "options": [
+                    {"value": "critical", "label": "Critical"},
+                    {"value": "high", "label": "High"},
+                    {"value": "medium", "label": "Medium"},
+                    {"value": "low", "label": "Low"},
+                ],
+            },
+            {
+                "name": "Environment",
+                "field_key": "environment",
+                "field_type": "text",
+                "is_required": False,
+            },
+            {
+                "name": "Alert name",
+                "field_key": "alert_name",
+                "field_type": "text",
+                "is_required": False,
+            },
+            {
+                "name": "Log context",
+                "field_key": "log_context",
+                "field_type": "textarea",
+                "is_required": False,
+                "help_text": "Matched log lines from the alert.",
+            },
+            {
+                "name": "Trace links",
+                "field_key": "trace_links",
+                "field_type": "textarea",
+                "is_required": False,
+                "help_text": "Deep links to distributed traces.",
+            },
+            {
+                "name": "Source alert URL",
+                "field_key": "alert_url",
+                "field_type": "text",
+                "is_required": False,
+            },
+            {
+                "name": "Occurrences",
+                "field_key": "occurrence_count",
+                "field_type": "text",
+                "is_required": False,
+                "help_text": "How many times this error has recurred on this ticket.",
+            },
+        ],
+    },
     "feedback": {
         "name": "Feedback",
         "description": "Share product feedback",

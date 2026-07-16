@@ -414,6 +414,12 @@ from aexy.models.uptime import (
     UptimeIncidentStatus,
     UptimeErrorType,
 )
+from aexy.models.alerting import (
+    AlertIntegration,
+    AlertEvent,
+    AlertProvider,
+    AlertEventAction,
+)
 from aexy.models.roadmap_voting import (
     RoadmapRequest,
     RoadmapVote,
@@ -956,6 +962,11 @@ __all__ = [
     "UptimeMonitorStatus",
     "UptimeIncidentStatus",
     "UptimeErrorType",
+    # Alerting (observability → tickets)
+    "AlertIntegration",
+    "AlertEvent",
+    "AlertProvider",
+    "AlertEventAction",
     # Roadmap Voting
     "RoadmapRequest",
     "RoadmapVote",

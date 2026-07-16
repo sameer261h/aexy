@@ -8458,6 +8458,116 @@ export const ticketsApi = {
   },
 };
 
+// =============================================================================
+// Alert Integrations (observability/logging → tickets, e.g. OpenObserve)
+// =============================================================================
+
+export interface AlertRoutingRuleMatch {
+  service?: string | null;
+  severity_gte?: string | null;
+  environment?: string | null;
+}
+
+export interface AlertRoutingRule {
+  match: AlertRoutingRuleMatch;
+  team_id?: string | null;
+  assignee_id?: string | null;
+  form_id?: string | null;
+  priority?: string | null;
+}
+
+export interface AlertIntegration {
+  id: string;
+  workspace_id: string;
+  provider: string;
+  name: string;
+  base_url: string | null;
+  default_form_id: string | null;
+  routing_rules: AlertRoutingRule[];
+  fingerprint_template: string | null;
+  dedup_window_minutes: number;
+  comment_throttle_minutes: number;
+  auto_resolve: boolean;
+  enabled: boolean;
+  webhook_url: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertIntegrationWithSecret extends AlertIntegration {
+  signing_secret: string;
+}
+
+export interface AlertEvent {
+  id: string;
+  integration_id: string;
+  fingerprint: string | null;
+  ticket_id: string | null;
+  action_taken: string | null;
+  error_message: string | null;
+  received_at: string;
+  processed_at: string | null;
+}
+
+export interface AlertIntegrationCreate {
+  provider?: string;
+  name: string;
+  base_url?: string | null;
+  default_form_id?: string | null;
+  routing_rules?: AlertRoutingRule[];
+  fingerprint_template?: string | null;
+  dedup_window_minutes?: number;
+  comment_throttle_minutes?: number;
+  auto_resolve?: boolean;
+}
+
+export type AlertIntegrationUpdate = Partial<AlertIntegrationCreate & { enabled: boolean }>;
+
+export interface AlertTestResult {
+  action_taken: string | null;
+  ticket_id: string | null;
+  fingerprint: string | null;
+  error_message: string | null;
+}
+
+export const alertIntegrationsApi = {
+  list: async (workspaceId: string): Promise<AlertIntegration[]> => {
+    const response = await api.get(`/workspaces/${workspaceId}/alert-integrations`);
+    return response.data;
+  },
+  get: async (workspaceId: string, id: string): Promise<AlertIntegration> => {
+    const response = await api.get(`/workspaces/${workspaceId}/alert-integrations/${id}`);
+    return response.data;
+  },
+  create: async (workspaceId: string, data: AlertIntegrationCreate): Promise<AlertIntegrationWithSecret> => {
+    const response = await api.post(`/workspaces/${workspaceId}/alert-integrations`, data);
+    return response.data;
+  },
+  update: async (workspaceId: string, id: string, data: AlertIntegrationUpdate): Promise<AlertIntegration> => {
+    const response = await api.patch(`/workspaces/${workspaceId}/alert-integrations/${id}`, data);
+    return response.data;
+  },
+  rotateSecret: async (workspaceId: string, id: string): Promise<AlertIntegrationWithSecret> => {
+    const response = await api.post(`/workspaces/${workspaceId}/alert-integrations/${id}/rotate-secret`);
+    return response.data;
+  },
+  remove: async (workspaceId: string, id: string): Promise<void> => {
+    await api.delete(`/workspaces/${workspaceId}/alert-integrations/${id}`);
+  },
+  listEvents: async (
+    workspaceId: string,
+    id: string,
+    params?: { limit?: number; offset?: number }
+  ): Promise<{ events: AlertEvent[]; total: number }> => {
+    const response = await api.get(`/workspaces/${workspaceId}/alert-integrations/${id}/events`, { params });
+    return response.data;
+  },
+  sendTest: async (workspaceId: string, id: string, payload: Record<string, unknown>): Promise<AlertTestResult> => {
+    const response = await api.post(`/workspaces/${workspaceId}/alert-integrations/${id}/test`, payload);
+    return response.data;
+  },
+};
+
 export interface TicketShareLink {
   id: string;
   ticket_id: string;
