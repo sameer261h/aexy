@@ -9,7 +9,6 @@ import {
   Calendar,
   TrendingUp,
   Activity,
-  Star,
   Github,
 } from "lucide-react";
 import { LandingHeader, LandingFooter } from "@/components/landing/LandingHeader";
@@ -179,30 +178,87 @@ export default function EngineeringManagersPage() {
         </div>
       </section>
 
-      {/* Quote */}
+      {/* Comparison */}
+      <section className="py-20 px-6">
+        <div className="max-w-5xl mx-auto">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
+              Already running Jira or Linear?
+            </h2>
+            <p className="text-white/60 max-w-2xl mx-auto">
+              They track issues well. Aexy tracks issues and connects them to customers,
+              docs, people, and AI agents in the same workspace.
+            </p>
+          </div>
+
+          <div className="overflow-x-auto rounded-2xl border border-white/10">
+            <table className="w-full min-w-[640px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-white/10 bg-white/5">
+                  <th className="px-5 py-4 font-semibold text-white/40"> </th>
+                  <th className="px-5 py-4 font-semibold text-cyan-400">Aexy</th>
+                  <th className="px-5 py-4 font-semibold text-white/70">Jira / Linear</th>
+                </tr>
+              </thead>
+              <tbody>
+                {([
+                  ["Scope", "Sprints, tasks, and releases connected to CRM, docs, workflows, and people data.", "Issue tracking; everything else lives in other tools."],
+                  ["Git awareness", "Commits and PRs auto-link to tasks (“fixes #123”), with AI analysis of how well each PR matches its task.", "Basic commit linking."],
+                  ["Incidents", "Uptime monitors and observability alerts auto-create tickets, dedupe repeats, and auto-resolve on recovery.", "Separate incident tooling."],
+                  ["Planning", "Capacity planning from historical contribution data, with AI-suggested assignments.", "Manual estimation and gut-feel sprint loading."],
+                  ["Team insight", "Developer insights, skill gaps, and review inputs from real GitHub activity — no surveillance.", "Velocity charts; people data lives in a separate HR tool."],
+                  ["AI agents", "Governed agents can triage, summarize, update records, and run workflows across the company.", "Assistant features scoped to issues."],
+                  ["Ownership", "Open source and self-hostable.", "Closed SaaS, per-seat pricing."],
+                ] as const).map(([dimension, aexy, them]) => (
+                  <tr key={dimension} className="border-b border-white/10 last:border-b-0">
+                    <td className="px-5 py-4 font-medium text-white/70">{dimension}</td>
+                    <td className="px-5 py-4 leading-6 text-white/90">{aexy}</td>
+                    <td className="px-5 py-4 leading-6 text-white/50">{them}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-6 flex flex-wrap justify-center gap-x-8 gap-y-2 text-sm">
+            <Link href="/compare/jira" className="text-blue-400 hover:text-blue-300 transition flex items-center gap-1">
+              Full Jira comparison <ArrowRight className="h-4 w-4" />
+            </Link>
+            <Link href="/compare/linear" className="text-blue-400 hover:text-blue-300 transition flex items-center gap-1">
+              Full Linear comparison <ArrowRight className="h-4 w-4" />
+            </Link>
+            <Link href="/pricing" className="text-blue-400 hover:text-blue-300 transition flex items-center gap-1">
+              Pricing <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* Open source proof */}
       <section className="py-20 px-6">
         <div className="max-w-4xl mx-auto">
           <div className="relative">
             <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 to-cyan-500/10 rounded-3xl blur-xl" />
             <div className="relative bg-white/5 backdrop-blur-sm rounded-3xl p-10 md:p-12 border border-white/10 text-center">
-              <div className="flex justify-center mb-4">
-                {[...Array(5)].map((_, i) => (
-                  <Star key={i} className="h-5 w-5 text-yellow-500 fill-yellow-500" />
-                ))}
-              </div>
-              <blockquote className="text-xl md:text-2xl text-white/80 mb-6 italic">
-                &ldquo;Sprint planning went from 2-hour meetings to 30 minutes.
-                I finally have time to actually support my team.&rdquo;
-              </blockquote>
-              <div className="flex items-center justify-center gap-3">
-                <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-full flex items-center justify-center text-white font-medium">
-                  EZ
-                </div>
-                <div className="text-left">
-                  <p className="text-white font-medium">Emily Zhang</p>
-                  <p className="text-white/40 text-sm">VP Engineering, DataFlow</p>
+              <div className="flex justify-center mb-6">
+                <div className="p-4 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-2xl">
+                  <Github className="h-6 w-6 text-white" />
                 </div>
               </div>
+              <h2 className="text-2xl md:text-3xl font-bold text-white mb-4">
+                Don&apos;t take our word for it. Read the code.
+              </h2>
+              <p className="text-white/60 max-w-2xl mx-auto mb-8">
+                Aexy is open source. Inspect how planning, insights, and agent governance
+                actually work, self-host it free, and extend it to fit your team.
+              </p>
+              <a
+                href="https://github.com/aexy-io/aexy"
+                className="inline-flex items-center justify-center gap-3 bg-white/5 hover:bg-white/10 text-white px-8 py-4 rounded-full text-lg font-semibold transition-all border border-white/10 hover:border-white/20"
+              >
+                <Github className="h-5 w-5" />
+                Explore on GitHub
+              </a>
             </div>
           </div>
         </div>
@@ -215,7 +271,7 @@ export default function EngineeringManagersPage() {
             Ready to lead with clarity?
           </h2>
           <p className="text-xl text-white/50 mb-10">
-            Join thousands of engineering managers using Aexy.
+            Real visibility, data-driven planning, and fair reviews — without the tool sprawl.
           </p>
 
           <div className="flex flex-col sm:flex-row justify-center gap-4">

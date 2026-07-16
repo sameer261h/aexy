@@ -36,7 +36,7 @@ const pillars = [
     label: "Engineering",
     icon: Code2,
     description: "Sprints, tasks, GitHub/Jira/Linear sync, analytics, releases, uptime, and engineering reviews.",
-    features: ["Sprint lifecycle", "Task intelligence", "Developer insights", "Release readiness"],
+    features: ["Sprint lifecycle", "Commit & PR auto-linking", "Developer insights", "Release readiness"],
     accent: "from-cyan-500 to-blue-500",
   },
   {
@@ -52,7 +52,7 @@ const pillars = [
     label: "Workflows",
     icon: Workflow,
     description: "Automations, visual workflows, tickets, forms, reminders, approvals, and operational handoffs.",
-    features: ["No-code triggers", "Branching workflows", "Agent actions", "Audit trails"],
+    features: ["No-code triggers", "Branching workflows", "Alert → ticket automation", "Audit trails"],
     accent: "from-emerald-500 to-teal-500",
   },
   {
@@ -107,6 +107,16 @@ const homepageFaqs = [
     answer:
       "Aexy agents run inside governed company context. They can use approved tools such as CRM records, email, enrichment, Slack, workflows, and docs, with policy gates, approvals, and audit history.",
   },
+  {
+    question: "How is Aexy different from Jira or Linear for engineering teams?",
+    answer:
+      "Jira and Linear track issues in isolation. Aexy covers sprints, tasks, GitHub sync, and delivery analytics — connected to CRM, docs, and workflows in the same workspace, so planning reflects customer commitments and AI agents can act across all of it.",
+  },
+  {
+    question: "How does Aexy compare to HubSpot or Attio for revenue teams?",
+    answer:
+      "Like HubSpot and Attio, Aexy includes a schema-flexible CRM with visitor identification, lead scoring, sequences, and routing. Unlike them, it is open source, self-hostable, and agent-native — and the CRM shares context with engineering and operations instead of living in a silo.",
+  },
 ];
 
 const platformLinks = [
@@ -118,12 +128,60 @@ const platformLinks = [
   { title: "Pricing", href: "/pricing", description: "Self-host free, use cloud for speed, scale with enterprise controls." },
 ];
 
+const icpTracks = [
+  {
+    label: "Revenue teams",
+    icon: BriefcaseBusiness,
+    accent: "from-amber-500 to-orange-500",
+    pain: "Your CRM can't see product usage, support history, or what engineering shipped for a customer.",
+    replaces: "Replaces HubSpot, Attio, and standalone GTM tools",
+    features: ["Agent-native CRM", "Visitor ID & lead scoring", "Sequences & routing"],
+    href: "/for/revenue-teams",
+    compare: [
+      { label: "vs HubSpot", href: "/compare/hubspot" },
+      { label: "vs Attio", href: "/compare/attio" },
+    ],
+  },
+  {
+    label: "Engineering teams",
+    icon: Code2,
+    accent: "from-cyan-500 to-blue-500",
+    pain: "Sprints, tickets, and releases live in trackers that know nothing about customers or revenue.",
+    replaces: "Replaces Jira, Linear, and disconnected trackers",
+    features: ["Sprint lifecycle & tasks", "GitHub sync & analytics", "Release readiness"],
+    href: "/for/engineering-managers",
+    compare: [
+      { label: "vs Jira", href: "/compare/jira" },
+      { label: "vs Linear", href: "/compare/linear" },
+    ],
+  },
+  {
+    label: "Founders & operations",
+    icon: Rocket,
+    accent: "from-violet-500 to-purple-500",
+    pain: "Docs, workflows, hiring, and reporting are scattered across a dozen subscriptions nobody reconciles.",
+    replaces: "Replaces Notion, Zapier, and HR point tools",
+    features: ["Docs & knowledge graph", "Workflows & approvals", "Hiring & reviews"],
+    href: "/for/founders",
+    compare: [
+      { label: "vs Notion", href: "/compare/notion" },
+      { label: "vs ServiceNow", href: "/compare/servicenow" },
+    ],
+  },
+];
+
+const comparisons = [
+  { name: "Jira", href: "/compare/jira", gap: "Project tracking that also understands customers, docs, and AI agents." },
+  { name: "Linear", href: "/compare/linear", gap: "Fast issue tracking, plus the rest of the company OS around it." },
+  { name: "HubSpot", href: "/compare/hubspot", gap: "CRM and GTM without per-seat sprawl — open source and agent-native." },
+  { name: "Salesforce", href: "/compare/salesforce", gap: "CRM depth for growing teams without the implementation tax." },
+  { name: "Attio", href: "/compare/attio", gap: "A flexible CRM data model, connected to engineering and workflows." },
+  { name: "Notion", href: "/compare/notion", gap: "Docs and knowledge with real structure — plus workflows that act." },
+];
+
 export default function Home() {
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const googleLoginUrl = `${API_BASE_URL}/auth/google/login`;
-  const githubLoginUrl = `${API_BASE_URL}/auth/github/login`;
-  const microsoftLoginUrl = `${API_BASE_URL}/auth/microsoft/login`;
 
   // The marketing content below is rendered unconditionally so it is present
   // in the server HTML (crawlable). Logged-in visitors are bounced to the app:
@@ -198,9 +256,10 @@ export default function Home() {
           </Link>
 
           <nav className="hidden items-center gap-7 text-sm text-white/62 md:flex">
+            <a href="#solutions" className="hover:text-white transition">Solutions</a>
             <a href="#platform" className="hover:text-white transition">Platform</a>
             <a href="#agents" className="hover:text-white transition">AI Agents</a>
-            <a href="#use-cases" className="hover:text-white transition">Use Cases</a>
+            <a href="#compare" className="hover:text-white transition">Compare</a>
             <Link href="/pricing" className="hover:text-white transition">Pricing</Link>
             <Link href="/handbook" className="hover:text-white transition">Docs</Link>
             <a href="https://github.com/aexy-io/aexy" className="flex items-center gap-1 hover:text-white transition">
@@ -210,16 +269,13 @@ export default function Home() {
           </nav>
 
           <div className="hidden items-center gap-3 md:flex">
-            <a href={githubLoginUrl} className="text-sm font-medium text-white/70 hover:text-white transition">
-              Sign in
-            </a>
-            <a
-              href={googleLoginUrl}
+            <Link
+              href="/login"
               className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-white/90"
             >
-              Start free
+              Get started
               <ArrowRight className="h-4 w-4" />
-            </a>
+            </Link>
           </div>
 
           <button
@@ -234,19 +290,20 @@ export default function Home() {
         {mobileOpen && (
           <div className="border-t border-white/10 bg-[#08090d] px-4 py-4 md:hidden">
             <nav className="flex flex-col gap-4 text-sm text-white/72">
+              <a href="#solutions" onClick={() => setMobileOpen(false)}>Solutions</a>
               <a href="#platform" onClick={() => setMobileOpen(false)}>Platform</a>
               <a href="#agents" onClick={() => setMobileOpen(false)}>AI Agents</a>
-              <a href="#use-cases" onClick={() => setMobileOpen(false)}>Use Cases</a>
+              <a href="#compare" onClick={() => setMobileOpen(false)}>Compare</a>
               <Link href="/pricing" onClick={() => setMobileOpen(false)}>Pricing</Link>
               <Link href="/handbook" onClick={() => setMobileOpen(false)}>Docs</Link>
               <a href="https://github.com/aexy-io/aexy" className="flex items-center gap-2">
                 <SiGithub className="h-4 w-4" />
                 GitHub
               </a>
-              <a href={googleLoginUrl} className="mt-2 inline-flex items-center justify-center gap-2 rounded-full bg-white px-4 py-2.5 font-semibold text-black">
-                Start free
+              <Link href="/login" onClick={() => setMobileOpen(false)} className="mt-2 inline-flex items-center justify-center gap-2 rounded-full bg-white px-4 py-2.5 font-semibold text-black">
+                Get started
                 <ArrowRight className="h-4 w-4" />
-              </a>
+              </Link>
             </nav>
           </div>
         )}
@@ -260,20 +317,19 @@ export default function Home() {
               AI company operating system
             </div>
             <h1 className="max-w-4xl text-5xl font-semibold leading-[1.03] tracking-tight sm:text-6xl lg:text-7xl">
-              Aexy is the AI superapp for companies.
+              CRM, engineering, and ops. One AI-native workspace.
             </h1>
             <p className="mt-7 max-w-2xl text-lg leading-8 text-white/62 sm:text-xl">
-              Replace scattered tools for engineering, CRM, GTM, people, docs, workflows, and AI agents with one connected company operating system.
+              Your CRM can't see what engineering shipped. Your sprints can't see revenue. Aexy replaces the HubSpot + Jira + Notion sprawl with one open-source company OS where your team — and your AI agents — share the same context.
             </p>
             <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-              <a
-                href={googleLoginUrl}
+              <Link
+                href="/login"
                 className="inline-flex items-center justify-center gap-3 rounded-full bg-white px-7 py-4 text-base font-semibold text-black transition hover:bg-white/90"
               >
-                <GoogleIcon />
                 Start free
                 <ArrowRight className="h-5 w-5" />
-              </a>
+              </Link>
               <Link
                 href="/contact"
                 className="inline-flex items-center justify-center gap-3 rounded-full border border-white/12 bg-white/[0.04] px-7 py-4 text-base font-semibold text-white transition hover:bg-white/[0.08]"
@@ -283,9 +339,7 @@ export default function Home() {
               </Link>
             </div>
             <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm text-white/45">
-              <a href={microsoftLoginUrl} className="hover:text-white transition">Continue with Microsoft</a>
-              <span className="text-white/20">/</span>
-              <a href={githubLoginUrl} className="hover:text-white transition">Continue with GitHub</a>
+              <span>Works with Google, GitHub, and Microsoft accounts</span>
               <span className="text-white/20">/</span>
               <a href="https://github.com/aexy-io/aexy" className="hover:text-white transition">View source</a>
             </div>
@@ -303,6 +357,51 @@ export default function Home() {
               {point}
             </div>
           ))}
+        </div>
+      </section>
+
+      <section id="solutions" className="relative px-4 py-20 sm:px-6 sm:py-28">
+        <div className="mx-auto max-w-7xl">
+          <div className="max-w-3xl">
+            <p className="mb-3 text-sm font-semibold uppercase tracking-[0.22em] text-amber-300">Who is Aexy for</p>
+            <h2 className="text-4xl font-semibold tracking-tight sm:text-5xl">
+              Pick your team. Start where it hurts most.
+            </h2>
+            <p className="mt-5 text-lg leading-8 text-white/56">
+              You don't adopt a company OS in one day. Start with the workflow your team is fighting today, then expand into the shared operating layer.
+            </p>
+          </div>
+          <div className="mt-12 grid gap-4 md:grid-cols-3">
+            {icpTracks.map(({ label, icon: Icon, accent, pain, replaces, features, href, compare }) => (
+              <article key={label} className="flex flex-col rounded-2xl border border-white/10 bg-white/[0.035] p-6 transition hover:border-white/25">
+                <div className={`mb-5 flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br ${accent}`}>
+                  <Icon className="h-5 w-5 text-white" />
+                </div>
+                <h3 className="text-2xl font-semibold">{label}</h3>
+                <p className="mt-3 text-sm leading-6 text-white/54">{pain}</p>
+                <div className="mt-5 space-y-2 border-t border-white/10 pt-4">
+                  {features.map((feature) => (
+                    <div key={feature} className="flex items-center gap-2 text-sm text-white/62">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-white/45" />
+                      {feature}
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-4 text-xs font-medium uppercase tracking-[0.14em] text-white/38">{replaces}</p>
+                <div className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-2 pt-6">
+                  <Link href={href} className="inline-flex items-center gap-1.5 text-sm font-semibold text-white transition hover:text-cyan-300">
+                    See how it works
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
+                  {compare.map((c) => (
+                    <Link key={c.href} href={c.href} className="text-sm text-white/45 underline-offset-4 transition hover:text-white hover:underline">
+                      {c.label}
+                    </Link>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -393,6 +492,35 @@ export default function Home() {
         </div>
       </section>
 
+      <section id="compare" className="relative px-4 py-20 sm:px-6">
+        <div className="mx-auto max-w-7xl">
+          <div className="max-w-3xl">
+            <p className="mb-3 text-sm font-semibold uppercase tracking-[0.22em] text-rose-300">Compare</p>
+            <h2 className="text-4xl font-semibold tracking-tight sm:text-5xl">
+              Already using Jira, HubSpot, or Notion?
+            </h2>
+            <p className="mt-5 text-lg leading-8 text-white/56">
+              Aexy replaces point tools one workflow at a time. See exactly what you gain — and what changes — against the tool your team uses today.
+            </p>
+          </div>
+          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {comparisons.map(({ name, href, gap }) => (
+              <Link
+                key={href}
+                href={href}
+                className="group rounded-2xl border border-white/10 bg-white/[0.035] p-5 transition hover:border-white/25 hover:bg-white/[0.06]"
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <h3 className="text-xl font-semibold">Aexy vs {name}</h3>
+                  <ArrowRight className="h-5 w-5 text-white/35 transition group-hover:translate-x-1 group-hover:text-white" />
+                </div>
+                <p className="mt-3 text-sm leading-6 text-white/52">{gap}</p>
+              </Link>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <section className="relative px-4 py-20 sm:px-6">
         <div className="mx-auto max-w-7xl rounded-3xl border border-white/10 bg-white/[0.035] p-6 sm:p-10">
           <div className="grid gap-8 lg:grid-cols-[0.9fr_1fr] lg:items-center">
@@ -408,9 +536,15 @@ export default function Home() {
               </p>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
-              {["Self-host free", "Open algorithms", "Data export", "Commercial cloud"].map((item) => (
-                <div key={item} className="rounded-2xl border border-white/10 bg-black/20 p-5 text-lg font-semibold">
-                  {item}
+              {([
+                ["Self-host free", "Run the full OS on your own infrastructure at no cost."],
+                ["AGPL-3.0 licensed", "The entire codebase is public — read how every feature works."],
+                ["Data export", "Your records, docs, and workflows are exportable, always."],
+                ["Commercial cloud", "Managed hosting when you want speed over ops."],
+              ] as const).map(([item, detail]) => (
+                <div key={item} className="rounded-2xl border border-white/10 bg-black/20 p-5">
+                  <div className="text-lg font-semibold">{item}</div>
+                  <p className="mt-1.5 text-sm leading-6 text-white/48">{detail}</p>
                 </div>
               ))}
             </div>
@@ -475,11 +609,10 @@ export default function Home() {
             Bring engineering, GTM, people, knowledge, and AI agents into the same operating system.
           </p>
           <div className="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
-            <a href={googleLoginUrl} className="inline-flex items-center justify-center gap-3 rounded-full bg-white px-7 py-4 font-semibold text-black">
-              <GoogleIcon />
+            <Link href="/login" className="inline-flex items-center justify-center gap-3 rounded-full bg-white px-7 py-4 font-semibold text-black">
               Start free
               <ArrowRight className="h-5 w-5" />
-            </a>
+            </Link>
             <Link href="/contact" className="inline-flex items-center justify-center gap-3 rounded-full border border-white/12 bg-white/[0.04] px-7 py-4 font-semibold text-white">
               Book demo
             </Link>
@@ -501,6 +634,22 @@ const homepageJsonLd = {
       name: "Aexy",
       url: "https://aexy.io",
       sameAs: ["https://github.com/aexy-io/aexy"],
+      founder: {
+        "@type": "Person",
+        "@id": "https://aexy.io/about#bhanu",
+        name: "Bhanu Pratap Chaudhary",
+        jobTitle: "Founder, Aexy",
+        sameAs: ["https://github.com/bhanuc", "https://bhanu.io"],
+      },
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://aexy.io/#website",
+      name: "Aexy",
+      url: "https://aexy.io",
+      publisher: {
+        "@id": "https://aexy.io/#organization",
+      },
     },
     {
       "@type": "SoftwareApplication",
@@ -509,7 +658,7 @@ const homepageJsonLd = {
       applicationCategory: "BusinessApplication",
       operatingSystem: "Web",
       description:
-        "Aexy is an AI company operating system for engineering, CRM, GTM, people, docs, workflows, and AI agents.",
+        "Aexy is an open-source, AI-native company operating system that replaces separate CRM, engineering, workflow, HR, and docs tools with one workspace shared by teams and AI agents. Alternative to Jira, Linear, HubSpot, Attio, and Notion.",
       offers: {
         "@type": "Offer",
         price: "0",
@@ -603,7 +752,7 @@ function PreviewCard({
 function Footer() {
   return (
     <footer className="relative border-t border-white/10 px-4 py-12 sm:px-6">
-      <div className="mx-auto grid max-w-7xl gap-10 md:grid-cols-[1.5fr_1fr_1fr_1fr]">
+      <div className="mx-auto grid max-w-7xl gap-10 sm:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1fr_1fr]">
         <div>
           <div className="flex items-center gap-3">
             <div className="rounded-xl bg-white p-2 text-black">
@@ -612,14 +761,18 @@ function Footer() {
             <span className="text-lg font-semibold">Aexy</span>
           </div>
           <p className="mt-4 max-w-sm text-sm leading-6 text-white/45">
-            The AI superapp for companies. Open source, self-hostable, and built for modern teams.
+            The open-source AI company OS. One workspace for CRM, engineering, workflows, people, and AI agents.
           </p>
         </div>
         <FooterColumn title="Platform" links={[["AI Agents", "/products/ai-agents"], ["GTM Intelligence", "/products/gtm-intelligence"], ["CRM", "/products/crm"], ["Planning", "/products/planning"]]} />
-        <FooterColumn title="Company" links={[["Pricing", "/pricing"], ["About", "/about"], ["Mission", "/mission"], ["Contact", "/contact"]]} />
+        <FooterColumn title="Solutions" links={[["Revenue teams", "/for/revenue-teams"], ["Engineering teams", "/for/engineering-managers"], ["Founders & ops", "/for/founders"], ["HR & people ops", "/for/people-ops"]]} />
+        <FooterColumn title="Compare" links={[["Aexy vs Jira", "/compare/jira"], ["Aexy vs Linear", "/compare/linear"], ["Aexy vs HubSpot", "/compare/hubspot"], ["Aexy vs Notion", "/compare/notion"]]} />
         <div>
-          <h3 className="font-semibold">Resources</h3>
+          <h3 className="font-semibold">Company</h3>
           <div className="mt-4 space-y-3 text-sm text-white/45">
+            <Link href="/pricing" className="block hover:text-white transition">Pricing</Link>
+            <Link href="/about" className="block hover:text-white transition">About</Link>
+            <Link href="/contact" className="block hover:text-white transition">Contact</Link>
             <Link href="/handbook" className="block hover:text-white transition">Docs</Link>
             <Link href="/security" className="block hover:text-white transition">Security</Link>
             <a href="https://github.com/aexy-io/aexy" className="flex items-center gap-2 hover:text-white transition">
@@ -655,13 +808,3 @@ function FooterColumn({ title, links }: { title: string; links: Array<[string, s
   );
 }
 
-function GoogleIcon() {
-  return (
-    <svg className="h-5 w-5" viewBox="0 0 24 24" aria-hidden="true">
-      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-    </svg>
-  );
-}

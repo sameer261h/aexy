@@ -48,6 +48,13 @@ const compareSlugs = [
   "servicenow",
 ];
 
+const guideSlugs = [
+  "what-is-an-ai-company-operating-system",
+  "ai-agents-for-business-workflows",
+  "self-hosted-ai-company-os",
+  "best-ai-company-operating-systems-2026",
+];
+
 const forSlugs = [
   "ai-agent-builders",
   "developers",
@@ -84,6 +91,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     entry("/blog", 0.7, "weekly"),
     entry("/changelog", 0.6, "weekly"),
     entry("/careers", 0.6, "weekly"),
+    ...guideSlugs.map((slug) => entry(`/guides/${slug}`, 0.8, "monthly")),
     ...productSlugs.map((slug) => entry(`/products/${slug}`, 0.7, "monthly")),
     ...useCaseSlugs.map((slug) => entry(`/use-cases/${slug}`, 0.6, "monthly")),
     ...compareSlugs.map((slug) => entry(`/compare/${slug}`, 0.6, "monthly")),

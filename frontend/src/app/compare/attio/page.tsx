@@ -26,6 +26,8 @@ export default function AttioComparisonPage() {
       rows={[
         ["Primary focus", "Company OS with CRM as one connected module.", "Flexible CRM workspace."],
         ["Cross-functional work", "CRM records can connect to tickets, docs, GTM workflows, reviews, and agents.", "Most non-CRM work remains in separate tools."],
+        ["AI-computed fields", "LLM-computed CRM attributes from your own prompt templates, with configurable refresh triggers.", "AI research and enrichment within Attio's surface."],
+        ["Email deliverability", "Built-in sending-domain warming with bounce/complaint monitoring and auto-pause.", "Not included; typically handled by a separate sending tool."],
         ["Agent governance", "Policy gates, approvals, tool access, and audit history across modules.", "AI workflows are scoped around the CRM product surface."],
         ["Control", "Open-source/self-hostable path.", "Commercial SaaS CRM."],
       ]}

@@ -25,6 +25,8 @@ export default function LinearComparisonPage() {
       ]}
       rows={[
         ["Scope", "Company OS for work, customers, people, knowledge, workflows, and agents.", "Focused product planning and issue tracking."],
+        ["Git awareness", "Commits and PRs auto-link to tasks, plus AI analysis of how well each PR matches its task.", "Magic-word linking and auto-close; no AI alignment analysis."],
+        ["Incident automation", "Uptime monitors and observability alerts auto-create tickets, dedupe recurring alerts, and auto-resolve on recovery.", "Requires separate incident tooling (PagerDuty, incident.io)."],
         ["GTM connection", "Built-in CRM, visitor identification, lead scoring, routing, and sequences.", "Requires separate GTM/CRM tools."],
         ["AI workflow", "Agents can operate across company modules through policies and audit logs.", "AI context is narrower around product work."],
         ["Extensibility", "Open-source/self-hosting path with broad module surface.", "SaaS-first workflow product."],
