@@ -3,6 +3,7 @@
   "version": "0.8.57",
   "private": true,
   "scripts": {
+    "predev": "npm run i18n:merge",
     "dev": "next dev",
     "i18n:merge": "node scripts/merge-messages.js",
     "prebuild": "npm run i18n:merge && node scripts/generate-changelog.mjs && node scripts/generate-docs.mjs",
