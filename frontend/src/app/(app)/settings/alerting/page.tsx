@@ -50,6 +50,24 @@ function CopyButton({ value }: { value: string }) {
   );
 }
 
+// Copy-pasteable body for a custom OpenObserve alert Template. Mirrors
+// docs/integrations/openobserve.md. Curly-brace tokens are OpenObserve alert
+// variables substituted at send time: alert_name/stream_name/alert_start_time/
+// alert_url/alert_count/rows are built in; {service}/{severity}/{environment}
+// resolve from STREAM FIELDS of those names ("all stream fields are variables").
+// If your stream lacks them, replace the token with a literal, e.g. "critical".
+const OPENOBSERVE_TEMPLATE = `{
+  "alert_name": "{alert_name}",
+  "service": "{service}",
+  "severity": "{severity}",
+  "environment": "{environment}",
+  "stream": "{stream_name}",
+  "start_time": "{alert_start_time}",
+  "alert_url": "{alert_url}",
+  "count": "{alert_count}",
+  "rows": "{rows}"
+}`;
+
 const ACTION_COLORS: Record<string, string> = {
   created: "text-emerald-400 bg-emerald-400/10",
   updated: "text-blue-400 bg-blue-400/10",
@@ -144,12 +162,27 @@ function SetupGuide() {
               (<code>sha256=</code> prefix optional).
             </li>
             <li>
-              Point the alert&apos;s <span className="text-foreground">Template</span> at a JSON
-              body with <code>service</code>, <code>severity</code>{" "}
-              (<code>critical|high|medium|low</code>), <code>environment</code>,{" "}
-              <code>alert_url</code>, and <code>rows</code> (the matched log lines →
-              ticket log context + trace links). Send <code>&quot;status&quot;:&quot;resolved&quot;</code>{" "}
-              on recovery to auto-resolve.
+              Create a <span className="text-foreground">custom Template</span> (not the
+              <code>prebuilt_*</code> ones — those emit Slack/PagerDuty/etc. formats Aexy
+              can&apos;t parse) with this JSON body:
+              <div className="mt-2 rounded-md border border-border bg-background/60">
+                <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+                  <span className="text-xs text-muted-foreground">OpenObserve alert template</span>
+                  <CopyButton value={OPENOBSERVE_TEMPLATE} />
+                </div>
+                <pre className="overflow-x-auto px-3 py-2 text-xs text-foreground">
+                  <code>{OPENOBSERVE_TEMPLATE}</code>
+                </pre>
+              </div>
+              <code>{"{service}"}</code>, <code>{"{severity}"}</code> and{" "}
+              <code>{"{environment}"}</code> resolve from your stream&apos;s fields of those
+              names (OpenObserve: <em>&quot;all stream fields are variables&quot;</em>). If your
+              stream doesn&apos;t have them, replace the token with a literal —{" "}
+              e.g. <code>&quot;severity&quot;: &quot;critical&quot;</code> — and use one alert per
+              tier. Severity accepts <code>critical|high|medium|low</code> (missing →{" "}
+              <code>medium</code>). <code>rows</code> becomes the ticket&apos;s log context and
+              is scanned for <code>trace_id=…</code> to build trace links. Send a paired alert
+              with <code>&quot;status&quot;:&quot;resolved&quot;</code> on recovery to auto-resolve.
             </li>
             <li>
               Use <span className="text-foreground">Send test</span> on the integration
