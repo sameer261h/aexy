@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { CommunityAuthButton } from "@/components/community/CommunityAuthButton";
 
 /**
  * Public community shell — deliberately outside the (app) auth group. No auth,
@@ -24,12 +25,7 @@ export default async function CommunityLayout({
           >
             Community
           </Link>
-          <Link
-            href="/"
-            className="text-sm rounded-lg bg-blue-600 px-3 py-1.5 text-white hover:bg-blue-700"
-          >
-            Sign in to join
-          </Link>
+          <CommunityAuthButton signedOutLabel="Sign in to join" />
         </div>
       </header>
       <main className="mx-auto max-w-4xl px-4 py-8">{children}</main>
