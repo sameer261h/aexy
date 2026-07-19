@@ -234,7 +234,10 @@ async def _record_automation_email_result(
     steps = [dict(step) for step in (run.steps_executed or [])]
 
     for step in steps:
-        if step.get("type") == "send_email" and step.get("order") == input.automation_step_order:
+        if (
+            step.get("type") in {"send_email", "notify_user"}
+            and step.get("order") == input.automation_step_order
+        ):
             if step.get("status") != "queued":
                 logger.info(
                     "Ignoring duplicate email result for automation run %s step %s",
@@ -252,7 +255,9 @@ async def _record_automation_email_result(
         return
 
     run.steps_executed = steps
-    email_steps = [step for step in steps if step.get("type") == "send_email"]
+    email_steps = [
+        step for step in steps if step.get("type") in {"send_email", "notify_user"}
+    ]
     if any(step.get("status") == "queued" for step in email_steps):
         return
 

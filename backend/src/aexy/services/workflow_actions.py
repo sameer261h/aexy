@@ -2193,6 +2193,8 @@ class WorkflowActionHandler:
             # Get record owner
             if context.record_data:
                 user_id = user_id or context.record_data.get("owner_id") or context.record_data.get("assigned_to")
+        elif notify_type == "workspace_admin":
+            return await self._notify_workspace_admins(data, context)
 
         # Resolve template variables in user_email
         if user_email:
@@ -2251,6 +2253,63 @@ class WorkflowActionHandler:
             )
         except Exception as e:
             return NodeExecutionResult(node_id="", status="failed", error=str(e))
+
+    async def _notify_workspace_admins(
+        self, data: dict, context: WorkflowExecutionContext
+    ) -> NodeExecutionResult:
+        """Notify every owner/admin of the workspace, minus whoever triggered it."""
+        from aexy.services.workspace_service import WorkspaceService
+
+        if not context.workspace_id:
+            return NodeExecutionResult(
+                node_id="", status="failed", error="No workspace in context",
+            )
+
+        actor_id = context.trigger_data.get("changed_by_id")
+        members = await WorkspaceService(self.db).get_workspace_admins(
+            context.workspace_id, exclude_developer_id=actor_id
+        )
+        recipients = [m.developer for m in members if m.developer]
+        if not recipients:
+            return NodeExecutionResult(
+                node_id="", status="failed",
+                error="No workspace owners or admins to notify",
+            )
+
+        message = self._render_template(
+            data.get("message", data.get("message_template", data.get("notify_message", ""))),
+            context,
+        )
+        title = self._render_template(
+            data.get("email_subject", data.get("notify_title", "Notification")), context
+        )
+        channel = data.get("channel", "slack")
+
+        channels_notified = []
+        for developer in recipients:
+            if channel in ("slack", "both"):
+                slack_result = await self._send_slack(
+                    {"user_email": developer.email, "message_template": message}, context
+                )
+                if slack_result.status == "success":
+                    channels_notified.append("slack")
+            if channel in ("email", "both"):
+                email_result = await self._send_email(
+                    {"to": developer.email, "email_subject": title, "email_body": message},
+                    context,
+                )
+                if email_result.status == "success":
+                    channels_notified.append("email")
+
+        return NodeExecutionResult(
+            node_id="",
+            status="success" if channels_notified else "failed",
+            output={
+                "recipients_notified": len(recipients),
+                "channels_notified": channels_notified,
+            },
+            error=None if channels_notified else "No notification could be delivered",
+        )
 
     async def _notify_team(
         self, data: dict, context: WorkflowExecutionContext

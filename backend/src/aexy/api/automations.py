@@ -13,7 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aexy.core.database import get_db
 from aexy.api.developers import get_current_developer
 from aexy.models.developer import Developer
-from aexy.services.automation_service import AutomationService
+from aexy.services.automation_service import (
+    AutomationService,
+    filter_actions_by_integrations,
+)
 from aexy.services.workflow_generator import generate_workflow_from_prompt
 from aexy.services.workspace_service import WorkspaceService
 from aexy.schemas.automation import (
@@ -102,12 +105,17 @@ async def get_module_actions(
     db: AsyncSession = Depends(get_db),
     current_user: Developer = Depends(get_current_developer),
 ):
-    """Get available actions for a specific module."""
+    """Get available actions for a specific module.
+
+    Integration-backed actions are dropped when the workspace has not
+    connected the integration they need, so the palette never offers a step
+    that could only fail.
+    """
     await check_workspace_permission(db, workspace_id, current_user.id, "member")
-    return ModuleActionsResponse(
-        module=module,
-        actions=get_actions_for_module(module),
+    actions = await filter_actions_by_integrations(
+        db, workspace_id, get_actions_for_module(module)
     )
+    return ModuleActionsResponse(module=module, actions=actions)
 
 
 # =============================================================================

@@ -293,6 +293,19 @@ HIDDEN_TRIGGERS: frozenset[str] = frozenset({
     # Unwired CRM triggers: config saves but nothing dispatches them yet.
     "schedule.daily", "schedule.weekly", "date.approaching", "date.passed",
     "webhook.received", "email.opened", "email.clicked", "email.replied",
+    # Trim 2026-07-19: nothing emits these, so an automation built on one
+    # never runs and reports no reason why.
+    "list_entry.added",   # no emitter; the list-entry paths don't dispatch
+    "list_entry.removed",  # no emitter
+    "status.changed",     # no CRM emitter (sprint/bug status is unrelated)
+    # Emitted, but announced as belonging to the forms module while the
+    # builder only creates CRM automations, and dispatch matches on module —
+    # so a CRM automation listening for it can never match.
+    "form.submitted",
+    # record.deleted was withheld here on 2026-07-19 pending proof that
+    # deletion actually happens in the product. Confirmed the same day and
+    # un-hidden: both delete routes go through CRMService.delete_record,
+    # which emits, and bulk delete loops through that same method.
 })
 
 HIDDEN_ACTIONS: frozenset[str] = frozenset({
@@ -300,7 +313,44 @@ HIDDEN_ACTIONS: frozenset[str] = frozenset({
     "enrich_record",      # no handler
     "classify_record",    # no handler
     "generate_summary",   # no handler
+    # Trim 2026-07-19: no case in the published executor, so these fall to
+    # its catch-all and are recorded as SUCCESS while doing nothing.
+    "send_sms",
+    "delete_record",
+    "link_records",
+    "remove_from_sequence",
+    # Hidden 2026-07-19: the config panel writes webhook_url / http_method /
+    # body_template, but _action_webhook_call reads url / method and sends a
+    # fixed payload, so a builder-configured webhook finds no URL, never
+    # fires, and is recorded as a successful step. The dry-run engine
+    # (workflow_actions._webhook_call) reads the panel's keys correctly, so
+    # Test passes while the published run silently does nothing. Un-hide by
+    # aligning the executor with the panel — the working version already
+    # exists in the dry-run path.
+    "webhook_call",
+    # Same catch-all problem. These two also arrive as ordinary steps rather
+    # than standalone blocks, so the unsupported-node-type rule in
+    # workflow_service does not catch them — hiding them here is the only
+    # thing that keeps them out. Restoring them is Epic 4 (logic & timing).
+    "wait",
+    "condition",
+    # Withheld by product decision: offer these only once the step can point
+    # at something real.
+    "add_to_list",
+    "remove_from_list",
+    "enroll_in_sequence",
+    # Handler exists, but the config panel has no agent picker, so there is
+    # no way to choose an agent — the step could only ever fail for want of
+    # one. Restore alongside an agent selector.
+    "run_agent",
 })
+
+# Actions that are only offered when the workspace has the integration they
+# depend on. Unlike HIDDEN_ACTIONS this cannot be decided from the registry
+# alone, so the API layer applies it per workspace.
+INTEGRATION_GATED_ACTIONS: dict[str, str] = {
+    "send_slack": "slack",
+}
 
 
 def _visible_triggers(entries: list[dict[str, str]]) -> list[dict[str, str]]:

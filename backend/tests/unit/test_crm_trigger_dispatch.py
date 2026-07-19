@@ -71,15 +71,27 @@ async def test_emit_record_created_trigger_data_type_is_consistent():
     assert trigger_data["trigger_type"] == CRMAutomationTriggerType.RECORD_CREATED.value
 
 
-def test_core_crm_trigger_enums_match_registry():
-    """Every core CRM trigger enum value must be an id the registry exposes."""
-    registry = set(get_trigger_ids("crm"))
-    for trig in [
-        CRMAutomationTriggerType.RECORD_CREATED,
-        CRMAutomationTriggerType.RECORD_UPDATED,
-        CRMAutomationTriggerType.RECORD_DELETED,
-        CRMAutomationTriggerType.FIELD_CHANGED,
-        CRMAutomationTriggerType.STATUS_CHANGED,
-        CRMAutomationTriggerType.STAGE_CHANGED,
-    ]:
-        assert trig.value in registry, trig
+def test_every_offered_trigger_has_a_backing_enum():
+    """Anything the registry offers must correspond to a real trigger enum.
+
+    Checked in this direction on purpose. The reverse — asserting every enum
+    value is offered — would forbid ever withholding a trigger, and several
+    are now deliberately withheld because nothing emits them (2026-07-19
+    trim). This direction still catches the failure that matters: a typo or
+    invented id reaching the palette, which is how "deal.stage_changed"
+    shipped and silently never fired.
+    """
+    known = {t.value for t in CRMAutomationTriggerType}
+    for trigger_id in get_trigger_ids("crm"):
+        assert trigger_id in known, trigger_id
+
+
+def test_offered_triggers_are_the_ones_with_emitters():
+    """The offered set is exactly what CRMEventEmitter actually dispatches."""
+    assert set(get_trigger_ids("crm")) == {
+        CRMAutomationTriggerType.RECORD_CREATED.value,
+        CRMAutomationTriggerType.RECORD_UPDATED.value,
+        CRMAutomationTriggerType.RECORD_DELETED.value,
+        CRMAutomationTriggerType.FIELD_CHANGED.value,
+        CRMAutomationTriggerType.STAGE_CHANGED.value,
+    }

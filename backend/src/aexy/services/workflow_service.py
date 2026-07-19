@@ -47,7 +47,13 @@ _ACTION_REQUIRED_FIELDS: dict[str, tuple[tuple[str, ...], str, str]] = {
 }
 
 # Fields whose literal values should be validated as email addresses.
-_EMAIL_LITERAL_FIELDS = ("to", "email_to", "email")
+_EMAIL_LITERAL_FIELDS = ("to", "email_to", "email", "notify_email")
+
+# Node types that survive flattening onto automation.actions and can actually
+# run when published. Everything else (condition/wait/agent/branch/join) is
+# silently dropped by the flattener, so publishing one is rejected instead.
+# Widen this only when the published executor gains a matching case.
+_EXECUTABLE_NODE_TYPES = ("trigger", "action")
 
 # Namespaces a {{variable}} reference may resolve against at execution time.
 _VARIABLE_NAMESPACES = {"record", "trigger", "variables"}
@@ -512,6 +518,27 @@ class WorkflowService:
                 )
             )
 
+        # Only trigger + action nodes survive the flattening onto
+        # automation.actions, and the published executor
+        # (CRMAutomationService._execute_action) has no case for the rest —
+        # a condition/wait/agent/branch node would be dropped and the
+        # automation would run every action unconditionally, with no error
+        # anywhere. Reject at authoring time instead of failing silently in
+        # production. Restoring these means Epic 4 (logic & timing), not a
+        # change here.
+        for node in nodes:
+            if node["type"] not in _EXECUTABLE_NODE_TYPES:
+                errors.append(
+                    WorkflowValidationError(
+                        error_type="unsupported_node_type",
+                        message=(
+                            f"'{node['type']}' steps can't run in a published "
+                            "automation yet — remove it to publish"
+                        ),
+                        node_id=node["id"],
+                    )
+                )
+
         # Validate edges
         for edge in edges:
             source = edge.get("source")
@@ -605,6 +632,16 @@ class WorkflowService:
                             node_id=node["id"],
                             error_type="missing_email_content",
                             message="Email action requires a template or body",
+                        )
+                    )
+
+            if action_type == "notify_user" and data.get("notify_type", "email") == "email":
+                if not data.get("notify_email") and not data.get("user_email"):
+                    errors.append(
+                        WorkflowValidationError(
+                            node_id=node["id"],
+                            error_type="missing_notification_recipient",
+                            message="Notify-user action requires an email address",
                         )
                     )
 

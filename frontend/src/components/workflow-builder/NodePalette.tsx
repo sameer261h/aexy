@@ -905,35 +905,16 @@ const ACTION_ICONS: Record<string, React.ElementType> = {
 };
 
 // Fixed categories that don't change by module
+//
+// Condition / Wait / AI Agents / Branch removed (2026-07-19), same reason as
+// Join before them: publishing flattens the canvas onto the automation's
+// action list, which keeps ONLY trigger + action nodes. These four were
+// dropped on publish and the automation then ran every action
+// unconditionally — a filter that silently didn't filter, with no error
+// anywhere. Per US-1.5 (P0), the palette must not offer what can't execute.
+// Restoring them is Epic 4 (logic & timing) / Epic 5 (agents), not a palette
+// change: the published executor needs matching cases first.
 const FIXED_CATEGORIES: Omit<NodeCategory, "subtypes">[] = [
-  {
-    type: "condition",
-    label: "Conditions",
-    icon: GitBranch,
-    color: "text-amber-600 dark:text-amber-400",
-    bgColor: "bg-amber-500/20",
-  },
-  {
-    type: "wait",
-    label: "Wait",
-    icon: Clock,
-    color: "text-violet-400",
-    bgColor: "bg-violet-500/20",
-  },
-  {
-    type: "agent",
-    label: "AI Agents",
-    icon: Bot,
-    color: "text-pink-600 dark:text-pink-400",
-    bgColor: "bg-pink-500/20",
-  },
-  {
-    type: "branch",
-    label: "Branch",
-    icon: Merge,
-    color: "text-indigo-600 dark:text-indigo-400",
-    bgColor: "bg-indigo-500/20",
-  },
   // Join node removed (2026-07-15): the execution engine silently skips it.
   // Implementation deferred — see prds/automations-noncrm-deferred.md.
 ];
@@ -957,44 +938,39 @@ const FIXED_SUBTYPES: Record<string, { value: string; label: string; icon: React
   // join subtypes removed (2026-07-15) — see FIXED_CATEGORIES note.
 };
 
-// Fallback triggers for when API fails or during loading
+// Fallback triggers for when API fails or during loading.
+//
+// MUST stay a subset of what the backend registry exposes (HIDDEN_TRIGGERS in
+// schemas/automation.py). This list is what the palette renders before the
+// registry request resolves, so anything extra here is briefly offered and
+// then vanishes.
 const FALLBACK_TRIGGERS: Record<string, string[]> = {
-  // CRM-only scope (2026-07-15). Unwired triggers (schedule/date/webhook/email
-  // engagement) are hidden until wired; non-CRM modules are descoped. See
-  // prds/automations-noncrm-deferred.md and prds/crm-automations-user-stories.md.
+  // Trimmed 2026-07-19 to the triggers something actually emits AND that a
+  // CRM automation can match. Removed: list add/remove and status change (no
+  // emitter), form submission (emitted against the forms module, so a CRM
+  // automation never matches it).
   crm: [
     "record.created",
     "record.updated",
     "record.deleted",
     "field.changed",
-    "list_entry.added",
-    "list_entry.removed",
-    "status.changed",
     "stage.changed",
-    "form.submitted",
   ],
 };
 
 // Fallback actions for when API fails or during loading.
-// CRM-only scope: orphan actions (api_request, enrich/classify/summarize) removed.
+//
+// Same subset rule as the triggers above. Send Slack is deliberately absent:
+// it depends on a per-workspace integration the backend resolves, which this
+// static list cannot know, so it is under-offered until the registry answers.
 const FALLBACK_ACTIONS: Record<string, string[]> = {
   crm: [
     "send_email",
-    "send_slack",
-    "send_sms",
-    "webhook_call",
-    "run_agent",
     "create_task",
     "notify_user",
     "notify_team",
     "create_record",
     "update_record",
-    "delete_record",
-    "link_records",
-    "add_to_list",
-    "remove_from_list",
-    "enroll_in_sequence",
-    "remove_from_sequence",
   ],
 };
 

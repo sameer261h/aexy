@@ -25,24 +25,8 @@
         "description": "When a specific field value changes on a record"
       },
       {
-        "id": "list_entry.added",
-        "description": "When a record is added to a list"
-      },
-      {
-        "id": "list_entry.removed",
-        "description": "When a record is removed from a list"
-      },
-      {
-        "id": "status.changed",
-        "description": "When a record status changes"
-      },
-      {
         "id": "stage.changed",
         "description": "When a record moves to a different pipeline stage"
-      },
-      {
-        "id": "form.submitted",
-        "description": "When a linked form submission is received"
       }
     ]
   },
@@ -57,18 +41,6 @@
         "description": "Send a Slack message to a channel or user"
       },
       {
-        "id": "send_sms",
-        "description": "Send an SMS text message"
-      },
-      {
-        "id": "webhook_call",
-        "description": "Call an external webhook URL"
-      },
-      {
-        "id": "run_agent",
-        "description": "Run an AI agent with the trigger context"
-      },
-      {
         "id": "create_task",
         "description": "Create a follow-up task"
       },
@@ -79,14 +51,6 @@
       {
         "id": "notify_team",
         "description": "Send an in-app notification to a team"
-      },
-      {
-        "id": "wait",
-        "description": "Wait for a specified duration before continuing"
-      },
-      {
-        "id": "condition",
-        "description": "Evaluate a condition to branch the workflow"
       }
     ],
     "crm": [
@@ -97,30 +61,6 @@
       {
         "id": "update_record",
         "description": "Update fields on an existing CRM record"
-      },
-      {
-        "id": "delete_record",
-        "description": "Delete a CRM record"
-      },
-      {
-        "id": "link_records",
-        "description": "Link two CRM records together"
-      },
-      {
-        "id": "add_to_list",
-        "description": "Add a record to a CRM list"
-      },
-      {
-        "id": "remove_from_list",
-        "description": "Remove a record from a CRM list"
-      },
-      {
-        "id": "enroll_in_sequence",
-        "description": "Enroll a contact in an email sequence"
-      },
-      {
-        "id": "remove_from_sequence",
-        "description": "Remove a contact from an email sequence"
       }
     ]
   }

@@ -1139,32 +1139,18 @@ export function NodeConfigPanel({
                 className="w-full bg-accent border border-border rounded-lg px-3 py-2 text-foreground text-sm"
               >
                 <option value="email">Specific Email</option>
-                <option value="field">From Record Field</option>
-                <option value="owner">Record Owner</option>
+                <option value="workspace_admin">Workspace Owners and Admins</option>
               </select>
             </div>
             {((node.data.notify_type as string) || "email") === "email" && (
               <div>
-                <label className="block text-sm text-muted-foreground mb-1">Email Address</label>
+                <label className="block text-sm text-muted-foreground mb-1">Email Address <span className="text-red-500">*</span></label>
                 <input
                   type="email"
                   value={(node.data.notify_email as string) || ""}
                   onChange={(e) => onUpdate({ notify_email: e.target.value })}
                   placeholder="user@company.com"
                   className="w-full bg-accent border border-border rounded-lg px-3 py-2 text-foreground text-sm"
-                />
-              </div>
-            )}
-            {((node.data.notify_type as string) || "email") === "field" && (
-              <div>
-                <label className="block text-sm text-muted-foreground mb-1">Email Field</label>
-                <FieldPicker
-                  workspaceId={workspaceId}
-                  automationId={automationId}
-                  nodeId={node.id}
-                  value={(node.data.notify_field as string) || ""}
-                  onChange={(value) => onUpdate({ notify_field: value })}
-                  placeholder="Select field..."
                 />
               </div>
             )}

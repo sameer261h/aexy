@@ -4,8 +4,9 @@ import { useState, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { Check, Loader2, AlertCircle } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { SaveStateBadge, type SaveState } from "@/components/automations/SaveStateBadge";
 import { Node, Edge } from "@xyflow/react";
 
 import { useWorkspace } from "@/hooks/useWorkspace";
@@ -60,7 +61,6 @@ interface Automation {
   is_active: boolean;
 }
 
-type SaveState = "idle" | "saving" | "saved" | "error";
 
 export default function EditAutomationPage() {
   const t = useTranslations("automations");
@@ -152,6 +152,7 @@ export default function EditAutomationPage() {
     async (nodes: Node[], edges: Edge[], viewport: { x: number; y: number; zoom: number }) => {
       if (!workspaceId || !automationId) return;
 
+      setSaveState("saving");
       try {
         const response = await api.put(
           `/workspaces/${workspaceId}/crm/automations/${automationId}/workflow`,
@@ -163,9 +164,12 @@ export default function EditAutomationPage() {
         );
         setWorkflow(response.data);
         setError(null);
+        setSaveState("saved");
+        setTimeout(() => setSaveState("idle"), 1500);
       } catch (err: unknown) {
         const errorMessage = getApiErrorMessage(err, "Failed to save workflow");
         setError(errorMessage);
+        setSaveState("error");
         throw err;
       }
     },
@@ -314,39 +318,10 @@ export default function EditAutomationPage() {
                     {moduleLabels[automation.module] || automation.module}
                   </span>
                 )}
-                {/* Live save state — visible feedback for the 1s-debounced
-                    PATCH so users aren't left guessing whether their edit
-                    landed. */}
-                {saveState !== "idle" && (
-                  <span
-                    className="flex items-center gap-1.5 text-xs"
-                    role="status"
-                    aria-live="polite"
-                  >
-                    {saveState === "saving" && (
-                      <>
-                        <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
-                        <span className="text-muted-foreground">{t("save.saving")}</span>
-                      </>
-                    )}
-                    {saveState === "saved" && (
-                      <>
-                        <Check className="h-3 w-3 text-emerald-500" />
-                        <span className="text-emerald-600 dark:text-emerald-400">
-                          {t("save.saved")}
-                        </span>
-                      </>
-                    )}
-                    {saveState === "error" && (
-                      <>
-                        <AlertCircle className="h-3 w-3 text-red-500" />
-                        <span className="text-red-600 dark:text-red-400">
-                          {t("save.error")}
-                        </span>
-                      </>
-                    )}
-                  </span>
-                )}
+                {/* Live save state — visible feedback for both the
+                    1s-debounced name/description PATCH and canvas saves, so
+                    users aren't left guessing whether their edit landed. */}
+                <SaveStateBadge state={saveState} />
               </div>
               <input
                 type="text"

@@ -373,7 +373,7 @@ class CRMAutomationService:
                         run_id=str(run.id),
                         action_index=i,
                     )
-                    if action_type == "send_email" and result.get("error"):
+                    if action_type in {"send_email", "notify_user"} and result.get("error"):
                         raise ValueError(str(result["error"]))
 
                     step_result["status"] = "queued" if result.get("queued") else "success"
@@ -391,7 +391,8 @@ class CRMAutomationService:
             # Sending an email is asynchronous. A queued email is not yet a
             # successful email; the Temporal activity records its final result.
             has_queued_email = any(
-                step.get("type") == "send_email" and step.get("status") == "queued"
+                step.get("type") in {"send_email", "notify_user"}
+                and step.get("status") == "queued"
                 for step in run.steps_executed
             )
             run.status = "queued" if has_queued_email else "completed"
@@ -547,7 +548,14 @@ class CRMAutomationService:
             return await self._action_resolve_incident(config, trigger_data)
         # Common actions
         elif action_type == "notify_user":
-            return await self._action_notify_user(config, record, workspace_id, trigger_data)
+            return await self._action_notify_user(
+                config,
+                record,
+                workspace_id,
+                trigger_data,
+                run_id,
+                action_index,
+            )
         elif action_type == "notify_team":
             return await self._action_notify_team(config, record, workspace_id, trigger_data)
         # Sprint module actions
@@ -1259,73 +1267,102 @@ class CRMAutomationService:
         record: CRMRecord | None,
         workspace_id: str,
         trigger_data: dict | None = None,
+        automation_run_id: str | None = None,
+        automation_step_order: int | None = None,
     ) -> dict:
         """Send notification to a specific user via their preferred channel (Slack DM, email).
 
         Config options:
+        - notify_type: 'workspace_admin' notifies every owner/admin of the
+          workspace (skipping whoever triggered the change). Anything else
+          falls back to the single-user resolution below.
         - user_id: Developer ID to notify
-        - user_email: Email of user to notify (fallback if user_id not provided)
+        - user_email: Direct email address to notify (fallback if user_id not provided)
         - message: Message content
-        - channel: Notification channel ('slack', 'email', 'both') - defaults to 'slack'
+        - channel: Notification channel ('slack', 'email', 'both') - defaults to 'email'
         """
+        notify_type = config.get("notify_type")
         user_id = config.get("user_id")
-        user_email = config.get("user_email")
-        message_template = config.get("message", "")
-        channel = config.get("channel", "slack")
+        user_email = config.get("user_email") or config.get("notify_email")
+        # The builder writes notify_message/notify_title; accept both spellings
+        # or a UI-configured node sends an empty body.
+        message_template = config.get("message") or config.get("notify_message", "")
+        subject = config.get("email_subject") or config.get("notify_title", "Notification")
+        channel = config.get("channel", "email")
 
         # Replace placeholders in message
         message = self._replace_placeholders(message_template, record, trigger_data)
 
-        if not user_id and not user_email:
-            return {"error": "No user_id or user_email specified"}
-
         results = {"channels_notified": []}
+        recipient_emails: list[str] = []
 
-        # Get user by ID or email
-        developer = None
-        if user_id:
-            result = await self.db.execute(
-                select(Developer).where(Developer.id == user_id)
+        if notify_type == "workspace_admin":
+            from aexy.services.workspace_service import WorkspaceService
+
+            # Don't notify the person who caused the change about their own action.
+            actor_id = (trigger_data or {}).get("changed_by_id")
+            members = await WorkspaceService(self.db).get_workspace_admins(
+                workspace_id, exclude_developer_id=actor_id
             )
-            developer = result.scalar_one_or_none()
-        elif user_email:
-            result = await self.db.execute(
-                select(Developer).where(Developer.email == user_email)
-            )
-            developer = result.scalar_one_or_none()
+            recipient_emails = [
+                member.developer.email
+                for member in members
+                if member.developer and member.developer.email
+            ]
+            if not recipient_emails:
+                return {"error": "No workspace owners or admins to notify"}
+        else:
+            if not user_id and not user_email:
+                return {"error": "No user_id or user_email specified"}
 
-        if not developer:
-            return {"error": f"User not found: {user_id or user_email}"}
+            # A configured specific email is a delivery address, not an Aexy
+            # user lookup. Only a selected internal user needs resolving.
+            if user_id:
+                result = await self.db.execute(
+                    select(Developer).where(Developer.id == user_id)
+                )
+                developer = result.scalar_one_or_none()
+                if not developer or not developer.email:
+                    return {"error": f"User not found: {user_id}"}
+                recipient_emails = [developer.email]
+            else:
+                recipient_emails = [str(user_email)]
 
-        # Send Slack notification
-        if channel in ("slack", "both"):
-            slack_result = await self._action_send_slack(
-                {"user_email": developer.email, "message": message},
-                record,
-                workspace_id,
-                trigger_data,
-            )
-            if slack_result.get("success"):
-                results["channels_notified"].append("slack")
-            results["slack"] = slack_result
+        for recipient_email in recipient_emails:
+            # Send Slack notification
+            if channel in ("slack", "both"):
+                slack_result = await self._action_send_slack(
+                    {"user_email": recipient_email, "message": message},
+                    record,
+                    workspace_id,
+                    trigger_data,
+                )
+                if slack_result.get("success"):
+                    results["channels_notified"].append("slack")
+                results["slack"] = slack_result
 
-        # Send email notification
-        if channel in ("email", "both"):
-            email_result = await self._action_send_email(
-                {
-                    "to": developer.email,
-                    "email_subject": config.get("email_subject", "Notification"),
-                    "email_body": message,
-                },
-                record,
-                workspace_id,
-                trigger_data,
-            )
-            if email_result.get("success"):
-                results["channels_notified"].append("email")
-            results["email"] = email_result
+            # Send email notification
+            if channel in ("email", "both"):
+                email_result = await self._action_send_email(
+                    {
+                        "to": recipient_email,
+                        "email_subject": subject,
+                        "email_body": message,
+                    },
+                    record,
+                    workspace_id,
+                    trigger_data,
+                    automation_run_id if len(recipient_emails) == 1 else None,
+                    automation_step_order if len(recipient_emails) == 1 else None,
+                )
+                if email_result.get("success"):
+                    results["channels_notified"].append("email")
+                results["email"] = email_result
 
+        results["recipients_notified"] = len(recipient_emails)
         results["success"] = len(results["channels_notified"]) > 0
+        if len(recipient_emails) == 1 and results.get("email", {}).get("queued"):
+            results["queued"] = True
         return results
 
     async def _action_notify_team(

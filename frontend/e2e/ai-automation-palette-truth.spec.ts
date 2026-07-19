@@ -21,20 +21,49 @@ import { openCanvas } from "./fixtures/automation-helpers";
 test.describe.configure({ timeout: 120_000 });
 
 // Capabilities that MUST NOT appear on the CRM palette after the descope.
-const REMOVED_CATEGORIES = ["join"];
+// Condition/wait/agent/branch joined "join" on 2026-07-19: publishing keeps
+// only trigger + action blocks, so these were dropped silently.
+const REMOVED_CATEGORIES = ["join", "condition", "wait", "agent", "branch"];
 const REMOVED_ACTION_SUBTYPES = [
   "api_request",
   "enrich_record",
   "classify_record",
   "generate_summary",
+  // 2026-07-19: no case in the published executor, so each of these was
+  // recorded as a successful step while doing nothing.
+  "send_sms",
+  "delete_record",
+  "link_records",
+  "remove_from_sequence",
+  "wait",
+  "condition",
+  // Panel and published executor disagree on field names: never fires,
+  // still recorded as successful. Test passes because the dry-run engine
+  // reads the panel's keys correctly.
+  "webhook_call",
+  // Withheld by product decision until the step can point at something real.
+  "add_to_list",
+  "remove_from_list",
+  "enroll_in_sequence",
+  "run_agent",
+];
+// Triggers withheld because nothing emits them, or because they are emitted
+// against a different module than the one this palette builds for.
+const REMOVED_TRIGGER_SUBTYPES = [
+  "list_entry.added",
+  "list_entry.removed",
+  "status.changed",
+  "form.submitted",
 ];
 // A representative non-CRM trigger that must not leak onto the CRM palette.
 const NON_CRM_TRIGGER_SUBTYPES = ["ticket.created", "candidate.created", "campaign.sent"];
 
 // Capabilities that MUST remain.
-const CORE_CATEGORIES = ["trigger", "action", "condition", "wait", "agent", "branch"];
-const CORE_TRIGGER_SUBTYPES = ["record.created", "field.changed", "stage.changed"];
-const CORE_ACTION_SUBTYPES = ["send_email", "create_record", "add_to_list"];
+const CORE_CATEGORIES = ["trigger", "action"];
+const CORE_TRIGGER_SUBTYPES = [
+  "record.created", "record.updated", "record.deleted", "field.changed", "stage.changed",
+];
+const CORE_ACTION_SUBTYPES = ["send_email", "create_record", "update_record", "notify_user"];
 
 test.describe("AI / Automation palette honesty (live)", () => {
   test.beforeEach(async ({ page }) => {
@@ -96,6 +125,12 @@ test.describe("AI / Automation palette honesty (live)", () => {
       await expect(
         page.getByTestId(`palette-subtype-trigger-${sub}`),
         `non-CRM trigger "${sub}" should not leak onto the CRM palette`,
+      ).toHaveCount(0);
+    }
+    for (const sub of REMOVED_TRIGGER_SUBTYPES) {
+      await expect(
+        page.getByTestId(`palette-subtype-trigger-${sub}`),
+        `trigger "${sub}" has no emitter a CRM automation can match, so it must not be offered`,
       ).toHaveCount(0);
     }
   });

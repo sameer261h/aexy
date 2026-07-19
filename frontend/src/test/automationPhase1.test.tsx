@@ -75,4 +75,34 @@ describe("automation Phase 1 feedback", () => {
       );
     });
   });
+
+  it("flags a Notify User action until its specific email is supplied", async () => {
+    const nodes: Node[] = [
+      {
+        id: "trigger",
+        type: "trigger",
+        position: { x: 0, y: 0 },
+        data: { trigger_type: "record.created" },
+      },
+      {
+        id: "notify",
+        type: "action",
+        position: { x: 250, y: 0 },
+        data: { action_type: "notify_user", notify_type: "email" },
+      },
+    ];
+    const edges: Edge[] = [{ id: "trigger-notify", source: "trigger", target: "notify" }];
+
+    const { result } = renderHook(() => useWorkflowValidation(nodes, edges));
+
+    await waitFor(() => {
+      expect(result.current.validationResult.errors).toContainEqual(
+        expect.objectContaining({
+          nodeId: "notify",
+          field: "notify_email",
+          message: "Email address is required",
+        })
+      );
+    });
+  });
 });

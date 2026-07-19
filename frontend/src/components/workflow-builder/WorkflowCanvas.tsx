@@ -556,7 +556,13 @@ function WorkflowCanvasInner({
       data: {
         label: getNodeLabel(type, subtype),
         ...(type === "trigger" && { trigger_type: subtype || "record.created" }),
-        ...(type === "action" && { action_type: subtype || "update_record" }),
+        ...(type === "action" && {
+          action_type: subtype || "update_record",
+          ...(subtype === "notify_user" && {
+            notify_type: "email",
+            channel: "email",
+          }),
+        }),
         ...(type === "condition" && { conditions: [], conjunction: "and" }),
         ...(type === "wait" && { wait_type: subtype || "duration", duration_value: 1, duration_unit: "days" }),
         ...(type === "agent" && { agent_type: subtype || "sales_outreach" }),

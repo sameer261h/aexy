@@ -18,14 +18,13 @@ import { toast } from "sonner";
 
 import { automationsApi, AutomationModule, GeneratedWorkflow } from "@/lib/api";
 import {
-  ALL_MODULES,
-  AUTOMATION_TEMPLATES,
   AutomationTemplate,
+  CRM_AUTOMATION_MODULES,
+  CRM_TEMPLATE_LIST,
   moduleAccentHex,
   moduleColors,
   moduleIcons,
   moduleLabels,
-  TEMPLATE_LIST,
 } from "@/lib/automationTemplates";
 import { cn } from "@/lib/utils";
 import { SearchInput } from "@/components/ui/search-input";
@@ -73,7 +72,7 @@ export function TemplateGallery({
 
   const [search, setSearch] = useState("");
   const [moduleFilter, setModuleFilter] = useState<AutomationModule | "all">(
-    initialModule ?? "all",
+    initialModule === "crm" ? initialModule : "crm",
   );
 
   // UX-DEF-004: prompt-to-workflow state. Lives in this component
@@ -114,7 +113,7 @@ export function TemplateGallery({
 
   const filtered = useMemo<AutomationTemplate[]>(() => {
     const term = search.trim().toLowerCase();
-    return TEMPLATE_LIST.filter((tmpl) => {
+    return CRM_TEMPLATE_LIST.filter((tmpl) => {
       if (moduleFilter !== "all" && tmpl.module !== moduleFilter) return false;
       if (!term) return true;
       return (
@@ -127,8 +126,8 @@ export function TemplateGallery({
 
   const modulesPresent = useMemo<AutomationModule[]>(() => {
     const seen = new Set<AutomationModule>();
-    TEMPLATE_LIST.forEach((tmpl) => seen.add(tmpl.module));
-    return ALL_MODULES.filter((m) => seen.has(m));
+    CRM_TEMPLATE_LIST.forEach((tmpl) => seen.add(tmpl.module));
+    return CRM_AUTOMATION_MODULES.filter((m) => seen.has(m));
   }, []);
 
   return (

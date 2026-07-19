@@ -93,6 +93,15 @@ const validateActionNode = (node: Node): ValidationError[] => {
     }
   }
 
+  if (data.action_type === "notify_user" && (data.notify_type || "email") === "email" && !data.notify_email) {
+    errors.push({
+      nodeId: node.id,
+      field: "notify_email",
+      message: "Email address is required",
+      severity: "error",
+    });
+  }
+
   // Slack actions
   if (data.action_type === "send_slack") {
     if (!data.channel && !data.channel_id) {
@@ -332,6 +341,10 @@ const validateNode = (node: Node): ValidationError[] => {
   }
 };
 
+// Node types the published executor can actually run. Everything else is
+// dropped when the canvas is flattened onto the automation's action list.
+const EXECUTABLE_NODE_TYPES = new Set(["trigger", "action"]);
+
 const validateWorkflowStructure = (nodes: Node[], edges: Edge[]): ValidationError[] => {
   const errors: ValidationError[] = [];
 
@@ -344,6 +357,22 @@ const validateWorkflowStructure = (nodes: Node[], edges: Edge[]): ValidationErro
       severity: "error",
     });
   }
+
+  // Only trigger + action nodes survive the flattening onto the automation's
+  // executable action list, and the published executor has no case for the
+  // rest — a condition/wait/agent/branch node is dropped on publish and the
+  // automation then runs every action unconditionally, with nothing reported.
+  // Flag it here so Publish disables and the toolbar lists the offending block
+  // (mirrors _EXECUTABLE_NODE_TYPES in backend workflow_service.py).
+  nodes.forEach((node) => {
+    if (node.type && !EXECUTABLE_NODE_TYPES.has(node.type)) {
+      errors.push({
+        nodeId: node.id,
+        message: `${node.type} steps can't run in a published automation yet — remove it to publish`,
+        severity: "error",
+      });
+    }
+  });
 
   // Check for disconnected nodes (except triggers which are entry points)
   const connectedNodes = new Set<string>();
