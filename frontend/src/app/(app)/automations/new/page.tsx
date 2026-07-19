@@ -10,6 +10,7 @@ import { Node, Edge } from "@xyflow/react";
 
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { api, AutomationModule, GeneratedWorkflow } from "@/lib/api";
+import { getApiErrorMessage } from "@/lib/utils";
 import {
   AUTOMATION_TEMPLATES,
   AutomationTemplate,
@@ -71,6 +72,7 @@ export default function NewAutomationPage() {
   const [description, setDescription] = useState(template?.description || "");
   const [isCreating, setIsCreating] = useState(false);
   const [automationId, setAutomationId] = useState<string | null>(null);
+  const [isPublished, setIsPublished] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Synchronous mirror of `automationId` so handlers that fire
   // RIGHT AFTER an auto-create (e.g. canvas's handleTest → onSave
@@ -135,7 +137,7 @@ export default function NewAutomationPage() {
       updateAutomationId(response.data.id);
       return response.data.id;
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to create automation";
+      const errorMessage = getApiErrorMessage(err, "Failed to create automation");
       setError(errorMessage);
       return null;
     } finally {
@@ -156,7 +158,7 @@ export default function NewAutomationPage() {
       // Create automation if not exists
       if (!currentAutomationId) {
         currentAutomationId = await handleCreateAutomation();
-        if (!currentAutomationId) return;
+        if (!currentAutomationId) throw new Error("Failed to create automation");
       }
 
       // Update workflow (workflow endpoints are under /crm/automations)
@@ -177,37 +179,49 @@ export default function NewAutomationPage() {
             trigger_type: triggerType,
           }
         );
+        setError(null);
       } catch (err: unknown) {
-        const errorMessage = err instanceof Error ? err.message : "Failed to save workflow";
+        const errorMessage = getApiErrorMessage(err, "Failed to save workflow");
         setError(errorMessage);
+        throw err;
       }
     },
     [workspaceId, automationId, handleCreateAutomation]
   );
 
   const handlePublish = useCallback(async () => {
-    if (!workspaceId || !automationId) return;
+    if (!workspaceId || !automationId) {
+      throw new Error("Save the automation before publishing");
+    }
 
     try {
-      await api.post(
+      const response = await api.post(
         `/workspaces/${workspaceId}/crm/automations/${automationId}/workflow/publish`
       );
+      setIsPublished(response.data?.is_published === true);
+      setError(null);
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to publish workflow";
+      const errorMessage = getApiErrorMessage(err, "Failed to publish workflow");
       setError(errorMessage);
+      throw new Error(errorMessage);
     }
   }, [workspaceId, automationId]);
 
   const handleUnpublish = useCallback(async () => {
-    if (!workspaceId || !automationId) return;
+    if (!workspaceId || !automationId) {
+      throw new Error("Save the automation before unpublishing");
+    }
 
     try {
-      await api.post(
+      const response = await api.post(
         `/workspaces/${workspaceId}/crm/automations/${automationId}/workflow/unpublish`
       );
+      setIsPublished(response.data?.is_published === true);
+      setError(null);
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to unpublish workflow";
+      const errorMessage = getApiErrorMessage(err, "Failed to unpublish workflow");
       setError(errorMessage);
+      throw new Error(errorMessage);
     }
   }, [workspaceId, automationId]);
 
@@ -229,10 +243,12 @@ export default function NewAutomationPage() {
             ...(recordId?.trim() ? { record_id: recordId.trim() } : {}),
           }
         );
+        setError(null);
         return response.data;
       } catch (err: unknown) {
-        const errorMessage = err instanceof Error ? err.message : "Failed to test workflow";
+        const errorMessage = getApiErrorMessage(err, "Failed to test workflow");
         setError(errorMessage);
+        throw err;
       }
     },
     [workspaceId, automationId]
@@ -391,6 +407,7 @@ export default function NewAutomationPage() {
                 ? (generatedWorkflow.edges as unknown as Edge[])
                 : getDefaultEdges(template)
             }
+            isPublished={isPublished}
             onSave={handleSave}
             onPublish={handlePublish}
             onUnpublish={handleUnpublish}

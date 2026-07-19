@@ -740,7 +740,9 @@ export function NodeConfigPanel({
             </div>
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="text-sm text-muted-foreground">Body</label>
+                <label className="text-sm text-muted-foreground">
+                  Body <span className="text-red-400">*</span>
+                </label>
                 <InlineFieldPicker
                   workspaceId={workspaceId}
                   automationId={automationId}

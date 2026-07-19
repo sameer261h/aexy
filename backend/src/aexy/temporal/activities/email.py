@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import uuid4
 
 from temporalio import activity
 
@@ -51,6 +52,8 @@ class SendWorkflowEmailInput:
     from_email: str | None = None
     record_id: str | None = None
     execution_id: str | None = None
+    automation_run_id: str | None = None
+    automation_step_order: int | None = None
     track_opens: bool = True
     track_clicks: bool = True
 
@@ -179,20 +182,119 @@ async def send_workflow_email(input: SendWorkflowEmailInput) -> dict[str, Any]:
 
     async with async_session_maker() as db:
         service = EmailCampaignService(db)
-        result = await service.send_workflow_email(
-            workspace_id=input.workspace_id,
-            to_email=input.to_email,
-            subject=input.subject,
-            html_body=input.html_body,
-            from_name=input.from_name,
-            from_email=input.from_email,
-            record_id=input.record_id,
-            execution_id=input.execution_id,
-            track_opens=input.track_opens,
-            track_clicks=input.track_clicks,
-        )
+        try:
+            result = await service.send_workflow_email(
+                workspace_id=input.workspace_id,
+                to_email=input.to_email,
+                subject=input.subject,
+                html_body=input.html_body,
+                from_name=input.from_name,
+                from_email=input.from_email,
+                record_id=input.record_id,
+                execution_id=input.execution_id,
+                track_opens=input.track_opens,
+                track_clicks=input.track_clicks,
+            )
+        except Exception as error:
+            try:
+                await _record_automation_email_result(
+                    db,
+                    input,
+                    {"status": "failed", "error": str(error), "to": input.to_email},
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                logger.exception("Could not record failed workflow email result")
+            raise
+
+        await _record_automation_email_result(db, input, result)
         await db.commit()
         return result
+
+
+async def _record_automation_email_result(
+    db: Any,
+    input: SendWorkflowEmailInput,
+    result: dict[str, Any],
+) -> None:
+    """Write the provider's final email outcome back to a CRM automation run."""
+    if not input.automation_run_id:
+        return
+
+    from aexy.models.crm import CRMAutomation, CRMAutomationRun, CRMActivity
+
+    run = await db.get(CRMAutomationRun, input.automation_run_id)
+    if not run:
+        logger.warning("Automation run %s was not found for email result", input.automation_run_id)
+        return
+
+    email_sent = result.get("status") == "sent"
+    reason = result.get("reason") or result.get("error")
+    steps = [dict(step) for step in (run.steps_executed or [])]
+
+    for step in steps:
+        if step.get("type") == "send_email" and step.get("order") == input.automation_step_order:
+            if step.get("status") != "queued":
+                logger.info(
+                    "Ignoring duplicate email result for automation run %s step %s",
+                    run.id,
+                    input.automation_step_order,
+                )
+                return
+            step["status"] = "sent" if email_sent else "failed"
+            step["result"] = result
+            if not email_sent:
+                step["error"] = str(reason or "Email was not sent")
+            break
+    else:
+        logger.warning("No queued email step found for automation run %s", run.id)
+        return
+
+    run.steps_executed = steps
+    email_steps = [step for step in steps if step.get("type") == "send_email"]
+    if any(step.get("status") == "queued" for step in email_steps):
+        return
+
+    automation = await db.get(CRMAutomation, run.automation_id)
+    run.completed_at = datetime.now(timezone.utc)
+    run.duration_ms = int(
+        (run.completed_at - run.started_at).total_seconds() * 1000
+    ) if run.started_at else None
+
+    if any(step.get("status") == "failed" for step in email_steps):
+        run.status = "failed"
+        run.error_message = str(reason or "Email was not sent")
+        if automation:
+            automation.failed_runs += 1
+    else:
+        run.status = "completed"
+        if automation:
+            automation.successful_runs += 1
+
+    if input.record_id and automation:
+        outcome = "email sent" if email_sent else "email not sent"
+        db.add(
+            CRMActivity(
+                id=str(uuid4()),
+                workspace_id=automation.workspace_id,
+                record_id=input.record_id,
+                activity_type="automation.triggered",
+                actor_type="automation",
+                actor_id=None,
+                actor_name=automation.name,
+                title=f'Automation "{automation.name}" {outcome}',
+                description=None if email_sent else str(reason or "Email was not sent"),
+                activity_metadata={
+                    "automation_id": automation.id,
+                    "run_id": run.id,
+                    "email_status": "sent" if email_sent else "not_sent",
+                    "reason": reason,
+                    "to": result.get("to", input.to_email),
+                },
+                occurred_at=run.completed_at,
+            )
+        )
 
 
 @activity.defn

@@ -3,6 +3,7 @@
 import asyncio
 import httpx
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -339,12 +340,15 @@ class CRMAutomationService:
                 if not await self._evaluate_conditions(automation.conditions, record):
                     run.status = "completed"
                     run.completed_at = datetime.now(timezone.utc)
-                    run.steps_executed.append({
-                        "type": "conditions",
-                        "status": "skipped",
-                        "reason": "Conditions not met",
-                        "executed_at": datetime.now(timezone.utc).isoformat(),
-                    })
+                    run.steps_executed = [
+                        *(run.steps_executed or []),
+                        {
+                            "type": "conditions",
+                            "status": "skipped",
+                            "reason": "Conditions not met",
+                            "executed_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    ]
                     await self.db.flush()
                     return
 
@@ -367,30 +371,41 @@ class CRMAutomationService:
                         automation.workspace_id,
                         trigger_data=run.trigger_data,
                         run_id=str(run.id),
+                        action_index=i,
                     )
-                    step_result["status"] = "success"
+                    if action_type == "send_email" and result.get("error"):
+                        raise ValueError(str(result["error"]))
+
+                    step_result["status"] = "queued" if result.get("queued") else "success"
                     step_result["result"] = result
                 except Exception as e:
                     step_result["status"] = "failed"
                     step_result["error"] = str(e)
 
                     if automation.error_handling == "stop":
-                        run.steps_executed.append(step_result)
+                        run.steps_executed = [*(run.steps_executed or []), step_result]
                         raise
 
-                run.steps_executed.append(step_result)
+                run.steps_executed = [*(run.steps_executed or []), step_result]
 
-            # Update stats
-            run.status = "completed"
-            run.completed_at = datetime.now(timezone.utc)
-            run.duration_ms = int(
-                (run.completed_at - run.started_at).total_seconds() * 1000
+            # Sending an email is asynchronous. A queued email is not yet a
+            # successful email; the Temporal activity records its final result.
+            has_queued_email = any(
+                step.get("type") == "send_email" and step.get("status") == "queued"
+                for step in run.steps_executed
             )
+            run.status = "queued" if has_queued_email else "completed"
+            if not has_queued_email:
+                run.completed_at = datetime.now(timezone.utc)
+                run.duration_ms = int(
+                    (run.completed_at - run.started_at).total_seconds() * 1000
+                )
 
             automation.total_runs += 1
-            automation.successful_runs += 1
             automation.runs_this_month += 1
             automation.last_run_at = datetime.now(timezone.utc)
+            if not has_queued_email:
+                automation.successful_runs += 1
 
         except Exception as e:
             run.status = "failed"
@@ -498,6 +513,7 @@ class CRMAutomationService:
         workspace_id: str,
         trigger_data: dict | None = None,
         run_id: str | None = None,
+        action_index: int | None = None,
     ) -> dict:
         """Execute a single automation action."""
         if action_type == "update_record":
@@ -517,7 +533,9 @@ class CRMAutomationService:
         elif action_type == "send_slack":
             return await self._action_send_slack(config, record, workspace_id, trigger_data)
         elif action_type == "send_email":
-            return await self._action_send_email(config, record, workspace_id, trigger_data)
+            return await self._action_send_email(
+                config, record, workspace_id, trigger_data, run_id, action_index
+            )
         # Uptime module actions
         elif action_type == "pause_monitor":
             return await self._action_pause_monitor(config, trigger_data)
@@ -977,16 +995,20 @@ class CRMAutomationService:
         record: CRMRecord | None,
         workspace_id: str,
         trigger_data: dict | None = None,
+        automation_run_id: str | None = None,
+        automation_step_order: int | None = None,
     ) -> dict:
         """Send an email notification.
 
         Config options:
-        - to: Direct email address to send to
+        - to: Direct email address or {{record.values.field}} from the record
         - email_field: Record field containing the email address
-        - email_subject: Subject line (supports {field_name} and {{trigger.field}} placeholders)
-        - email_body: Email body (supports {field_name} and {{trigger.field}} placeholders)
+        - email_subject: Subject line with record and trigger placeholders
+        - email_body: Email body with record and trigger placeholders
         """
-        email_to = config.get("to")
+        email_to = self._replace_placeholders(
+            str(config.get("to") or ""), record, trigger_data
+        ).strip()
 
         # If no direct email, try to get from record field
         if not email_to and record:
@@ -996,44 +1018,12 @@ class CRMAutomationService:
         if not email_to:
             return {"error": "No recipient email address specified"}
 
-        subject = config.get("email_subject", "")
-        body = config.get("email_body", "")
-
-        # Replace {{trigger.field}} placeholders from trigger_data
-        if trigger_data:
-            import re
-            trigger_pattern = re.compile(r"\{\{trigger\.([a-zA-Z0-9_.]+)\}\}")
-            for template in [subject, body]:
-                for match in trigger_pattern.finditer(template):
-                    field_path = match.group(1)
-                    value = trigger_data
-                    for part in field_path.split("."):
-                        if isinstance(value, dict):
-                            value = value.get(part)
-                        else:
-                            value = None
-                            break
-                    if value is not None:
-                        subject = subject.replace(match.group(0), str(value))
-                        body = body.replace(match.group(0), str(value))
-
-            # Also support simple {field} from trigger_data
-            for key, value in trigger_data.items():
-                if isinstance(value, (str, int, float, bool)):
-                    subject = subject.replace(f"{{{key}}}", str(value))
-                    body = body.replace(f"{{{key}}}", str(value))
-
-        # Replace placeholders in subject and body with record values
-        if record:
-            for key, value in record.values.items():
-                subject = subject.replace(f"{{{key}}}", str(value or ""))
-                body = body.replace(f"{{{key}}}", str(value or ""))
-            # Also support record metadata placeholders
-            subject = subject.replace("{record_id}", record.id)
-            body = body.replace("{record_id}", record.id)
-            if hasattr(record, "name") and record.name:
-                subject = subject.replace("{record_name}", record.name)
-                body = body.replace("{record_name}", record.name)
+        subject = self._replace_placeholders(
+            str(config.get("email_subject") or ""), record, trigger_data
+        )
+        body = self._replace_placeholders(
+            str(config.get("email_body") or ""), record, trigger_data
+        )
 
         # Queue the email via Temporal
         from aexy.temporal.dispatch import dispatch
@@ -1048,6 +1038,8 @@ class CRMAutomationService:
                 subject=subject,
                 html_body=body,
                 record_id=record.id if record else None,
+                automation_run_id=automation_run_id,
+                automation_step_order=automation_step_order,
             ),
             task_queue=TaskQueue.EMAIL,
         )
@@ -1398,39 +1390,57 @@ class CRMAutomationService:
         record: CRMRecord | None,
         trigger_data: dict | None,
     ) -> str:
-        """Replace placeholders in a template string with values from record and trigger_data."""
-        message = template
+        """Replace supported record and trigger placeholders in a CRM action."""
+        record_values = record.values if record else {}
+        record_name = (
+            getattr(record, "name", None) or getattr(record, "display_name", None)
+            if record else None
+        )
 
-        # Replace {{trigger.field}} placeholders from trigger_data
-        if trigger_data:
-            import re
-            trigger_pattern = re.compile(r"\{\{trigger\.([a-zA-Z0-9_.]+)\}\}")
-            for match in trigger_pattern.finditer(template):
-                field_path = match.group(1)
-                value = trigger_data
-                for part in field_path.split("."):
-                    if isinstance(value, dict):
-                        value = value.get(part)
-                    else:
-                        value = None
-                        break
-                if value is not None:
-                    message = message.replace(match.group(0), str(value))
+        def lookup(data: dict | None, path: str) -> Any:
+            value: Any = data or {}
+            for part in path.split("."):
+                if not isinstance(value, dict):
+                    return None
+                value = value.get(part)
+            return value
 
-            # Also support simple {field} from trigger_data
-            for key, value in trigger_data.items():
-                if isinstance(value, (str, int, float, bool)):
-                    message = message.replace(f"{{{key}}}", str(value))
+        def replace_double_braces(match: re.Match[str]) -> str:
+            path = match.group(1).strip()
+            value: Any = None
 
-        # Replace {field} placeholders from record values
+            if path == "record.id":
+                value = record.id if record else None
+            elif path in {"record.name", "record.display_name"}:
+                value = record_name
+            elif path.startswith("record.values."):
+                value = lookup(record_values, path.removeprefix("record.values."))
+            elif path.startswith("trigger."):
+                value = lookup(trigger_data, path.removeprefix("trigger."))
+            else:
+                return match.group(0)
+
+            return "" if value is None else str(value)
+
+        message = re.sub(
+            r"\{\{([^{}]+)\}\}",
+            replace_double_braces,
+            template,
+        )
+
         if record:
-            for key, value in record.values.items():
-                message = message.replace(f"{{{key}}}", str(value or ""))
-            message = message.replace("{record_id}", record.id)
-            if hasattr(record, "name") and record.name:
-                message = message.replace("{record_name}", record.name)
+            message = message.replace("{record_id}", str(record.id))
+            if record_name:
+                message = message.replace("{record_name}", str(record_name))
 
-        return message
+        def replace_legacy_field(match: re.Match[str]) -> str:
+            field = match.group(1)
+            value = (trigger_data or {}).get(field)
+            if value is None:
+                value = record_values.get(field)
+            return match.group(0) if value is None else str(value)
+
+        return re.sub(r"\{([a-zA-Z0-9_]+)\}", replace_legacy_field, message)
 
     # =========================================================================
     # SPRINT MODULE ACTIONS

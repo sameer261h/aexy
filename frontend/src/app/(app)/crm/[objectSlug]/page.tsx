@@ -126,7 +126,7 @@ export default function RecordsPage() {
   const { currentWorkspace } = useWorkspace();
   const workspaceId = currentWorkspace?.id || null;
 
-  const { objects } = useCRMObjects(workspaceId);
+  const { objects, isLoading: isLoadingObjects } = useCRMObjects(workspaceId);
   const currentObject = objects.find((obj) => obj.slug === objectSlug);
 
   // Saved views
@@ -321,7 +321,7 @@ export default function RecordsPage() {
     }
   };
 
-  if (!currentObject && !isLoading) {
+  if (!currentObject && !isLoadingObjects) {
     return (
       <div className="min-h-screen bg-background">
 <div className="p-8">

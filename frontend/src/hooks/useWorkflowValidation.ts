@@ -67,7 +67,7 @@ const validateActionNode = (node: Node): ValidationError[] => {
 
   // Email actions
   if (data.action_type === "send_email") {
-    if (!data.to && !data.email_template_id) {
+    if (!data.to && !data.email_field) {
       errors.push({
         nodeId: node.id,
         field: "to",
@@ -80,6 +80,14 @@ const validateActionNode = (node: Node): ValidationError[] => {
         nodeId: node.id,
         field: "email_subject",
         message: "Subject is required",
+        severity: "error",
+      });
+    }
+    if (!data.email_body && !data.email_template_id) {
+      errors.push({
+        nodeId: node.id,
+        field: "email_body",
+        message: "Email body or template is required",
         severity: "error",
       });
     }

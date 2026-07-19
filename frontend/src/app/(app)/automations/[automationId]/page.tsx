@@ -10,6 +10,7 @@ import { Node, Edge } from "@xyflow/react";
 
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { api, AutomationModule } from "@/lib/api";
+import { getApiErrorMessage } from "@/lib/utils";
 
 // WorkflowCanvas + @xyflow/react together are ~150 KB. Defer the load
 // so the detail page's metadata (name / description / module) renders
@@ -161,9 +162,11 @@ export default function EditAutomationPage() {
           }
         );
         setWorkflow(response.data);
+        setError(null);
       } catch (err: unknown) {
-        const errorMessage = err instanceof Error ? err.message : "Failed to save workflow";
+        const errorMessage = getApiErrorMessage(err, "Failed to save workflow");
         setError(errorMessage);
+        throw err;
       }
     },
     [workspaceId, automationId]
@@ -177,9 +180,11 @@ export default function EditAutomationPage() {
         `/workspaces/${workspaceId}/crm/automations/${automationId}/workflow/publish`
       );
       setWorkflow(response.data);
+      setError(null);
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to publish workflow";
+      const errorMessage = getApiErrorMessage(err, "Failed to publish workflow");
       setError(errorMessage);
+      throw new Error(errorMessage);
     }
   }, [workspaceId, automationId]);
 
@@ -191,9 +196,11 @@ export default function EditAutomationPage() {
         `/workspaces/${workspaceId}/crm/automations/${automationId}/workflow/unpublish`
       );
       setWorkflow(response.data);
+      setError(null);
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to unpublish workflow";
+      const errorMessage = getApiErrorMessage(err, "Failed to unpublish workflow");
       setError(errorMessage);
+      throw new Error(errorMessage);
     }
   }, [workspaceId, automationId]);
 
@@ -210,10 +217,12 @@ export default function EditAutomationPage() {
             ...(recordId?.trim() ? { record_id: recordId.trim() } : {}),
           }
         );
+        setError(null);
         return response.data;
       } catch (err: unknown) {
-        const errorMessage = err instanceof Error ? err.message : "Failed to test workflow";
+        const errorMessage = getApiErrorMessage(err, "Failed to test workflow");
         setError(errorMessage);
+        throw err;
       }
     },
     [workspaceId, automationId]

@@ -611,6 +611,10 @@ function WorkflowCanvasInner({
           // Ignore version fetch errors
         }
       }
+    } catch (error) {
+      // The page already shows the specific save error. Catch it here so a
+      // rejected click handler does not create a development-overlay error.
+      console.error("Workflow save failed:", error);
     } finally {
       setIsSaving(false);
     }
@@ -1031,11 +1035,6 @@ function WorkflowCanvasInner({
         onClose={() => {
           setShowExecutionHistory(false);
           setHighlightedNodeIds(new Set());
-        }}
-        onSelectExecution={(execution) => {
-          // Highlight nodes that were executed
-          const executedNodeIds = new Set(execution.steps.map((s) => s.node_id));
-          setHighlightedNodeIds(executedNodeIds);
         }}
       />
 

@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 /** Each row in the validation popover. Toolbar doesn't need the full
  *  ValidationError shape — just enough to render and to wire a
@@ -105,9 +106,19 @@ export function WorkflowToolbar({
     try {
       if (isPublished) {
         await onUnpublish();
+        toast.success("Automation unpublished", {
+          description: "It will no longer run when a CRM record is created.",
+        });
       } else {
         await onPublish();
+        toast.success("Automation published", {
+          description: "The automation is now published. To test a recipient taken from a record, enter the ID of a real CRM record with an email address.",
+        });
       }
+    } catch (error) {
+      toast.error(isPublished ? "Couldn't unpublish the automation" : "Couldn't publish the automation", {
+        description: error instanceof Error ? error.message : "Please try again.",
+      });
     } finally {
       setIsPublishing(false);
     }
@@ -212,16 +223,22 @@ export function WorkflowToolbar({
         {/* Publish/Unpublish button */}
         <button
           onClick={handlePublish}
-          disabled={isPublishing || hasChanges}
+          disabled={isPublishing || (!isPublished && (hasChanges || validationErrors > 0))}
           className={`
             flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
             ${isPublished
               ? "bg-amber-500/20 text-amber-400 hover:bg-amber-500/30"
               : "bg-green-500/20 text-green-400 hover:bg-green-500/30"
             }
-            ${hasChanges ? "opacity-50 cursor-not-allowed" : ""}
+            ${!isPublished && (hasChanges || validationErrors > 0) ? "opacity-50 cursor-not-allowed" : ""}
           `}
-          title={hasChanges ? "Save changes before publishing" : ""}
+          title={
+            !isPublished && hasChanges
+              ? "Save changes before publishing"
+              : !isPublished && validationErrors > 0
+                ? "Fix validation errors before publishing"
+                : ""
+          }
         >
           {isPublishing ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -454,27 +471,20 @@ export function WorkflowToolbar({
                 htmlFor="test-record-id"
                 className="block text-sm text-muted-foreground mb-1"
               >
-                Record ID (optional)
+                Record ID
               </label>
-              <div className="flex gap-2">
+              <div>
                 <input
                   id="test-record-id"
                   type="text"
                   value={testRecordId}
                   onChange={(e) => setTestRecordId(e.target.value)}
-                  placeholder="Enter a record ID to test with..."
-                  className="flex-1 bg-accent border border-border rounded-lg px-3 py-2 text-foreground text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  placeholder="Paste a record ID to test with..."
+                  className="w-full bg-accent border border-border rounded-lg px-3 py-2 text-foreground text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 />
-                <button
-                  type="button"
-                  onClick={() => setTestRecordId(crypto.randomUUID())}
-                  className="px-3 py-2 bg-accent border border-border rounded-lg text-foreground text-sm hover:bg-muted transition-colors whitespace-nowrap"
-                >
-                  Generate
-                </button>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Leave empty for a dry run, or generate a mock ID for testing
+                Leave empty only when this workflow does not use record values. Fields like {"{{record.values.email}}"} need the ID of a real record.
               </p>
             </div>
 

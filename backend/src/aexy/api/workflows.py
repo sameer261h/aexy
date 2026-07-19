@@ -120,8 +120,8 @@ async def update_workflow(
     service = WorkflowService(db)
 
     # Pre-process data to avoid accessing Pydantic models after potential rollback
-    nodes_data = [n.model_dump() for n in data.nodes] if data.nodes else None
-    edges_data = [e.model_dump(by_alias=True) for e in data.edges] if data.edges else None
+    nodes_data = [n.model_dump() for n in data.nodes] if data.nodes is not None else None
+    edges_data = [e.model_dump(by_alias=True) for e in data.edges] if data.edges is not None else None
     viewport_data = data.viewport.model_dump() if data.viewport else None
 
     # Validate if nodes and edges are provided
