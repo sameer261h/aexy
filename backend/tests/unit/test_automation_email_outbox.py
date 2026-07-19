@@ -165,6 +165,10 @@ async def test_the_immediate_drain_only_touches_its_own_run(db_session, drain):
     payload = dispatch.await_args.args[1]
     assert payload.automation_run_id == mine.id
     assert payload.automation_run_id != theirs.id
+    # Without this the same workflow id can be started again once the first
+    # has closed, so a send that completed but lost its bookkeeping is redone
+    # by the sweep and the customer gets a second copy.
+    assert dispatch.await_args.kwargs.get("reject_duplicate_id") is True
 
 
 async def test_a_rejected_duplicate_handover_is_not_a_failure(db_session, drain):
@@ -210,3 +214,30 @@ async def test_an_unrelated_already_exists_error_is_still_a_failure(db_session, 
         await db_session.execute(sqlalchemy.select(CRMAutomationEmailOutbox.status))
     ).scalar_one()
     assert status == "pending", "must stay retryable, not be marked delivered"
+
+
+async def test_one_exhausted_email_does_not_condemn_its_siblings(db_session, drain):
+    """Found in review: giving up on one email failed every queued step on the
+    run, so a sibling that later delivered could no longer record itself and
+    would show as failed despite reaching the customer."""
+    automation, run, row_a = await _seed(db_session, attempts=outbox_service.MAX_ATTEMPTS - 1)
+    run.steps_executed = [
+        {"type": "send_email", "order": 0, "status": "queued"},
+        {"type": "send_email", "order": 1, "status": "queued"},
+    ]
+    sibling = CRMAutomationEmailOutbox(
+        id=str(uuid4()), automation_run_id=run.id, step_order=1,
+        payload=dict(row_a.payload, automation_step_order=1),
+        status="pending", attempts=0,
+    )
+    db_session.add(sibling)
+    await db_session.commit()
+
+    with patch(
+        "aexy.temporal.dispatch.dispatch",
+        new=AsyncMock(side_effect=RuntimeError("worker unreachable")),
+    ):
+        await drain(run_id=run.id)
+
+    statuses = [s["status"] for s in run.steps_executed]
+    assert statuses[1] == "queued", "the sibling still in flight must be left alone"

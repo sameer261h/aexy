@@ -96,15 +96,18 @@ async def drain_outbox(run_id: str | None = None, limit: int = 50) -> dict:
 
                 try:
                     # Naming the workflow after the outbox row makes a repeat
-                    # handover harmless: if a dispatch hangs past the stale
-                    # cutoff and the sweep reclaims it, the second start is
-                    # rejected while the first is still running rather than
-                    # sending the customer a second copy.
+                    # handover harmless. reject_duplicate_id is what actually
+                    # makes that true: the default policy only refuses a start
+                    # while the first is still RUNNING, so a send that
+                    # completed and then lost its bookkeeping - process killed
+                    # before the row was marked dispatched - would be reclaimed
+                    # by the sweep and sent to the customer a second time.
                     await dispatch(
                         "send_workflow_email",
                         SendWorkflowEmailInput(**row.payload),
                         task_queue=TaskQueue.EMAIL,
                         workflow_id=f"send_workflow_email-outbox-{row.id}",
+                        reject_duplicate_id=True,
                     )
                 except Exception as e:
                     # The workflow id is derived from this row, so Temporal's
@@ -147,7 +150,7 @@ async def drain_outbox(run_id: str | None = None, limit: int = 50) -> dict:
                         # Otherwise the row is simply never looked at again and
                         # the run sits on "queued" forever with nothing saying
                         # why - the silent failure this work exists to remove.
-                        await _fail_run(db, row.automation_run_id, str(e))
+                        await _fail_run(db, row.automation_run_id, row.step_order, str(e))
                     await db.commit()
                     failed += 1
                     continue
@@ -170,7 +173,12 @@ async def drain_outbox(run_id: str | None = None, limit: int = 50) -> dict:
 
 
 def _is_already_started(error: BaseException | None) -> bool:
-    """Whether Temporal rejected the start because this one is already running.
+    """Whether Temporal refused the start because this row was handed over before.
+
+    Covers both a still-running first handoff and - because the outbox handoff
+    sets reject_duplicate_id - one that already completed. Either way it means
+    a handoff for this row happened; it does not by itself mean the email was
+    delivered.
 
     Typed-only, deliberately. Matching on the error text would let an unrelated
     failure that happens to contain "already exists" - a unique-constraint
@@ -189,9 +197,39 @@ def _is_already_started(error: BaseException | None) -> bool:
     return False
 
 
-async def _fail_run(db, run_id: str, error: str) -> None:
-    """Give up on an email and say so on the run, rather than going quiet."""
+async def _fail_run(db, run_id: str, step_order: int, error: str) -> None:
+    """Give up on one email and say so, rather than going quiet.
+
+    Scoped to the step that actually failed. Failing every queued step of the
+    run would condemn siblings that are still in flight, and a sibling that
+    later delivers could no longer record itself - a delivered email shown as
+    failed, which is the same lie in the other direction.
+    """
     from aexy.models.crm import CRMAutomation, CRMAutomationRun
+
+    run = await db.get(CRMAutomationRun, run_id)
+    if not run:
+        return
+
+    steps = [dict(step) for step in (run.steps_executed or [])]
+    for step in steps:
+        if step.get("order") == step_order and step.get("status") == "queued":
+            step["status"] = "failed"
+            step["error"] = f"Email could not be sent: {error}"[:500]
+    run.steps_executed = steps
+
+    # Other emails on this run may still be waiting; the run is only decided
+    # once none of them are.
+    still_waiting = (
+        await db.execute(
+            select(CRMAutomationEmailOutbox.id).where(
+                CRMAutomationEmailOutbox.automation_run_id == run_id,
+                CRMAutomationEmailOutbox.status.in_(["pending", "dispatching"]),
+            )
+        )
+    ).first()
+    if still_waiting:
+        return
 
     # Claim the run before touching the counters. Two of its emails can exhaust
     # at the same moment, and both drainers would otherwise read it as queued
@@ -207,16 +245,6 @@ async def _fail_run(db, run_id: str, error: str) -> None:
     if claimed.rowcount == 0:
         return
 
-    run = await db.get(CRMAutomationRun, run_id)
-    if not run:
-        return
-
-    steps = [dict(step) for step in (run.steps_executed or [])]
-    for step in steps:
-        if step.get("status") == "queued":
-            step["status"] = "failed"
-            step["error"] = f"Email could not be sent: {error}"[:500]
-    run.steps_executed = steps
     run.status = "failed"
     run.error_message = f"Email could not be sent: {error}"[:500]
     run.completed_at = datetime.now(timezone.utc)
