@@ -54,10 +54,9 @@ async def test_notifies_every_admin_by_email():
     assert result["success"] is True
     assert result["recipients_notified"] == 2
     assert service._action_send_email.await_count == 2
-    # The person who moved the deal is excluded at the query, not after the fact.
-    workspace_service.get_workspace_admins.assert_awaited_once_with(
-        "ws-1", exclude_developer_id="dev-9"
-    )
+    # Admins are fetched unfiltered so "nobody but the actor" can be told apart
+    # from "no admins at all"; the actor is excluded afterwards.
+    workspace_service.get_workspace_admins.assert_awaited_once_with("ws-1")
     # Subject/body come from the builder's field names, not blank defaults.
     sent = service._action_send_email.await_args_list[0].args[0]
     assert sent["email_subject"] == "Deal stage changed"
@@ -119,3 +118,92 @@ async def test_specific_email_sends_without_an_aexy_user_account():
     assert args[0]["to"] == "customer@example.com"
     assert args[0]["email_subject"] == "Deal stage changed"
     assert args[4:] == ("run-1", 2)
+
+
+@pytest.mark.asyncio
+async def test_solo_admin_moving_own_deal_is_a_no_op_not_a_failure():
+    """A workspace whose only admin is the actor has nobody left to tell.
+
+    That is the exclusion working, not a failure, so the run must not be
+    recorded as failed on every self-triggered stage change.
+    """
+    members = [_member("dev-1", "owner@example.com")]
+    service, workspace_service = _service_with_admins(members)
+
+    with patch(
+        "aexy.services.workspace_service.WorkspaceService",
+        return_value=workspace_service,
+    ):
+        result = await service._action_notify_user(
+            {"notify_type": "workspace_admin", "channel": "email"},
+            None,
+            "ws-1",
+            {"changed_by_id": "dev-1"},
+        )
+
+    assert result["success"] is True
+    assert result["skipped"] is True
+    assert "error" not in result
+    service._action_send_email.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_undelivered_notification_reports_a_top_level_error():
+    """The executor only fails a step on a top-level "error".
+
+    A nested-only failure was recorded as a successful step.
+    """
+    service = CRMAutomationService(db=None)
+    service._action_send_email = AsyncMock(
+        return_value={"error": "No recipient email address specified"}
+    )
+
+    result = await service._action_notify_user(
+        {"notify_type": "email", "notify_email": "{{record.values.missing}}"},
+        None,
+        "ws-1",
+        None,
+    )
+
+    assert result["success"] is False
+    assert result["error"] == "No notification could be delivered"
+
+
+@pytest.mark.asyncio
+async def test_undelivered_slack_notification_reports_a_top_level_error():
+    """Reachable over the API even though no screen offers a channel picker."""
+    service = CRMAutomationService(db=None)
+    service._action_send_slack = AsyncMock(return_value={"success": False})
+    service._action_send_email = AsyncMock(return_value={"success": True})
+
+    result = await service._action_notify_user(
+        {"notify_type": "email", "notify_email": "a@example.com", "channel": "slack"},
+        None,
+        "ws-1",
+        None,
+    )
+
+    assert result["success"] is False
+    assert result["error"] == "No notification could be delivered"
+
+
+@pytest.mark.asyncio
+async def test_queued_email_is_not_treated_as_a_failure():
+    """Guards against over-correcting: a handed-off email is not an error."""
+    service = CRMAutomationService(db=None)
+    service._action_send_email = AsyncMock(
+        return_value={"success": True, "queued": True}
+    )
+
+    result = await service._action_notify_user(
+        {"notify_type": "email", "notify_email": "a@example.com"},
+        None,
+        "ws-1",
+        None,
+        "run-1",
+        0,
+    )
+
+    assert result["success"] is True
+    assert result["queued"] is True
+    assert "error" not in result

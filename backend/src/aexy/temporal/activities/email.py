@@ -38,6 +38,11 @@ class CheckScheduledCampaignsInput:
 
 
 @dataclass
+class DrainAutomationEmailOutboxInput:
+    pass
+
+
+@dataclass
 class AggregateDailyAnalyticsInput:
     pass
 
@@ -174,6 +179,24 @@ async def aggregate_daily_analytics(input: AggregateDailyAnalyticsInput) -> dict
 
 
 @activity.defn
+async def drain_automation_email_outbox(
+    input: DrainAutomationEmailOutboxInput,
+) -> dict[str, Any]:
+    """Backstop for the request-path handoff.
+
+    The request path drains the outbox itself right after committing, so this
+    normally finds nothing. It exists for when that never happened - process
+    killed between commit and handoff, or the worker unreachable at the time.
+    """
+    from aexy.services.automation_email_outbox import drain_outbox
+
+    result = await drain_outbox()
+    if result["dispatched"] or result["failed"]:
+        logger.info("Outbox sweep: %s", result)
+    return result
+
+
+@activity.defn
 async def send_workflow_email(input: SendWorkflowEmailInput) -> dict[str, Any]:
     """Send tracked email from workflow action."""
     logger.info(f"Sending workflow email to {input.to_email}")
@@ -262,19 +285,32 @@ async def _record_automation_email_result(
         return
 
     automation = await db.get(CRMAutomation, run.automation_id)
+
+    # The executor already counted this run if it reached a verdict of its own
+    # (a later step failing under "stop" finalizes the run while an earlier
+    # email is still in flight). Counting again here would double it.
+    already_counted = run.status in {"completed", "failed"}
+
     run.completed_at = datetime.now(timezone.utc)
     run.duration_ms = int(
         (run.completed_at - run.started_at).total_seconds() * 1000
     ) if run.started_at else None
 
-    if any(step.get("status") == "failed" for step in email_steps):
+    # Any failed step fails the run, not just a failed email: under
+    # error_handling="continue" an earlier step can have failed and still
+    # reach here, and reporting the run completed would contradict it.
+    failed_steps = [step for step in steps if step.get("status") == "failed"]
+    if failed_steps:
         run.status = "failed"
-        run.error_message = str(reason or "Email was not sent")
-        if automation:
+        if any(step.get("status") == "failed" for step in email_steps):
+            run.error_message = str(reason or "Email was not sent")
+        else:
+            run.error_message = str(failed_steps[0].get("error") or "A step failed")
+        if automation and not already_counted:
             automation.failed_runs += 1
     else:
         run.status = "completed"
-        if automation:
+        if automation and not already_counted:
             automation.successful_runs += 1
 
     if input.record_id and automation:

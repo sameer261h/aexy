@@ -17,6 +17,7 @@ from sqlalchemy.orm import selectinload
 from aexy.models.crm import (
     CRMAutomation,
     CRMAutomationRun,
+    CRMAutomationEmailOutbox,
     CRMAutomationTriggerType,
     CRMRecord,
     CRMSequence,
@@ -395,18 +396,34 @@ class CRMAutomationService:
                 and step.get("status") == "queued"
                 for step in run.steps_executed
             )
-            run.status = "queued" if has_queued_email else "completed"
-            if not has_queued_email:
+            # A step that failed under error_handling="continue"/"retry" never
+            # reaches the outer handler, so without this the run is reported
+            # completed and successful while its own step list says otherwise.
+            failed_steps = [
+                step for step in run.steps_executed if step.get("status") == "failed"
+            ]
+
+            if has_queued_email:
+                run.status = "queued"
+            else:
+                run.status = "failed" if failed_steps else "completed"
                 run.completed_at = datetime.now(timezone.utc)
                 run.duration_ms = int(
                     (run.completed_at - run.started_at).total_seconds() * 1000
                 )
+                if failed_steps:
+                    run.error_message = str(
+                        failed_steps[0].get("error") or "A step failed"
+                    )
 
             automation.total_runs += 1
             automation.runs_this_month += 1
             automation.last_run_at = datetime.now(timezone.utc)
             if not has_queued_email:
-                automation.successful_runs += 1
+                if failed_steps:
+                    automation.failed_runs += 1
+                else:
+                    automation.successful_runs += 1
 
         except Exception as e:
             run.status = "failed"
@@ -1005,6 +1022,7 @@ class CRMAutomationService:
         trigger_data: dict | None = None,
         automation_run_id: str | None = None,
         automation_step_order: int | None = None,
+        outbox_run_id: str | None = None,
     ) -> dict:
         """Send an email notification.
 
@@ -1014,6 +1032,9 @@ class CRMAutomationService:
         - email_subject: Subject line with record and trigger placeholders
         - email_body: Email body with record and trigger placeholders
         """
+        # The payload's run id is only set when the worker should reconcile
+        # against a step; the outbox row itself always belongs to its run.
+        outbox_run_id = outbox_run_id or automation_run_id
         email_to = self._replace_placeholders(
             str(config.get("to") or ""), record, trigger_data
         ).strip()
@@ -1033,24 +1054,61 @@ class CRMAutomationService:
             str(config.get("email_body") or ""), record, trigger_data
         )
 
-        # Queue the email via Temporal
-        from aexy.temporal.dispatch import dispatch
-        from aexy.temporal.task_queues import TaskQueue
-        from aexy.temporal.activities.email import SendWorkflowEmailInput
+        # Record the intent to send in this same transaction rather than
+        # starting the workflow here. Dispatching inline handed work to the
+        # worker before the run (and its step list, written only after this
+        # returns) was committed, so the worker found nothing and gave up,
+        # stranding the run on "queued". An outbox row cannot exist unless the
+        # run does, so that ordering problem cannot happen at all.
+        #
+        # Every automation email goes through here, including each recipient of
+        # a multi-recipient notification. Those carry no run reference in the
+        # payload, because the worker matches a result to one step and would
+        # let the first recipient's outcome close a run the others are still
+        # working through - but they are still written and committed with the
+        # run, so an undone record change undoes its emails too.
+        if outbox_run_id is not None:
+            self.db.add(
+                CRMAutomationEmailOutbox(
+                    id=str(uuid4()),
+                    automation_run_id=outbox_run_id,
+                    step_order=automation_step_order or 0,
+                    payload={
+                        "workspace_id": workspace_id,
+                        "to_email": email_to,
+                        "subject": subject,
+                        "html_body": body,
+                        "record_id": record.id if record else None,
+                        "automation_run_id": automation_run_id,
+                        "automation_step_order": automation_step_order,
+                    },
+                    status="pending",
+                )
+            )
+            # Tells the request path what to drain once it commits, so
+            # delivery stays near-instant instead of waiting for the sweep.
+            # Scoped to this run's emails: a user's request should not be made
+            # to carry every other workspace's pending work.
+            self.db.info.setdefault("automation_outbox_pending", set()).add(
+                outbox_run_id
+            )
+        else:
+            # No run at all (direct/manual send). Nothing to strand.
+            from aexy.temporal.dispatch import dispatch
+            from aexy.temporal.task_queues import TaskQueue
+            from aexy.temporal.activities.email import SendWorkflowEmailInput
 
-        await dispatch(
-            "send_workflow_email",
-            SendWorkflowEmailInput(
-                workspace_id=workspace_id,
-                to_email=email_to,
-                subject=subject,
-                html_body=body,
-                record_id=record.id if record else None,
-                automation_run_id=automation_run_id,
-                automation_step_order=automation_step_order,
-            ),
-            task_queue=TaskQueue.EMAIL,
-        )
+            await dispatch(
+                "send_workflow_email",
+                SendWorkflowEmailInput(
+                    workspace_id=workspace_id,
+                    to_email=email_to,
+                    subject=subject,
+                    html_body=body,
+                    record_id=record.id if record else None,
+                ),
+                task_queue=TaskQueue.EMAIL,
+            )
 
         return {
             "success": True,
@@ -1301,15 +1359,27 @@ class CRMAutomationService:
 
             # Don't notify the person who caused the change about their own action.
             actor_id = (trigger_data or {}).get("changed_by_id")
-            members = await WorkspaceService(self.db).get_workspace_admins(
-                workspace_id, exclude_developer_id=actor_id
-            )
-            recipient_emails = [
-                member.developer.email
+            members = await WorkspaceService(self.db).get_workspace_admins(workspace_id)
+            admin_emails = {
+                str(member.developer.id): member.developer.email
                 for member in members
                 if member.developer and member.developer.email
+            }
+            recipient_emails = [
+                email
+                for developer_id, email in admin_emails.items()
+                if developer_id != str(actor_id)
             ]
             if not recipient_emails:
+                # Nobody left only because the sole admin is the actor: the
+                # intent ("don't tell someone about their own action") is
+                # satisfied, so this is a no-op, not a failed run.
+                if admin_emails:
+                    return {
+                        "success": True,
+                        "skipped": True,
+                        "reason": "Only workspace admin is the person who made the change",
+                    }
                 return {"error": "No workspace owners or admins to notify"}
         else:
             if not user_id and not user_email:
@@ -1354,6 +1424,10 @@ class CRMAutomationService:
                     trigger_data,
                     automation_run_id if len(recipient_emails) == 1 else None,
                     automation_step_order if len(recipient_emails) == 1 else None,
+                    # The row still belongs to this run even when the worker
+                    # must not reconcile against it, so a rolled-back record
+                    # change takes every recipient's email with it.
+                    outbox_run_id=automation_run_id,
                 )
                 if email_result.get("success"):
                     results["channels_notified"].append("email")
@@ -1361,6 +1435,11 @@ class CRMAutomationService:
 
         results["recipients_notified"] = len(recipient_emails)
         results["success"] = len(results["channels_notified"]) > 0
+        # A delivery failure is nested under results["slack"]/["email"], but the
+        # executor only fails a step on a top-level "error". Surface it, or a
+        # notification that delivered nothing is recorded as a success.
+        if not results["channels_notified"]:
+            results["error"] = "No notification could be delivered"
         if len(recipient_emails) == 1 and results.get("email", {}).get("queued"):
             results["queued"] = True
         return results

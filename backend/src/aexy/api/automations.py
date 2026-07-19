@@ -294,18 +294,26 @@ async def trigger_automation_manually(
     if not automation or automation.workspace_id != workspace_id:
         raise HTTPException(status_code=404, detail="Automation not found")
 
-    # Run in background
+    # Run in background on its own session: the request's session is torn down
+    # before background tasks run, so borrowing it leaves this work uncommitted.
     async def run_automation():
-        async_service = AutomationService(db)
-        await async_service.trigger_automation(
-            automation_id=automation_id,
-            record_id=record_id,
-            trigger_data={
-                "manual_trigger": True,
-                "triggered_by": current_user.id,
-                "module": automation.module,
-            },
-        )
+        from aexy.core.database import get_async_session
+        from aexy.services.automation_email_outbox import drain_outbox
+
+        async with get_async_session() as task_db:
+            run = await AutomationService(task_db).trigger_automation(
+                automation_id=automation_id,
+                record_id=record_id,
+                trigger_data={
+                    "manual_trigger": True,
+                    "triggered_by": current_user.id,
+                    "module": automation.module,
+                },
+            )
+        # Committed by the context manager above; hand this run's queued
+        # email over. Scoped to the run: one admin pressing a button must not
+        # pick up every other workspace's pending work.
+        await drain_outbox(run_id=str(run.id))
 
     background_tasks.add_task(run_automation)
 

@@ -53,6 +53,7 @@ async def test_email_action_dispatches_the_record_email_for_a_record_placeholder
             "workspace-1",
         )
 
+    # No run to reconcile against, so this one goes straight out.
     sent_email = dispatch.await_args.args[1]
     assert result["success"] is True
     assert sent_email.to_email == "alex@example.com"

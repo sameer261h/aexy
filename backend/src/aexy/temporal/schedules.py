@@ -124,6 +124,16 @@ SCHEDULES: list[dict] = [
 
     # === Email Marketing ===
     {
+        # Backstop only: the request path hands emails over immediately after
+        # committing, so this normally finds nothing to do.
+        "id": "drain-automation-email-outbox",
+        "activity": "drain_automation_email_outbox",
+        "input_module": "aexy.temporal.activities.email",
+        "input_class": "DrainAutomationEmailOutboxInput",
+        "interval": timedelta(seconds=60),
+        "queue": TaskQueue.EMAIL,
+    },
+    {
         "id": "check-scheduled-campaigns",
         "activity": "check_scheduled_campaigns",
         "input_module": "aexy.temporal.activities.email",
